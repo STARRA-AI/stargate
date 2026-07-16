@@ -35,6 +35,9 @@ const SOUL_CHAR_BUDGET = 10000;
 /** Multica doctrine — agents-as-teammates ops context (after soul/brain). */
 const MULTICA_CHAR_BUDGET = 4000;
 
+/** OpenAlice doctrine — market intel external runtime; read-first, gated execution. */
+const OPENALICE_CHAR_BUDGET = 2000;
+
 const SOUL_PREAMBLE = `STARRA_SOUL — spiritual operating system.
 Governs how STARRA thinks and speaks about money, work, and outcomes.
 Does not override hard rules in STARRA_BRAIN.`;
@@ -145,6 +148,7 @@ export function prioritizeSoul(raw: string, budget: number): {
 let brainCache: string | null = null;
 let soulCache: string | null = null;
 let multicaCache: string | null = null;
+let openaliceCache: string | null = null;
 let booksCache: string | null = null;
 let stablePromptCache: string | null = null;
 
@@ -246,11 +250,26 @@ export function loadMulticaDoctrine(): string {
   }
 }
 
+/** OpenAlice doctrine — loaded after Multica; ~2K budget. */
+export function loadOpenAliceDoctrine(): string {
+  if (openaliceCache) return openaliceCache;
+  try {
+    const p = path.join(process.cwd(), "docs", "OPENALICE.md");
+    const raw = readFileSync(p, "utf8");
+    const { text } = clipAtBudget(raw, OPENALICE_CHAR_BUDGET);
+    openaliceCache = text;
+    return openaliceCache;
+  } catch {
+    return "OPENALICE doctrine unavailable — treat market intel as external runtime; no unsupervised trading.";
+  }
+}
+
 /** Test/dev helper — clear canon caches after file edits. */
 export function clearCanonCache() {
   brainCache = null;
   soulCache = null;
   multicaCache = null;
+  openaliceCache = null;
   booksCache = null;
   stablePromptCache = null;
 }
@@ -268,6 +287,7 @@ export function loadStableSystemPrompt(): string {
     loadBooks(),
     loadBrain(),
     loadMulticaDoctrine(),
+    loadOpenAliceDoctrine(),
     OPERATOR_AUTHORITY,
     untrustedContentRules(),
     securityTeamRules(),

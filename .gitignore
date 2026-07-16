@@ -42,6 +42,7 @@ yarn-error.log*
 # Vendor clones (bootstrap with npm run tools:bootstrap)
 /vendor/OpenMontage/
 /vendor/multica/
+/vendor/openalice/
 /docs/reference/system_prompts_leaks/
 
 # Repomix default dumps

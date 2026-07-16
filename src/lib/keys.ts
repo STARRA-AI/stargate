@@ -85,6 +85,24 @@ export const KEY_SLOTS = [
     hint: "aai_…",
     powers: "Future angel-agent investor scans",
   },
+  {
+    id: "openalice_base_url",
+    label: "OpenAlice runtime URL",
+    hint: "http://127.0.0.1:47331",
+    powers: "Alice market intel · issues · inbox readout",
+  },
+  {
+    id: "openalice_alpaca_key_id",
+    label: "OpenAlice Alpaca key ID",
+    hint: "Alpaca paper or live key ID",
+    powers: "Broker gate unlock in OpenAlice bridge (dormant until linked)",
+  },
+  {
+    id: "openalice_alpaca_secret_key",
+    label: "OpenAlice Alpaca secret key",
+    hint: "Alpaca secret — configure in OpenAlice directly preferred",
+    powers: "Broker gate unlock in OpenAlice bridge (dormant until linked)",
+  },
 ] as const;
 
 export type KeySlotId = (typeof KEY_SLOTS)[number]["id"];
@@ -117,6 +135,9 @@ export async function getKey(id: KeySlotId): Promise<string | undefined> {
     github_token: process.env.GITHUB_TOKEN,
     open_collective_api_key: process.env.OPEN_COLLECTIVE_API_KEY,
     aiassist_api_key: process.env.AIAS_API_KEY ?? process.env.AIASSIST_API_KEY,
+    openalice_base_url: process.env.OPENALICE_BASE_URL,
+    openalice_alpaca_key_id: process.env.OPENALICE_ALPACA_KEY_ID,
+    openalice_alpaca_secret_key: process.env.OPENALICE_ALPACA_SECRET_KEY,
   };
   return envMap[id]?.trim() || undefined;
 }

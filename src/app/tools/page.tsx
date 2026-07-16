@@ -44,6 +44,33 @@ type MulticaIssue = {
   status?: string;
 };
 
+type OpenAliceState = {
+  vendorPresent: boolean;
+  vendorPath: string;
+  vendorVersion: string | null;
+  runtimeUrl: string;
+  runtimeReachable: boolean;
+  runtimeVersion: string | null;
+  tradingAvailable: boolean | null;
+  tradingMode: string | null;
+  executionGate: string;
+  brokerKeysLinked: boolean;
+  guide: string;
+};
+
+type OpenAliceIssue = {
+  wsId?: string;
+  id?: string;
+  title?: string;
+  status?: string;
+};
+
+type OpenAliceInboxEntry = {
+  id?: string;
+  title?: string;
+  preview?: string;
+};
+
 type FundingSource = {
   id: string;
   repo: string;
@@ -79,26 +106,33 @@ export default function ToolsPage() {
   const [montage, setMontage] = useState<MontageState | null>(null);
   const [prompts, setPrompts] = useState<PromptsState | null>(null);
   const [multica, setMultica] = useState<MulticaState | null>(null);
+  const [openalice, setOpenalice] = useState<OpenAliceState | null>(null);
   const [funding, setFunding] = useState<FundingState | null>(null);
   const [workspaces, setWorkspaces] = useState<MulticaWorkspace[]>([]);
   const [issues, setIssues] = useState<MulticaIssue[]>([]);
+  const [aliceIssues, setAliceIssues] = useState<OpenAliceIssue[]>([]);
+  const [aliceInbox, setAliceInbox] = useState<OpenAliceInboxEntry[]>([]);
+  const [researchQuery, setResearchQuery] = useState("sector rotation scan");
+  const [researchPlan, setResearchPlan] = useState("");
   const [issueTitle, setIssueTitle] = useState("STARRA stub — operator follow-up");
   const [topic, setTopic] = useState("healing after her — one hard truth");
   const [status, setStatus] = useState("");
   const [packPreview, setPackPreview] = useState("");
 
   const refresh = useCallback(async () => {
-    const [r, m, p, mu, f] = await Promise.all([
+    const [r, m, p, mu, oa, f] = await Promise.all([
       fetch("/api/tools/repomix").then((x) => x.json()),
       fetch("/api/tools/openmontage").then((x) => x.json()),
       fetch("/api/tools/prompts").then((x) => x.json()),
       fetch("/api/tools/multica").then((x) => x.json()),
+      fetch("/api/tools/openalice").then((x) => x.json()),
       fetch("/api/tools/funding").then((x) => x.json()),
     ]);
     setRepomix(r);
     setMontage(m);
     setPrompts(p);
     setMultica(mu);
+    setOpenalice(oa);
     setFunding(f);
     if (r.preview) setPackPreview(r.preview);
   }, []);
@@ -185,6 +219,39 @@ export default function ToolsPage() {
         : `LINK DEGRADED · ${data.error ?? "retry"}`,
     );
     if (res.ok) await loadMulticaBoard();
+  }
+
+  async function loadOpenAliceIntel() {
+    setStatus("EXECUTING — OPENALICE LIST");
+    const [isRes, inRes] = await Promise.all([
+      fetch("/api/tools/openalice?action=issues").then((x) => x.json()),
+      fetch("/api/tools/openalice?action=inbox").then((x) => x.json()),
+    ]);
+    if (isRes.error && inRes.error) {
+      setStatus(`LINK DEGRADED · ${isRes.error ?? inRes.error}`);
+      return;
+    }
+    setAliceIssues(isRes.issues ?? []);
+    setAliceInbox(inRes.entries ?? []);
+    setStatus(
+      `OPENALICE · ${(isRes.issues ?? []).length} issues · ${(inRes.entries ?? []).length} inbox`,
+    );
+  }
+
+  async function planOpenAliceResearch() {
+    setStatus("EXECUTING — OPENALICE PLAN");
+    const res = await fetch(
+      `/api/tools/openalice?action=plan&q=${encodeURIComponent(researchQuery)}`,
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
+      return;
+    }
+    setResearchPlan(
+      `${data.readout}\n\n${data.steps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")}\n\n${data.executionNote}`,
+    );
+    setStatus(`PLAN · ${data.query}`);
   }
 
   return (
@@ -354,6 +421,68 @@ export default function ToolsPage() {
           </ul>
           <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
             {multica?.guide}
+          </p>
+        </section>
+
+        {/* OpenAlice */}
+        <section className="panel-etch flex flex-col gap-3 p-4">
+          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
+            OpenAlice
+          </h2>
+          <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+            Alice market intel — research, issues, inbox readout. Trade execution stays gated in OpenAlice.
+          </p>
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
+            {openalice?.vendorPresent ? "● vendor present" : "○ run bootstrap-openalice"} ·{" "}
+            {openalice?.runtimeReachable
+              ? `runtime ${openalice.runtimeVersion ?? "ok"}`
+              : "runtime offline"} ·{" "}
+            gate · {openalice?.executionGate ?? "—"}
+          </p>
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--magenta)]">
+            {openalice?.runtimeUrl}
+          </p>
+          <button
+            type="button"
+            onClick={() => void loadOpenAliceIntel()}
+            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+          >
+            List issues / inbox
+          </button>
+          <label className="font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+            Research query
+            <input
+              value={researchQuery}
+              onChange={(e) => setResearchQuery(e.target.value)}
+              className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void planOpenAliceResearch()}
+            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+          >
+            Build research plan
+          </button>
+          <ul className="max-h-24 space-y-1 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
+            {aliceIssues.slice(0, 5).map((i) => (
+              <li key={`${i.wsId ?? "ws"}-${i.id ?? i.title}`}>
+                {i.id ?? "issue"} · {i.status ?? "—"} · {i.title}
+              </li>
+            ))}
+            {aliceInbox.slice(0, 3).map((e) => (
+              <li key={e.id ?? e.title ?? e.preview}>
+                inbox · {e.title ?? e.preview?.slice(0, 48) ?? "—"}
+              </li>
+            ))}
+          </ul>
+          {researchPlan && (
+            <pre className="max-h-36 overflow-auto border border-[var(--border-soft)] p-2 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] whitespace-pre-wrap">
+              {researchPlan}
+            </pre>
+          )}
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
+            {openalice?.guide}
           </p>
         </section>
       </div>
