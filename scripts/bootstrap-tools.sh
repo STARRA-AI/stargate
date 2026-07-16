@@ -44,8 +44,8 @@ fi
 echo "→ Distilling prompt structure patterns…"
 node scripts/distill-prompt-patterns.mjs
 
-echo "→ Done. Next for OpenMontage (optional heavy install):"
-echo "   cd vendor/OpenMontage && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
-echo "   cd remotion-composer && npm install"
+echo "→ Done. OpenMontage (canonical video; Higgsfield retired):"
+echo "   npm run tools:montage-setup   # venv + remotion"
+echo "   Tools → OpenMontage → Queue brief → AGENT_GUIDE.md to render"
 echo "→ Multica: link multica_token in Settings · optional CLI: brew install multica-ai/tap/multica"
 echo "→ OpenAlice: cd vendor/openalice && pnpm install && pnpm dev · link openalice_base_url if needed"

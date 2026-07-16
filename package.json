@@ -15,6 +15,7 @@
     "tools:bootstrap-plinius": "bash scripts/bootstrap-plinius-corpus.sh",
     "tools:distill": "node scripts/distill-prompt-patterns.mjs",
     "tools:montage-status": "node -e \"const fs=require('fs');const p='vendor/OpenMontage/README.md';console.log(fs.existsSync(p)?'OpenMontage: present':'OpenMontage: missing — npm run tools:bootstrap')\"",
+    "tools:montage-setup": "bash scripts/montage-setup.sh",
     "vault:init": "bash scripts/vault-init.sh",
     "vault:sync": "bash scripts/vault-sync.sh",
     "starra:up": "bash scripts/starra-up.sh",

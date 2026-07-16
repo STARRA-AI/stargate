@@ -14,8 +14,8 @@ import { gateCommand } from "@/lib/security/command-gate";
 import { fenceUntrusted } from "@/lib/security/fencing";
 import { redact } from "@/lib/security/redact";
 import {
+  briefForPipeline,
   queueMontageJob,
-  silentShadowTemplate,
 } from "@/lib/tools/openmontage";
 import { runRepomix } from "@/lib/tools/repomix";
 
@@ -35,13 +35,18 @@ const TOOLS: Anthropic.Tool[] = [
   {
     name: "queue_silent_shadow_short",
     description:
-      "Queue an OpenMontage Silent Shadow short with a topic brief.",
+      "Queue an OpenMontage video brief (canonical path; Higgsfield retired). Default pipeline: Silent Shadow short.",
     input_schema: {
       type: "object",
       properties: {
         topic: {
           type: "string",
           description: "Short topic / hard truth for the brief",
+        },
+        pipeline: {
+          type: "string",
+          description:
+            "silent-shadow-short | book-of-starra | atelier (default silent-shadow-short)",
         },
       },
       required: ["topic"],
@@ -119,12 +124,16 @@ async function runTool(
       typeof input.topic === "string" && input.topic.trim()
         ? input.topic.trim()
         : "one hard truth — stay standing";
+    const pipeline =
+      typeof input.pipeline === "string" && input.pipeline.trim()
+        ? input.pipeline.trim()
+        : "silent-shadow-short";
     const job = await queueMontageJob({
-      brief: silentShadowTemplate(topic),
-      pipeline: "silent-shadow-short",
+      brief: briefForPipeline(pipeline, topic),
+      pipeline,
     });
     return redact(
-      `Queued OpenMontage job ${job.id}. Brief on disk under data/openmontage-briefs/.`,
+      `Queued OpenMontage job ${job.id} (${pipeline}). Brief under data/openmontage-briefs/. Higgsfield not used.`,
     );
   }
 

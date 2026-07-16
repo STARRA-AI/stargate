@@ -35,7 +35,7 @@ Bridge · Brief · Pipeline · Memory · Vault · Connectors · Settings · **To
 See [`docs/tooling.md`](docs/tooling.md).
 
 - **Repomix** — `npm run pack` or console: `pack the repo`
-- **OpenMontage** — queue Silent Shadow briefs from Tools
+- **OpenMontage** — canonical video path (Silent Shadow / Book of Starra); Higgsfield retired. Queue from Tools; `npm run tools:montage-setup` for venv/Remotion
 - **Prompt structure** — distilled from system_prompts_leaks into `src/lib/prompt-structure.ts`
 
 ## Stack

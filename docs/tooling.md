@@ -15,27 +15,26 @@ Packs the STARGATE codebase into an AI-friendly XML file.
 
 Output: `data/packs/stargate-repomix.xml` (gitignored). Config: `repomix.config.json`.
 
-## 2. OpenMontage — `calesthio/OpenMontage`
+## 2. OpenMontage — `calesthio/OpenMontage` (canonical video)
 
-Agentic video production for Silent Shadow / Book of Starra.
+Agentic video production for Silent Shadow / Book of Starra. **Higgsfield is retired** — do not rewire it into STARGATE.
 
 | Surface | How |
 |---------|-----|
 | Vendor | `vendor/OpenMontage` (gitignored clone) |
 | Bootstrap | `npm run tools:bootstrap` |
-| API | `GET/POST /api/tools/openmontage` |
-| UI | Tools → Queue Silent Shadow short |
+| Heavy setup | `npm run tools:montage-setup` |
+| Doctrine | `docs/OPENMONTAGE.md` (in stable prompt) |
+| API | `GET/POST /api/tools/openmontage` (queue + `mark_done`) |
+| UI | Tools → OpenMontage |
 | Console | say `queue a short about …` or `openmontage` |
 
 Jobs land in `data/openmontage-jobs.json` and `data/openmontage-briefs/<id>.md`.
 
-**Render is not automatic.** Open `vendor/OpenMontage/AGENT_GUIDE.md` in Cursor and run the queued brief. Optional heavy setup:
+**Render is not automatic.** Open `vendor/OpenMontage/AGENT_GUIDE.md` in Cursor and run the queued brief, then Mark done in Tools.
 
 ```bash
-cd vendor/OpenMontage
-python3 -m venv .venv && source .venv/bin/activate
-pip install -r requirements.txt
-cd remotion-composer && npm install
+npm run tools:montage-setup
 ```
 
 ## 3. system_prompts_leaks — `asgeirtj/system_prompts_leaks`

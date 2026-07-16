@@ -9,8 +9,8 @@ import { getVault, vaultForPrompt } from "@/lib/vault/store";
 import { obsidianForPrompt } from "@/lib/obsidian";
 import { runRepomix, readLatestPackPreview } from "@/lib/tools/repomix";
 import {
+  briefForPipeline,
   queueMontageJob,
-  silentShadowTemplate,
 } from "@/lib/tools/openmontage";
 import {
   ollamaAvailable,
@@ -88,11 +88,14 @@ async function maybeToolReply(lastUser: string): Promise<string | null> {
   ) {
     const topicMatch = lastUser.match(/about[:\s]+(.+)$/i);
     const topic = topicMatch?.[1]?.trim() || "one hard truth — stay standing";
+    const book =
+      /\bbook of starra\b/.test(q) || /\bbook-of-starra\b/.test(q);
+    const pipeline = book ? "book-of-starra" : "silent-shadow-short";
     const job = await queueMontageJob({
-      brief: silentShadowTemplate(topic),
-      pipeline: "silent-shadow-short",
+      brief: briefForPipeline(pipeline, topic),
+      pipeline,
     });
-    return `Queued OpenMontage job ${job.id}. Brief on disk under data/openmontage-briefs/. Hand vendor/OpenMontage/AGENT_GUIDE.md to the agent to render. Standing by.`;
+    return `Queued OpenMontage job ${job.id} (${pipeline}). Brief under data/openmontage-briefs/. Hand AGENT_GUIDE.md to the agent to render. Higgsfield retired. Standing by.`;
   }
 
   if (/\b(distill prompts|prompt structure|system prompts)\b/.test(q)) {

@@ -42,6 +42,9 @@ const OPENALICE_CHAR_BUDGET = 2000;
 /** Obsidian vault doctrine — long-term markdown memory grammar (Layer 2). */
 const OBSIDIAN_CHAR_BUDGET = 2800;
 
+/** OpenMontage doctrine — canonical video path; Higgsfield retired. */
+const OPENMONTAGE_CHAR_BUDGET = 1800;
+
 const SOUL_PREAMBLE = `STARRA_SOUL — spiritual operating system.
 Governs how STARRA thinks and speaks about money, work, and outcomes.
 Does not override hard rules in STARRA_BRAIN.`;
@@ -153,6 +156,7 @@ let brainCache: string | null = null;
 let soulCache: string | null = null;
 let multicaCache: string | null = null;
 let openaliceCache: string | null = null;
+let openmontageCache: string | null = null;
 let obsidianCache: string | null = null;
 let booksCache: string | null = null;
 let stablePromptCache: string | null = null;
@@ -269,6 +273,20 @@ export function loadOpenAliceDoctrine(): string {
   }
 }
 
+/** OpenMontage doctrine — canonical Silent Shadow / Book of Starra video path. */
+export function loadOpenMontageDoctrine(): string {
+  if (openmontageCache) return openmontageCache;
+  try {
+    const p = path.join(process.cwd(), "docs", "OPENMONTAGE.md");
+    const raw = readFileSync(p, "utf8");
+    const { text } = clipAtBudget(raw, OPENMONTAGE_CHAR_BUDGET);
+    openmontageCache = text;
+    return openmontageCache;
+  } catch {
+    return "OPENMONTAGE doctrine unavailable — queue Silent Shadow briefs via Tools; Higgsfield is retired.";
+  }
+}
+
 /**
  * Obsidian vault doctrine — Layer 2 assistant grammar.
  * Full doc: docs/OBSIDIAN_MEMORY.md. Clip via loadObsidianDoctrine.
@@ -287,6 +305,7 @@ export function clearCanonCache() {
   soulCache = null;
   multicaCache = null;
   openaliceCache = null;
+  openmontageCache = null;
   obsidianCache = null;
   booksCache = null;
   stablePromptCache = null;
@@ -307,6 +326,7 @@ export function loadStableSystemPrompt(): string {
     loadBrain(),
     loadMulticaDoctrine(),
     loadOpenAliceDoctrine(),
+    loadOpenMontageDoctrine(),
     loadObsidianCanon(),
     OPERATOR_AUTHORITY,
     untrustedContentRules(),

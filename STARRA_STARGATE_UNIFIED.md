@@ -499,7 +499,7 @@ STARRA LLC is a Nashville, Tennessee-based holding company for a portfolio of AI
 * **Classic Williams (music)** — the reason the portfolio exists. 1–2 releases/month once distribution is live.
 
 ## 3. Key Operating Knowledge
-*Unchanged from v1 (Higgsfield CDN workaround, explainer_video 404 = failed/moderated job, silent moderation, Whisper hallucination rule, Canva scratched for PDFs, glasp.co YouTube research, Gumroad CLI, Mac stack: macOS 12 / Python 3.9.6 / --break-system-packages, folder paths, create_website 422 unresolved).*
+*Ops note (updated): Silent Shadow video production uses OpenMontage (STARGATE Tools → queue → agent render via AGENT_GUIDE.md). Higgsfield is retired as the STARGATE path (historical CDN/moderation pain — do not rewire). Still relevant from v1: Whisper hallucination rule, Canva scratched for PDFs, glasp.co YouTube research, Gumroad CLI, Mac stack: macOS 12 / Python 3.9.6 / --break-system-packages, folder paths.*
 
 
 # PART II — Business Credit & Funding Playbook
@@ -804,7 +804,7 @@ In order. The same queue lives in STARRA_BRAIN.md so STARGATE can walk you throu
 7. Start the Sunday weekly rhythm (reports, payments, top-3, credit log).
 8. Silent Shadow cadence never pauses: 4/week with caption QA toward the 15–20 checkpoint.
 9. Dispute Day 1: pull 3 reports, validation letters to all collectors, first bureau disputes; calendar the 40-day re-attack. Escalation ladder per Part II §11: pay-for-delete → goodwill → 609 → CFPB/FTC.
-10. Higgsfield API wiring (actions/higgsfield_action.py) after the upgrade lands.
+10. OpenMontage as the only STARGATE video path: bootstrap vendor, montage-setup for venv/Remotion, queue Silent Shadow shorts from Tools; human posting gate.
 11. Expansion Phase 1 (tiered memory), then mcp-chrome, then self-refine.
 12. Batch 3 re-exports from Thinkific, highest priority first: Master Credit Union List, Master Credit Cards List, 24-Hour Hard Inquiry Removal — then trust lesson, do's & don'ts, credit building cards, and the five Batch-1 business templates (§18 manifest).
 13. Seed small Google/Facebook ad spend for Plus Ultra (~3 months of history unlocks ad-spend credit lines, Part III §14) so the line exists before cold-acquisition scaling needs it.
@@ -849,7 +849,7 @@ Wholesale POD (Magnific > Tapstitch branded POD > Brandboom line sheets; wholesa
 Expansion: 1) tiered memory (Letta) 2) mcp-chrome 3) self-refine 4) crewAI only if ceiling hit.
 
 ## ENVIRONMENT FACTS
-macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Users/work/Desktop/STARRA. Pipeline ~/Desktop/STARGATE/Silent Shadow Launch (quote spaces). Gumroad CLI: `gumroad products page publish [product_id] ./file.html` / `gumroad user page publish ./file.html`. Higgsfield: CDN unreachable from Claude env; explainer_video 404 = failed/moderated clip (verify via show_generations); moderation silent — swap ghosts for object metaphors; create_website 422 unresolved. YouTube research: glasp.co/youtube/[id]. Canva scratched for PDFs. Thinkific PDFs: export via download icon — screenshots capture covers only. Launchd watcher com.starra.shortswatcher.plist / 1800s.
+macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Users/work/Desktop/STARRA (legacy) / STARGATE PWA at /Users/work/Projects/stargate. Pipeline ~/Desktop/STARGATE/Silent Shadow Launch (quote spaces). Gumroad CLI: `gumroad products page publish [product_id] ./file.html` / `gumroad user page publish ./file.html`. Video: OpenMontage only — Higgsfield retired. YouTube research: glasp.co/youtube/[id]. Canva scratched for PDFs. Thinkific PDFs: export via download icon — screenshots capture covers only. Launchd watcher com.starra.shortswatcher.plist / 1800s.
 
 ## PRIORITY QUEUE (walk Classic through, in order)
 1. Hand STARRA_CLAUDE_CODE_HANDOFF.py to Claude Code (12 tasks, ~30min, ends "all compile clean").
@@ -861,7 +861,7 @@ macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Use
 7. Sunday review habit (reports, payments, top-3, credit log).
 8. Silent Shadow never pauses: 4/wk w/ caption QA, toward 15-20 checkpoint.
 9. Dispute Day 1: pull 3 reports, validation letters, first disputes; calendar 40-day re-attack. Escalate: pay-for-delete > goodwill > 609 > CFPB.
-10. Post-upgrade: wire actions/higgsfield_action.py (HIGGSFIELD_API_KEY + docs).
+10. OpenMontage ready: tools:montage-setup if needed; queue Shorts via Tools; human posting gate.
 11. Expansion: tiered memory, then mcp-chrome, then self-refine.
 12. Thinkific re-exports (download icon, NOT screenshots): Master Credit Union List, Master Credit Cards List, 24hr Hard Inquiry Removal first, then trust, do's&don'ts, credit-building cards + 5 Batch-1 templates.
 13. Seed small Google/FB ad spend for Plus Ultra — 3mo history unlocks ad-spend credit lines before scaling.

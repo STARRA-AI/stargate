@@ -14,8 +14,21 @@ type MontageState = {
   path: string;
   hasVenv: boolean;
   hasRemotion: boolean;
+  hasGuide?: boolean;
+  ready?: boolean;
+  readiness?: string;
+  retiredPath?: string;
   guide: string;
-  jobs: { id: string; brief: string; status: string; at: string; pipeline: string }[];
+  nextStep?: string;
+  pipelines?: string[];
+  jobs: {
+    id: string;
+    brief: string;
+    status: string;
+    at: string;
+    pipeline: string;
+    outputPath?: string;
+  }[];
 };
 
 type PromptsState = {
@@ -148,6 +161,7 @@ export default function ToolsPage() {
   const [researchPlan, setResearchPlan] = useState("");
   const [issueTitle, setIssueTitle] = useState("STARRA stub — operator follow-up");
   const [topic, setTopic] = useState("healing after her — one hard truth");
+  const [montagePipeline, setMontagePipeline] = useState("silent-shadow-short");
   const [status, setStatus] = useState("");
   const [packPreview, setPackPreview] = useState("");
 
@@ -189,10 +203,21 @@ export default function ToolsPage() {
     const res = await fetch("/api/tools/openmontage", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic }),
+      body: JSON.stringify({ topic, pipeline: montagePipeline }),
     });
     const data = await res.json();
     setStatus(res.ok ? `QUEUED · ${data.id}` : "LINK DEGRADED. RETRY?");
+    await refresh();
+  }
+
+  async function markMontageDone(id: string) {
+    setStatus("EXECUTING — MARK RENDER DONE");
+    const res = await fetch("/api/tools/openmontage", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "mark_done", id }),
+    });
+    setStatus(res.ok ? `DONE · ${id}` : "LINK DEGRADED. RETRY?");
     await refresh();
   }
 
@@ -395,20 +420,44 @@ export default function ToolsPage() {
           )}
         </section>
 
-        {/* OpenMontage */}
+        {/* OpenMontage — canonical video path */}
         <section className="panel-etch flex flex-col gap-3 p-4">
           <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
             OpenMontage
           </h2>
           <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
-            Queue Silent Shadow / Book of Starra video briefs for the agentic studio in{" "}
-            <span className="text-[var(--magenta)]">vendor/OpenMontage</span>.
+            Canonical video studio for Silent Shadow Shorts and Book of Starra. Queue a brief;
+            an agent renders via{" "}
+            <span className="text-[var(--magenta)]">AGENT_GUIDE.md</span>. Higgsfield is retired —
+            do not rewire it.
           </p>
           <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
-            {montage?.present ? "● vendor present" : "○ run npm run tools:bootstrap"} ·{" "}
-            {montage?.hasVenv ? "venv ok" : "venv missing"} ·{" "}
-            {montage?.hasRemotion ? "remotion ok" : "remotion not installed"}
+            {montage?.ready ? "● READY" : "○ NOT READY"} ·{" "}
+            {montage?.present ? "vendor" : "run tools:bootstrap"} ·{" "}
+            {montage?.hasVenv ? "venv" : "venv missing"} ·{" "}
+            {montage?.hasRemotion ? "remotion" : "remotion missing"}
           </p>
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
+            NEXT: {montage?.nextStep ?? "Run: npm run tools:bootstrap"}
+          </p>
+          <label className="font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+            Pipeline
+            <select
+              value={montagePipeline}
+              onChange={(e) => setMontagePipeline(e.target.value)}
+              className="focus-magenta mt-1 w-full border border-[var(--border)] bg-[var(--void)] px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+            >
+              {(montage?.pipelines ?? [
+                "silent-shadow-short",
+                "book-of-starra",
+                "atelier",
+              ]).map((p) => (
+                <option key={p} value={p}>
+                  {p}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
             Topic
             <input
@@ -422,12 +471,27 @@ export default function ToolsPage() {
             onClick={() => void queueMontage()}
             className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
           >
-            Queue Silent Shadow short
+            Queue brief
           </button>
           <ul className="max-h-40 space-y-2 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
             {(montage?.jobs ?? []).slice(0, 5).map((j) => (
-              <li key={j.id} className="border-b border-[var(--border-soft)] pb-1">
-                {j.id} · {j.status} · {j.pipeline}
+              <li
+                key={j.id}
+                className="flex items-start justify-between gap-2 border-b border-[var(--border-soft)] pb-1"
+              >
+                <span>
+                  {j.id} · {j.status} · {j.pipeline}
+                  {j.outputPath ? ` · ${j.outputPath}` : ""}
+                </span>
+                {j.status !== "done" && j.status !== "error" ? (
+                  <button
+                    type="button"
+                    onClick={() => void markMontageDone(j.id)}
+                    className="shrink-0 border border-[var(--border)] px-1 py-0.5 text-[9px] tracking-widest uppercase text-[var(--star)]"
+                  >
+                    Mark done
+                  </button>
+                ) : null}
               </li>
             ))}
           </ul>

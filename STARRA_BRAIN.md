@@ -31,7 +31,7 @@ Wholesale POD (Magnific > Tapstitch branded POD > Brandboom line sheets; wholesa
 Expansion: 1) tiered memory (Letta) 2) mcp-chrome 3) self-refine 4) crewAI only if ceiling hit.
 
 ## ENVIRONMENT FACTS
-macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Users/work/Desktop/STARRA. Pipeline ~/Desktop/STARGATE/Silent Shadow Launch (quote spaces). Gumroad CLI: `gumroad products page publish [product_id] ./file.html` / `gumroad user page publish ./file.html`. Higgsfield: CDN unreachable from Claude env; explainer_video 404 = failed/moderated clip (verify via show_generations); moderation silent — swap ghosts for object metaphors; create_website 422 unresolved. YouTube research: glasp.co/youtube/[id]. Canva scratched for PDFs. Thinkific PDFs: export via download icon — screenshots capture covers only. Launchd watcher com.starra.shortswatcher.plist / 1800s.
+macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Users/work/Desktop/STARRA (legacy) / STARGATE PWA at /Users/work/Projects/stargate. Pipeline ~/Desktop/STARGATE/Silent Shadow Launch (quote spaces). Gumroad CLI: `gumroad products page publish [product_id] ./file.html` / `gumroad user page publish ./file.html`. Video: OpenMontage only (vendor/OpenMontage) — Higgsfield retired (CDN/moderation pain; do not rewire). YouTube research: glasp.co/youtube/[id]. Canva scratched for PDFs. Thinkific PDFs: export via download icon — screenshots capture covers only. Launchd watcher com.starra.shortswatcher.plist / 1800s.
 
 ## PRIORITY QUEUE (walk Classic through, in order)
 1. Hand STARRA_CLAUDE_CODE_HANDOFF.py to Claude Code (12 tasks, ~30min, ends "all compile clean").
@@ -43,7 +43,7 @@ macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Use
 7. Sunday review habit (reports, payments, top-3, credit log).
 8. Silent Shadow never pauses: 4/wk w/ caption QA, toward 15-20 checkpoint.
 9. Dispute Day 1: pull 3 reports, validation letters, first disputes; calendar 40-day re-attack. Escalate: pay-for-delete > goodwill > 609 > CFPB.
-10. Post-upgrade: wire actions/higgsfield_action.py (HIGGSFIELD_API_KEY + docs).
+10. OpenMontage ready: npm run tools:montage-setup if venv/remotion missing; queue Silent Shadow shorts via Tools / console; human posting gate.
 11. Expansion: tiered memory, then mcp-chrome, then self-refine.
 12. Thinkific re-exports (download icon, NOT screenshots): Master Credit Union List, Master Credit Cards List, 24hr Hard Inquiry Removal first, then trust, do's&don'ts, credit-building cards + 5 Batch-1 templates.
 13. Seed small Google/FB ad spend for Plus Ultra — 3mo history unlocks ad-spend credit lines before scaling.
@@ -53,5 +53,5 @@ On "what's next": lowest-numbered incomplete item, exact commands/URLs. Update m
 
 ## TOOLING (STARGATE PWA)
 - Repomix: pack repo via Tools or say "pack the repo". Output data/packs/stargate-repomix.xml.
-- OpenMontage: queue Silent Shadow shorts via Tools; vendor/OpenMontage + AGENT_GUIDE.md for render.
+- OpenMontage (canonical video): queue Silent Shadow / Book of Starra via Tools or "queue a short about …"; vendor/OpenMontage + AGENT_GUIDE.md for render; mark done when output exists. Higgsfield retired — never the STARGATE path.
 - Prompt structure: src/lib/prompt-structure.ts distilled from system_prompts_leaks (structure only; operator voice locked).
