@@ -45,6 +45,77 @@ function LlmStatus() {
   );
 }
 
+function VoicePicker() {
+  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
+  const [selected, setSelected] = useState<string>("");
+  const [autoName, setAutoName] = useState<string>("");
+
+  useEffect(() => {
+    let mounted = true;
+    void import("@/lib/voice/voice-select").then(
+      ({ voicesReady, getStoredVoiceUri, pickStarraVoice }) => {
+        void voicesReady().then((list) => {
+          if (!mounted) return;
+          setVoices(list);
+          setSelected(getStoredVoiceUri() ?? "");
+          setAutoName(pickStarraVoice(list)?.name ?? "system default");
+        });
+      },
+    );
+    return () => {
+      mounted = false;
+    };
+  }, []);
+
+  async function choose(uri: string) {
+    const { setStoredVoiceUri } = await import("@/lib/voice/voice-select");
+    setStoredVoiceUri(uri || null);
+    setSelected(uri);
+  }
+
+  async function test() {
+    const { applyStarraVoice } = await import("@/lib/voice/voice-select");
+    window.speechSynthesis?.cancel();
+    const u = new SpeechSynthesisUtterance(
+      "Copy. STARGATE online. Standing by, operator.",
+    );
+    applyStarraVoice(u);
+    window.speechSynthesis?.speak(u);
+  }
+
+  return (
+    <section id="voice" className="panel-etch space-y-3 p-4">
+      <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
+        STARRA voice
+      </h2>
+      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+        AUTO prefers a British English female voice, then a Japanese female
+        voice, then any female English voice. Current auto pick: {autoName}.
+      </p>
+      <select
+        value={selected}
+        onChange={(e) => void choose(e.target.value)}
+        className="focus-magenta w-full border border-[var(--border)] bg-[var(--void)] px-2 py-2 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
+        aria-label="STARRA voice"
+      >
+        <option value="">AUTO — STARRA picks</option>
+        {voices.map((v) => (
+          <option key={v.voiceURI} value={v.voiceURI}>
+            {v.name} ({v.lang})
+          </option>
+        ))}
+      </select>
+      <button
+        type="button"
+        onClick={() => void test()}
+        className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+      >
+        Test voice
+      </button>
+    </section>
+  );
+}
+
 type KeySlot = {
   id: string;
   label: string;
@@ -166,6 +237,7 @@ export default function SettingsPage() {
     <ScreenShell title="Settings">
       <div className="grid gap-5 md:grid-cols-2">
         <KeyVault />
+        <VoicePicker />
         <section className="panel-etch space-y-4 p-4">
           <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
             Deck

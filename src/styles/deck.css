@@ -166,6 +166,10 @@ input::placeholder { color: #7a63a8; }
 .col-center { min-width: 0; }
 .reactor-stage { flex: 1; position: relative; min-height: 0; }
 .reactor { position: absolute; top: 50%; left: 50%; width: 0; height: 0; }
+/* wrappers so the living-eye transforms don't fight the spin/pulse animations */
+.ring-parallax { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
+.eye { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
+.eye .reactor-core { border: none; cursor: pointer; padding: 0; }
 .ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; -webkit-mask-image: radial-gradient(circle, black 58%, transparent 70%); mask-image: radial-gradient(circle, black 58%, transparent 70%); }
 .ring-outer { width: 400px; height: 400px; transform: translate(-50%, -50%); animation: spinCW 26s linear infinite; opacity: 0.9; }
 .ring-inner { width: 250px; height: 250px; transform: translate(-50%, -50%); animation: spinCCW 15s linear infinite; opacity: 0.65; }

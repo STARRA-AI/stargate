@@ -8,6 +8,7 @@ import { useStargate } from "@/lib/stargate-context";
 import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
+import { ReactorEye } from "./ReactorEye";
 import { useStageScale } from "./useStageScale";
 import "@/styles/deck.css";
 
@@ -449,27 +450,7 @@ export function Bridge() {
 
           {/* ── CENTER ── */}
           <div className="col col-center">
-            <div className="reactor-stage">
-              <div className="reactor">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="ring ring-outer" src="/brand/hud_ring.png" alt="" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="ring ring-inner" src="/brand/hud_ring.png" alt="" />
-                <button
-                  type="button"
-                  className={`reactor-core${speaking ? " speaking" : ""}`}
-                  id="reactor-core"
-                  aria-label="Activate voice"
-                  onClick={onMic}
-                  style={{ border: "none", cursor: "pointer", padding: 0 }}
-                />
-                <div className="reactor-status">
-                  <span id="core-status">{coreLabel}</span>
-                  <span className="reactor-cursor" />
-                </div>
-              </div>
-            </div>
-
+            <ReactorEye speaking={speaking} label={coreLabel} onMic={onMic} />
             <DeckConsole onMic={onMic} />
           </div>
 

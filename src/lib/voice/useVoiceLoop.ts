@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useStargate } from "@/lib/stargate-context";
 import { COPY } from "@/lib/copy";
+import { applyStarraVoice, voicesReady } from "@/lib/voice/voice-select";
 
 type RecogResultEvent = {
   results: { 0: { transcript: string } }[];
@@ -46,16 +47,18 @@ export function useVoiceLoop() {
       abortSpeak.current = ac;
       speakingRef.current = true;
       setHudState("speaking");
-      const u = new SpeechSynthesisUtterance(text);
-      u.rate = 1.02;
-      u.pitch = 0.9;
-      u.onend = () => {
-        if (!ac.signal.aborted) {
-          speakingRef.current = false;
-          setHudState("idle");
-        }
-      };
-      window.speechSynthesis.speak(u);
+      void voicesReady().then(() => {
+        if (ac.signal.aborted) return;
+        const u = new SpeechSynthesisUtterance(text);
+        applyStarraVoice(u);
+        u.onend = () => {
+          if (!ac.signal.aborted) {
+            speakingRef.current = false;
+            setHudState("idle");
+          }
+        };
+        window.speechSynthesis.speak(u);
+      });
     },
     [setHudState, stopSpeaking],
   );
