@@ -1,0 +1,30 @@
+{
+  "$schema": "https://repomix.com/schemas/latest/schema.json",
+  "output": {
+    "filePath": "data/packs/stargate-repomix.xml",
+    "style": "xml",
+    "removeComments": false,
+    "showLineNumbers": false,
+    "topFilesLength": 20,
+    "copyToClipboard": false
+  },
+  "include": ["src/**/*", "docs/superpowers/**/*", "docs/*.md", "*.md", "scripts/**/*", "public/manifest.webmanifest", "package.json", ".cursorrules", "repomix.config.json"],
+  "ignore": {
+    "useGitignore": true,
+    "useDefaultPatterns": true,
+    "customPatterns": [
+      "vendor/**",
+      "docs/reference/system_prompts_leaks/**",
+      "data/packs/**",
+      "data/uploads/**",
+      "**/*.png",
+      "**/*.jpg",
+      "**/*.pdf",
+      ".next/**",
+      "node_modules/**"
+    ]
+  },
+  "security": {
+    "enableSecurityCheck": true
+  }
+}

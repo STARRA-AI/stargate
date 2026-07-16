@@ -1,0 +1,197 @@
+@import "tailwindcss";
+
+:root {
+  --void: #0a0414;
+  --void-2: #140826;
+  --chrome: #e9d5ff;
+  --purple: #a855f7;
+  --magenta: #d946ef;
+  --star: #c4b5fd;
+  --danger: #ff3d81;
+  --ok: #8b5cf6;
+  --border: color-mix(in oklab, var(--purple) 35%, transparent);
+  --border-soft: color-mix(in oklab, var(--purple) 18%, transparent);
+  --panel: color-mix(in oklab, var(--void-2) 88%, transparent);
+  --font-display: var(--font-orbitron), sans-serif;
+  --font-body: var(--font-rajdhani), sans-serif;
+  --font-mono: var(--font-jetbrains), monospace;
+  --font-prose: var(--font-inter), sans-serif;
+}
+
+@theme inline {
+  --color-void: var(--void);
+  --color-void-2: var(--void-2);
+  --color-chrome: var(--chrome);
+  --color-purple: var(--purple);
+  --color-magenta: var(--magenta);
+  --color-star: var(--star);
+  --color-danger: var(--danger);
+  --color-ok: var(--ok);
+  --font-display: var(--font-orbitron);
+  --font-body: var(--font-rajdhani);
+  --font-mono: var(--font-jetbrains);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body {
+  margin: 0;
+  min-height: 100%;
+  background: var(--void);
+  color: var(--chrome);
+  font-family: var(--font-body);
+  overflow-x: hidden;
+}
+
+a {
+  color: var(--star);
+  text-decoration: none;
+}
+
+a:hover {
+  color: var(--chrome);
+}
+
+::-webkit-scrollbar {
+  width: 5px;
+}
+::-webkit-scrollbar-thumb {
+  background: color-mix(in oklab, var(--purple) 40%, transparent);
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@keyframes spin-cw {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+@keyframes spin-ccw {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(-360deg);
+  }
+}
+@keyframes badge-breathe {
+  0%,
+  100% {
+    transform: scale(1);
+    filter: drop-shadow(0 0 8px var(--purple));
+  }
+  50% {
+    transform: scale(1.05);
+    filter: drop-shadow(0 0 22px var(--magenta));
+  }
+}
+@keyframes badge-strobe {
+  0%,
+  100% {
+    filter: drop-shadow(0 0 6px var(--magenta));
+    opacity: 1;
+  }
+  50% {
+    filter: drop-shadow(0 0 28px var(--magenta));
+    opacity: 0.75;
+  }
+}
+@keyframes star-drift-a {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: -600px -400px;
+  }
+}
+@keyframes star-drift-b {
+  from {
+    background-position: 0 0;
+  }
+  to {
+    background-position: 400px 600px;
+  }
+}
+@keyframes boot-line {
+  from {
+    opacity: 0;
+    transform: translateY(6px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+@keyframes pulse-dim {
+  0%,
+  100% {
+    opacity: 0.45;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+.ring-outer {
+  animation: spin-cw 40s linear infinite;
+}
+.ring-inner {
+  animation: spin-ccw 18s linear infinite;
+}
+.badge-idle {
+  animation: badge-breathe 3s ease-in-out infinite;
+}
+.badge-listening {
+  animation: badge-strobe 0.6s ease-in-out infinite;
+}
+.badge-thinking {
+  animation: spin-ccw 2s linear infinite;
+}
+.starfield-a {
+  animation: star-drift-a 60s linear infinite;
+}
+.starfield-b {
+  animation: star-drift-b 120s linear infinite;
+}
+
+.panel-etch {
+  background: var(--panel);
+  border: 1px solid var(--border);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--chrome) 6%, transparent),
+    inset 0 0 28px color-mix(in oklab, var(--purple) 8%, transparent);
+  backdrop-filter: blur(8px);
+}
+
+.chrome-frame {
+  background-image: url("/brand/hud_panel.png");
+  background-size: 100% 100%;
+  background-repeat: no-repeat;
+  background-position: center;
+}
+
+.focus-magenta:focus-visible {
+  outline: 2px solid var(--magenta);
+  outline-offset: 3px;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ring-outer,
+  .ring-inner,
+  .badge-thinking,
+  .starfield-a,
+  .starfield-b {
+    animation: none !important;
+  }
+  .badge-idle,
+  .badge-listening {
+    animation: pulse-dim 2.4s ease-in-out infinite !important;
+  }
+}

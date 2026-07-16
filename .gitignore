@@ -1,0 +1,65 @@
+# See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
+
+# dependencies
+/node_modules
+/.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+
+# testing
+/coverage
+
+# next.js
+/.next/
+/out/
+
+# production
+/build
+
+# misc
+.DS_Store
+*.pem
+
+# debug
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+
+# env files (can opt-in for committing if needed)
+.env*
+!.env.example
+/data/*.json
+!/data/.gitkeep
+/data/packs/
+/data/uploads/
+/data/openmontage-briefs/
+
+# Vendor clones (bootstrap with npm run tools:bootstrap)
+/vendor/OpenMontage/
+/docs/reference/system_prompts_leaks/
+
+# Repomix default dumps
+repomix-output.*
+
+
+# vercel
+.vercel
+
+# typescript
+*.tsbuildinfo
+next-env.d.ts
+
+# operator secrets & local state
+/data/keys.json
+.env.local
+.env*.local
+/docs/*.png
+
+# runtime state & heavy vendor
+/data/
+/vendor/
