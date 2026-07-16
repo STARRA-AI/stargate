@@ -3,16 +3,22 @@
  * Web / tool / pack text enters the model only inside explicit fences.
  */
 
+import { formatThreatBrief, scanContent } from "@/lib/security/team";
+
 export const FENCE_BEGIN = "<<<BEGIN_UNTRUSTED_WEB_CONTENT>>>";
 export const FENCE_END = "<<<END_UNTRUSTED_WEB_CONTENT>>>";
 
 export function fenceUntrusted(text: string, source = ""): string {
+  const scan = scanContent(text, "untrusted");
   const body = (text || "")
     .replaceAll(FENCE_BEGIN, "<neutralized-marker>")
     .replaceAll(FENCE_END, "<neutralized-marker>");
+  const threatLine = scan.clean
+    ? ""
+    : `${formatThreatBrief(scan)}\n`;
   const header = source
-    ? `${FENCE_BEGIN}\nsource: ${source}\n`
-    : `${FENCE_BEGIN}\n`;
+    ? `${FENCE_BEGIN}\nsource: ${source}\n${threatLine}`
+    : `${FENCE_BEGIN}\n${threatLine}`;
   return `${header}${body}\n${FENCE_END}`;
 }
 

@@ -22,6 +22,7 @@ import { addTokens } from "@/lib/metrics";
 import { pushFeed } from "@/lib/feed";
 import { fenceUntrusted } from "@/lib/security/fencing";
 import { redact } from "@/lib/security/redact";
+import { formatThreatBrief, scanContent } from "@/lib/security/team";
 import {
   runAnthropicAgent,
   streamAnthropicCached,
@@ -119,10 +120,18 @@ export async function POST(req: Request) {
   const packPreview = await readLatestPackPreview(2500);
   const { model: ollamaModel } = ollamaConfig();
 
+  const operatorScan = lastUser
+    ? scanContent(lastUser, "operator")
+    : { clean: true, findings: [], blocked: false };
+  const threatVolatile = operatorScan.clean
+    ? ""
+    : formatThreatBrief(operatorScan);
+
   const tPrompt = Date.now();
   // Phase 2: build once per request — stable canon reused from in-process cache;
   // volatile extras (memory/vault/pack) stay out of the Anthropic cache prefix.
   const systemBlocks = buildSystemPromptBlocks([
+    threatVolatile,
     serializeTier1(tier1),
     memoryForPrompt(memory, lastUser),
     vaultForPrompt(vault.docs, lastUser),
@@ -168,6 +177,12 @@ export async function POST(req: Request) {
     await recordExchange("user", lastUser);
     addTokens(lastUser.length + system.length / 8);
     pushFeed("EXEC", `Operator: ${redact(lastUser).slice(0, 70)}`);
+    if (!operatorScan.clean) {
+      pushFeed(
+        "ALERT",
+        `Security team flagged operator input — ${operatorScan.findings.length} pattern(s)`,
+      );
+    }
   }
 
   const encoder = new TextEncoder();
