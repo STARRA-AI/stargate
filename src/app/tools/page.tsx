@@ -26,23 +26,47 @@ type PromptsState = {
   structurePreview: string;
 };
 
+type MulticaState = {
+  vendorPresent: boolean;
+  vendorPath: string;
+  cliPresent: boolean;
+  cliVersion: string | null;
+  tokenLinked: boolean;
+  baseUrl: string;
+  guide: string;
+};
+
+type MulticaWorkspace = { id: string; name: string; slug: string };
+type MulticaIssue = {
+  id?: string;
+  identifier?: string;
+  title?: string;
+  status?: string;
+};
+
 export default function ToolsPage() {
   const [repomix, setRepomix] = useState<RepomixState>({});
   const [montage, setMontage] = useState<MontageState | null>(null);
   const [prompts, setPrompts] = useState<PromptsState | null>(null);
+  const [multica, setMultica] = useState<MulticaState | null>(null);
+  const [workspaces, setWorkspaces] = useState<MulticaWorkspace[]>([]);
+  const [issues, setIssues] = useState<MulticaIssue[]>([]);
+  const [issueTitle, setIssueTitle] = useState("STARRA stub — operator follow-up");
   const [topic, setTopic] = useState("healing after her — one hard truth");
   const [status, setStatus] = useState("");
   const [packPreview, setPackPreview] = useState("");
 
   const refresh = useCallback(async () => {
-    const [r, m, p] = await Promise.all([
+    const [r, m, p, mu] = await Promise.all([
       fetch("/api/tools/repomix").then((x) => x.json()),
       fetch("/api/tools/openmontage").then((x) => x.json()),
       fetch("/api/tools/prompts").then((x) => x.json()),
+      fetch("/api/tools/multica").then((x) => x.json()),
     ]);
     setRepomix(r);
     setMontage(m);
     setPrompts(p);
+    setMultica(mu);
     if (r.preview) setPackPreview(r.preview);
   }, []);
 
@@ -79,6 +103,39 @@ export default function ToolsPage() {
     await refresh();
   }
 
+  async function loadMulticaBoard() {
+    setStatus("EXECUTING — MULTICA LIST");
+    const [wsRes, isRes] = await Promise.all([
+      fetch("/api/tools/multica?action=workspaces").then((x) => x.json()),
+      fetch("/api/tools/multica?action=issues").then((x) => x.json()),
+    ]);
+    if (wsRes.error || isRes.error) {
+      setStatus(`LINK DEGRADED · ${wsRes.error ?? isRes.error}`);
+      return;
+    }
+    setWorkspaces(wsRes.workspaces ?? []);
+    setIssues(isRes.issues ?? []);
+    setStatus(
+      `MULTICA · ${(wsRes.workspaces ?? []).length} workspaces · ${(isRes.issues ?? []).length} issues`,
+    );
+  }
+
+  async function createMulticaIssue() {
+    setStatus("EXECUTING — MULTICA CREATE");
+    const res = await fetch("/api/tools/multica", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: issueTitle }),
+    });
+    const data = await res.json();
+    setStatus(
+      res.ok
+        ? `CREATED · ${data.identifier ?? data.id ?? "issue"}`
+        : `LINK DEGRADED · ${data.error ?? "retry"}`,
+    );
+    if (res.ok) await loadMulticaBoard();
+  }
+
   return (
     <ScreenShell title="Tools">
       {status && (
@@ -87,7 +144,7 @@ export default function ToolsPage() {
         </p>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-3">
+      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
         {/* Repomix */}
         <section className="panel-etch flex flex-col gap-3 p-4">
           <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
@@ -181,6 +238,63 @@ export default function ToolsPage() {
               {prompts.structurePreview}
             </pre>
           )}
+        </section>
+
+        {/* Multica */}
+        <section className="panel-etch flex flex-col gap-3 p-4">
+          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
+            Multica
+          </h2>
+          <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+            Agents as teammates — workspaces, issues, skills. External muscle for STARRA.
+          </p>
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
+            {multica?.vendorPresent ? "● vendor present" : "○ run bootstrap-multica"} ·{" "}
+            {multica?.cliPresent
+              ? `cli ${multica.cliVersion ?? "ok"}`
+              : "cli missing"} ·{" "}
+            {multica?.tokenLinked ? "token linked" : "○ link PAT in Settings"}
+          </p>
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--magenta)]">
+            {multica?.baseUrl}
+          </p>
+          <button
+            type="button"
+            onClick={() => void loadMulticaBoard()}
+            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+          >
+            List workspaces / issues
+          </button>
+          <label className="font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+            Issue title
+            <input
+              value={issueTitle}
+              onChange={(e) => setIssueTitle(e.target.value)}
+              className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+            />
+          </label>
+          <button
+            type="button"
+            onClick={() => void createMulticaIssue()}
+            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+          >
+            Create issue stub
+          </button>
+          <ul className="max-h-24 space-y-1 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
+            {workspaces.slice(0, 5).map((w) => (
+              <li key={w.id}>
+                ws · {w.slug || w.name}
+              </li>
+            ))}
+            {issues.slice(0, 5).map((i) => (
+              <li key={i.id ?? i.identifier ?? i.title}>
+                {i.identifier ?? i.id} · {i.status ?? "—"} · {i.title}
+              </li>
+            ))}
+          </ul>
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
+            {multica?.guide}
+          </p>
         </section>
       </div>
     </ScreenShell>

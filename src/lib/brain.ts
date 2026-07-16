@@ -2,6 +2,7 @@ import { readFileSync } from "fs";
 import path from "path";
 import { structureBlock } from "@/lib/prompt-structure";
 import { fableReasoningBlock } from "@/lib/fable-reasoning";
+import { untrustedContentRules } from "@/lib/security/fencing";
 
 const OPERATOR_RULES = `
 VOICE & TONE (non-negotiable):
@@ -19,6 +20,9 @@ const BRAIN_CHAR_BUDGET = 8000;
  * laws intact — trim builder anecdotes (Part III) first, then scripture detail.
  */
 const SOUL_CHAR_BUDGET = 10000;
+
+/** Multica doctrine — agents-as-teammates ops context (after soul/brain). */
+const MULTICA_CHAR_BUDGET = 4000;
 
 const SOUL_PREAMBLE = `STARRA_SOUL — spiritual operating system.
 Governs how STARRA thinks and speaks about money, work, and outcomes.
@@ -129,6 +133,16 @@ export function prioritizeSoul(raw: string, budget: number): {
 /** Cache static canon — rebuildSystemPrompt was re-reading disk every chat token path. */
 let brainCache: string | null = null;
 let soulCache: string | null = null;
+let multicaCache: string | null = null;
+let stablePromptCache: string | null = null;
+
+/** Stable (cacheable) vs volatile (per-request) system prompt parts — Phase 2. */
+export type SystemPromptBlocks = {
+  stable: string;
+  volatile: string;
+  /** Joined form for Ollama / local providers that take a single string. */
+  full: string;
+};
 
 export function loadBrain(): string {
   if (brainCache) return brainCache;
@@ -156,10 +170,43 @@ export function loadSoul(): string {
   }
 }
 
+/** Multica doctrine — loaded after soul/brain; ~4K budget. */
+export function loadMulticaDoctrine(): string {
+  if (multicaCache) return multicaCache;
+  try {
+    const p = path.join(process.cwd(), "docs", "MULTICA_DOCTRINE.md");
+    const raw = readFileSync(p, "utf8");
+    const { text } = clipAtBudget(raw, MULTICA_CHAR_BUDGET);
+    multicaCache = text;
+    return multicaCache;
+  } catch {
+    return "MULTICA doctrine unavailable offline — treat agents-as-teammates as optional external muscle.";
+  }
+}
+
 /** Test/dev helper — clear canon caches after file edits. */
 export function clearCanonCache() {
   brainCache = null;
   soulCache = null;
+  multicaCache = null;
+  stablePromptCache = null;
+}
+
+/**
+ * Byte-stable system prefix (structure + soul + brain + Multica + security rules).
+ * Cached in-process so we never re-read disk or re-join on every token/chunk.
+ */
+export function loadStableSystemPrompt(): string {
+  if (stablePromptCache) return stablePromptCache;
+  stablePromptCache = [
+    structureBlock(),
+    fableReasoningBlock(),
+    loadSoul(),
+    loadBrain(),
+    loadMulticaDoctrine(),
+    untrustedContentRules(),
+  ].join("\n\n---\n\n");
+  return stablePromptCache;
 }
 
 export function brainStatus(): CanonLoadStatus {
@@ -191,18 +238,16 @@ export function soulStatus(): CanonLoadStatus {
   }
 }
 
-export function buildSystemPrompt(extras: string[] = []): string {
+/**
+ * Build system prompt with stable/volatile split for Anthropic prompt caching.
+ * Stable = canon + security rules (reuse across requests).
+ * Volatile = memory / vault / pack / runtime (per turn — do not cache).
+ */
+export function buildSystemPromptBlocks(extras: string[] = []): SystemPromptBlocks {
   const t0 = Date.now();
-  const soul = loadSoul();
-  const brain = loadBrain();
-  const parts = [
-    structureBlock(),
-    fableReasoningBlock(),
-    soul,
-    brain,
-    ...extras.filter(Boolean),
-  ];
-  const out = parts.join("\n\n---\n\n");
+  const stable = loadStableSystemPrompt();
+  const volatile = extras.filter(Boolean).join("\n\n---\n\n");
+  const full = volatile ? `${stable}\n\n---\n\n${volatile}` : stable;
   // #region agent log
   fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
     method: "POST",
@@ -212,14 +257,15 @@ export function buildSystemPrompt(extras: string[] = []): string {
     },
     body: JSON.stringify({
       sessionId: "f8c9f7",
-      location: "brain.ts:buildSystemPrompt",
+      location: "brain.ts:buildSystemPromptBlocks",
       message: "system prompt assembled",
       data: {
-        totalChars: out.length,
-        soulChars: soul.length,
-        brainChars: brain.length,
-        hasSoulPreamble: soul.includes("STARRA_SOUL"),
-        hasCopyRule: out.includes('Say "Copy."'),
+        totalChars: full.length,
+        stableChars: stable.length,
+        volatileChars: volatile.length,
+        hasSoulPreamble: stable.includes("STARRA_SOUL"),
+        hasCopyRule: stable.includes('Say "Copy."'),
+        hasUntrustedFenceRules: stable.includes("BEGIN_UNTRUSTED_WEB_CONTENT"),
         extrasCount: extras.filter(Boolean).length,
         assembleMs: Date.now() - t0,
       },
@@ -229,5 +275,10 @@ export function buildSystemPrompt(extras: string[] = []): string {
     }),
   }).catch(() => {});
   // #endregion
-  return out;
+  return { stable, volatile, full };
+}
+
+/** Back-compat: single joined string (Ollama / callers that ignore cache blocks). */
+export function buildSystemPrompt(extras: string[] = []): string {
+  return buildSystemPromptBlocks(extras).full;
 }

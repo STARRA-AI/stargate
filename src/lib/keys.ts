@@ -55,6 +55,18 @@ export const KEY_SLOTS = [
     hint: "Bearer token if the stats endpoint needs one",
     powers: "Site Telemetry bots/users/trades",
   },
+  {
+    id: "multica_token",
+    label: "Multica PAT",
+    hint: "mul_… (Settings → Tokens on multica.ai)",
+    powers: "Multica workspaces · issues · agent teammates",
+  },
+  {
+    id: "multica_base_url",
+    label: "Multica API base URL",
+    hint: "https://api.multica.ai (optional; self-host override)",
+    powers: "Multica cloud or self-hosted server",
+  },
 ] as const;
 
 export type KeySlotId = (typeof KEY_SLOTS)[number]["id"];
@@ -82,6 +94,8 @@ export async function getKey(id: KeySlotId): Promise<string | undefined> {
     openai: process.env.OPENAI_API_KEY,
     gemini: process.env.GEMINI_API_KEY,
     xai: process.env.XAI_API_KEY,
+    multica_token: process.env.MULTICA_TOKEN,
+    multica_base_url: process.env.MULTICA_SERVER_URL ?? process.env.MULTICA_BASE_URL,
   };
   return envMap[id]?.trim() || undefined;
 }

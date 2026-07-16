@@ -50,7 +50,22 @@ Reference library of extracted system prompts.
 
 **Policy:** steal section *structure* only. Never import Anthropic/OpenAI “warm assistant” tone. STARRA stays operator voice.
 
-## 4. Local free brain — Fable reasoning + Ollama
+## 4. Multica — `multica-ai/multica`
+
+Managed agents platform: agents as teammates, issue lifecycle, skills, squads, autopilots.
+
+| Surface | How |
+|---------|-----|
+| Vendor | `vendor/multica` (gitignored clone) |
+| Bootstrap | `npm run tools:bootstrap-multica` or `bash scripts/bootstrap-multica.sh` |
+| Doctrine | `docs/MULTICA_DOCTRINE.md` (~4K budget in `buildSystemPrompt`) |
+| Keys | Settings → LINK APIS → `multica_token` (+ optional `multica_base_url`, default `https://api.multica.ai`) |
+| API | `GET/POST /api/tools/multica` |
+| UI | Tools → Multica panel |
+
+Do not commit the vendor tree. PAT prefix is typically `mul_`.
+
+## 5. Local free brain — Fable reasoning + Ollama
 
 | Piece | Detail |
 |-------|--------|

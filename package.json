@@ -9,9 +9,12 @@
     "lint": "eslint",
     "pack": "repomix --config repomix.config.json",
     "tools:bootstrap": "bash scripts/bootstrap-tools.sh",
+    "tools:bootstrap-multica": "bash scripts/bootstrap-multica.sh",
     "tools:distill": "node scripts/distill-prompt-patterns.mjs",
     "tools:montage-status": "node -e \"const fs=require('fs');const p='vendor/OpenMontage/README.md';console.log(fs.existsSync(p)?'OpenMontage: present':'OpenMontage: missing — npm run tools:bootstrap')\"",
-    "starra:up": "bash scripts/starra-up.sh"
+    "starra:up": "bash scripts/starra-up.sh",
+    "test:v2": "npx --yes tsx --test tests/*.test.ts",
+    "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",

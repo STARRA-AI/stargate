@@ -20,9 +20,17 @@ else
   echo "✓ system_prompts_leaks present"
 fi
 
+if [[ ! -d vendor/multica/.git ]]; then
+  echo "→ Cloning Multica (shallow)…"
+  git clone --depth 1 https://github.com/multica-ai/multica.git vendor/multica
+else
+  echo "✓ Multica present"
+fi
+
 echo "→ Distilling prompt structure patterns…"
 node scripts/distill-prompt-patterns.mjs
 
 echo "→ Done. Next for OpenMontage (optional heavy install):"
 echo "   cd vendor/OpenMontage && python3 -m venv .venv && source .venv/bin/activate && pip install -r requirements.txt"
 echo "   cd remotion-composer && npm install"
+echo "→ Multica: link multica_token in Settings · optional CLI: brew install multica-ai/tap/multica"
