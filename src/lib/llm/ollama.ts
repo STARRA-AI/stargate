@@ -128,7 +128,7 @@ async function streamNativeChat(
       ],
       options: {
         // Cap length so operator HUD feels snappy on CPU-only inference
-        num_predict: model.includes("deepseek-r1") ? 384 : 120,
+        num_predict: model.includes("deepseek-r1") ? 384 : 220,
         temperature: model.includes("deepseek-r1") ? 0.4 : 0.4,
         num_ctx: numCtx,
       },

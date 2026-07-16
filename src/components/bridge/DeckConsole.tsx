@@ -42,8 +42,19 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
   const [input, setInput] = useState("");
   const [history, setHistory] = useState<Msg[]>([]);
   const [streaming, setStreaming] = useState("");
-  const abortRef = useRef<AbortController | null>(null);
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const revealAbortRef = useRef<AbortController | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
+
+  function abortInFlight() {
+    fetchAbortRef.current?.abort();
+    revealAbortRef.current?.abort();
+    ttsAbortRef.current?.abort();
+    fetchAbortRef.current = null;
+    revealAbortRef.current = null;
+    ttsAbortRef.current = null;
+  }
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
@@ -54,9 +65,46 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
       const trimmed = text.trim();
       if (!trimmed) return;
 
-      abortRef.current?.abort();
-      const ac = new AbortController();
-      abortRef.current = ac;
+      abortInFlight();
+      const fetchAc = new AbortController();
+      const revealAc = new AbortController();
+      const ttsAc = new AbortController();
+      fetchAbortRef.current = fetchAc;
+      revealAbortRef.current = revealAc;
+      ttsAbortRef.current = ttsAc;
+
+      // Prime Web Speech during user gesture — async fetch loses activation otherwise.
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.resume();
+        window.speechSynthesis.getVoices();
+      }
+
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "f8c9f7",
+          },
+          body: JSON.stringify({
+            sessionId: "f8c9f7",
+            location: "DeckConsole.tsx:send-start",
+            message: "console send started",
+            data: {
+              chars: trimmed.length,
+              viewportW: window.innerWidth,
+              speechPaused: window.speechSynthesis?.paused ?? null,
+              voiceCount: window.speechSynthesis?.getVoices().length ?? 0,
+            },
+            timestamp: Date.now(),
+            hypothesisId: "H-A",
+            runId: "post-fix",
+          }),
+        },
+      ).catch(() => {});
+      // #endregion
 
       const nextHistory: Msg[] = [
         ...history,
@@ -73,7 +121,7 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ messages: nextHistory }),
-          signal: ac.signal,
+          signal: fetchAc.signal,
         });
 
         if (!res.ok || !res.body) {
@@ -113,12 +161,45 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
         }
 
         setHudState("speaking");
-        await revealText(full, setStreaming, ac.signal);
-        setHistory((h) => [...h, { role: "assistant", content: full }]);
         setLastReply(full);
+        // Speak immediately — do not wait for typewriter reveal (was blocking TTS 8s+).
+        const { speakStarra, getLastSpeakEngine } = await import(
+          "@/lib/voice/speak"
+        );
+        const speakPromise = speakStarra(full, ttsAc.signal);
+        await revealText(full, setStreaming, revealAc.signal);
+        setHistory((h) => [...h, { role: "assistant", content: full }]);
+        const engine = await speakPromise;
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "f8c9f7",
+            },
+            body: JSON.stringify({
+              sessionId: "f8c9f7",
+              location: "DeckConsole.tsx:send",
+              message: "console reply + TTS",
+              data: {
+                replyChars: full.length,
+                copyOnly: /^copy\.?\s*$/i.test(full.trim()),
+                engine,
+                lastEngine: getLastSpeakEngine(),
+                preview: full.slice(0, 120),
+              },
+              timestamp: Date.now(),
+              hypothesisId: "H-A",
+              runId: "post-fix",
+            }),
+          },
+        ).catch(() => {});
+        // #endregion
         setStreaming("");
         setHudState("idle");
-        pushLog("[ORACLE] reply landed");
+        pushLog(`[ORACLE] reply landed · voice ${engine}`);
       } catch (err) {
         if ((err as Error).name === "AbortError") return;
         setHudState("error");

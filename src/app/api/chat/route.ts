@@ -43,8 +43,10 @@ function sse(text: string) {
 const LOCAL_SYSTEM_BUDGET = 1_800;
 
 const LOCAL_VOICE_TAIL = `
-VOICE (hard): You are STARRA. Calm. Dry. Decisive.
-Say "Copy." not "Sure!". No emoji. No "happy to help". Lead with the next move. Short sentences.
+VOICE (hard): You are STARRA — guardian and operator. Calm. Dry. Decisive.
+When acknowledging an order, you may open with "Copy." — then ALWAYS give the real answer in the same reply.
+Never reply with only the word "Copy." Never loop on "Copy."
+No "Sure!", no emoji, no "happy to help". Short sentences. If asked for a story, tell it.
 `.trim();
 
 function clipSystemForLocal(system: string): string {
@@ -57,6 +59,33 @@ function clipSystemForLocal(system: string): string {
   const head = Math.floor(budget * 0.55);
   const tail = budget - head - 20;
   return `${system.slice(0, head)}\n…[truncated]…\n${system.slice(-tail)}\n\n${LOCAL_VOICE_TAIL}`;
+}
+
+/** Tiny local models latch onto repeated "Copy." — expand or drop those turns. */
+function sanitizeMessagesForLocal(
+  messages: { role: string; content: string }[],
+): { role: "user" | "assistant"; content: string }[] {
+  const copyOnly = (s: string) => /^copy\.?\s*$/i.test(s.trim());
+  const stuck =
+    messages.filter((m) => m.role === "assistant" && copyOnly(m.content))
+      .length >= 1;
+  const out: { role: "user" | "assistant"; content: string }[] = [];
+  for (const m of messages) {
+    if (m.role !== "user" && m.role !== "assistant") continue;
+    let content = m.content;
+    if (m.role === "assistant" && copyOnly(content)) {
+      // Don't feed empty acknowledgements back into the context window
+      continue;
+    }
+    out.push({ role: m.role, content });
+  }
+  if (stuck && out.length > 0) {
+    const last = out[out.length - 1];
+    if (last?.role === "user") {
+      last.content = `${last.content}\n\n(Answer fully. Do not reply with only "Copy.")`;
+    }
+  }
+  return out.length ? out : [{ role: "user", content: "Status." }];
 }
 
 async function* stubStream(message: string) {
@@ -258,6 +287,7 @@ export async function POST(req: Request) {
 
           if (useOllama && ollamaUp && hasModel) {
             const localSystem = clipSystemForLocal(system);
+            const localMessages = sanitizeMessagesForLocal(messages);
             // #region agent log
             fetch(
               "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
@@ -276,9 +306,14 @@ export async function POST(req: Request) {
                     after: localSystem.length,
                     clipped: localSystem.length < system.length,
                     model: ollamaModel,
+                    msgIn: messages.length,
+                    msgOut: localMessages.length,
+                    hasVoiceTailNoSoloCopy: localSystem.includes(
+                      'Never reply with only the word "Copy."',
+                    ),
                   },
                   timestamp: Date.now(),
-                  hypothesisId: "H-C5",
+                  hypothesisId: "H-B",
                   runId: "post-fix",
                 }),
               },
@@ -286,7 +321,7 @@ export async function POST(req: Request) {
             // #endregion
             await streamOllama({
               system: localSystem,
-              messages,
+              messages: localMessages,
               onText: (t) => push(t),
             });
             const beforeStrip = full.length;
@@ -308,12 +343,13 @@ export async function POST(req: Request) {
                     model: ollamaModel,
                     beforeStripChars: beforeStrip,
                     afterStripChars: full.length,
+                    copyOnly: /^copy\.?\s*$/i.test(full.trim()),
                     emptyAfterStrip: full.length === 0,
                     streamMs: Date.now() - tStream,
-                    preview: full.slice(0, 120),
+                    preview: full.slice(0, 160),
                   },
                   timestamp: Date.now(),
-                  hypothesisId: "H-C3",
+                  hypothesisId: "H-B",
                   runId: "post-fix",
                 }),
               },

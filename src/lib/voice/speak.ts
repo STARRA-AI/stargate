@@ -39,6 +39,12 @@ export async function speakStarra(
 
   stopAllSpeech();
 
+  const pausedBefore =
+    typeof window !== "undefined" ? window.speechSynthesis?.paused : null;
+  if (typeof window !== "undefined" && window.speechSynthesis) {
+    window.speechSynthesis.resume();
+  }
+
   if (await piperModelAvailable()) {
     const { speakPiper } = await import("@/lib/voice/piper-runtime");
     const ok = await speakPiper(text, signal);
@@ -74,11 +80,62 @@ export async function speakStarra(
     u.onend = () => {
       signal?.removeEventListener("abort", onAbort);
       lastEngine = "webspeech";
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "f8c9f7",
+          },
+          body: JSON.stringify({
+            sessionId: "f8c9f7",
+            location: "speak.ts:webspeech-end",
+            message: "webspeech utterance ended",
+            data: {
+              engine: "webspeech",
+              textChars: text.length,
+              pausedBefore,
+              pausedAfter: window.speechSynthesis?.paused ?? null,
+            },
+            timestamp: Date.now(),
+            hypothesisId: "H-A",
+            runId: "post-fix",
+          }),
+        },
+      ).catch(() => {});
+      // #endregion
       resolve("webspeech");
     };
-    u.onerror = () => {
+    u.onerror = (ev) => {
       signal?.removeEventListener("abort", onAbort);
       lastEngine = "none";
+      // #region agent log
+      fetch(
+        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+        {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "X-Debug-Session-Id": "f8c9f7",
+          },
+          body: JSON.stringify({
+            sessionId: "f8c9f7",
+            location: "speak.ts:webspeech-error",
+            message: "webspeech utterance error",
+            data: {
+              textChars: text.length,
+              pausedBefore,
+              error: (ev as SpeechSynthesisErrorEvent).error ?? "unknown",
+            },
+            timestamp: Date.now(),
+            hypothesisId: "H-A",
+            runId: "post-fix",
+          }),
+        },
+      ).catch(() => {});
+      // #endregion
       resolve("none");
     };
     window.speechSynthesis.speak(u);
