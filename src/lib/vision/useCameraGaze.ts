@@ -52,6 +52,11 @@ export function useCameraGaze() {
     setActive(false);
   }, []);
 
+  const tickCountRef = useRef(0);
+  const lastTickLogRef = useRef(0);
+  const sizedRef = useRef(false);
+  const lastTickAtRef = useRef(0);
+
   const tick = useCallback(async () => {
     const video = videoRef.current;
     const canvas = canvasRef.current;
@@ -60,10 +65,21 @@ export function useCameraGaze() {
       return;
     }
 
+    // Throttle camera processing (~15fps) — full RAF + canvas resize was hot
+    const now = performance.now();
+    if (now - lastTickAtRef.current < 66) {
+      rafRef.current = requestAnimationFrame(() => void tick());
+      return;
+    }
+    lastTickAtRef.current = now;
+
     const w = 160;
     const h = Math.round((video.videoHeight / video.videoWidth) * w) || 120;
-    canvas.width = w;
-    canvas.height = h;
+    if (!sizedRef.current || canvas.width !== w || canvas.height !== h) {
+      canvas.width = w;
+      canvas.height = h;
+      sizedRef.current = true;
+    }
     const ctx = canvas.getContext("2d", { willReadFrequently: true });
     if (!ctx) {
       rafRef.current = requestAnimationFrame(() => void tick());
@@ -132,6 +148,39 @@ export function useCameraGaze() {
     const g = gazeRef.current;
     g.x += (nx - g.x) * 0.18;
     g.y += (ny - g.y) * 0.18;
+
+    tickCountRef.current += 1;
+    if (now - lastTickLogRef.current > 2000) {
+      // #region agent log
+      fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "f8c9f7",
+        },
+        body: JSON.stringify({
+          sessionId: "f8c9f7",
+          location: "useCameraGaze.ts:tick",
+          message: "camera tick sample",
+          data: {
+            ticks: tickCountRef.current,
+            gotFace,
+            nx: Number(nx.toFixed(3)),
+            ny: Number(ny.toFixed(3)),
+            gazeX: Number(g.x.toFixed(3)),
+            gazeY: Number(g.y.toFixed(3)),
+            canvasW: canvas.width,
+            canvasH: canvas.height,
+            throttled: true,
+          },
+          timestamp: Date.now(),
+          hypothesisId: "H-E3",
+          runId: "pre",
+        }),
+      }).catch(() => {});
+      // #endregion
+      lastTickLogRef.current = now;
+    }
 
     rafRef.current = requestAnimationFrame(() => void tick());
   }, []);

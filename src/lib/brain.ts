@@ -126,26 +126,40 @@ export function prioritizeSoul(raw: string, budget: number): {
   return { text: out, truncated };
 }
 
+/** Cache static canon — rebuildSystemPrompt was re-reading disk every chat token path. */
+let brainCache: string | null = null;
+let soulCache: string | null = null;
+
 export function loadBrain(): string {
+  if (brainCache) return brainCache;
   try {
     const p = path.join(process.cwd(), "STARRA_BRAIN.md");
     const raw = readFileSync(p, "utf8");
     const { text } = clipAtBudget(raw, BRAIN_CHAR_BUDGET);
-    return `${text}\n\n${OPERATOR_RULES}`;
+    brainCache = `${text}\n\n${OPERATOR_RULES}`;
+    return brainCache;
   } catch {
     return `STARRA operator brain unavailable offline.\n\n${OPERATOR_RULES}`;
   }
 }
 
 export function loadSoul(): string {
+  if (soulCache) return soulCache;
   try {
     const p = path.join(process.cwd(), "STARRA_SOUL.md");
     const raw = readFileSync(p, "utf8");
     const { text } = prioritizeSoul(raw, SOUL_CHAR_BUDGET);
-    return `${SOUL_PREAMBLE}\n\n${text}`;
+    soulCache = `${SOUL_PREAMBLE}\n\n${text}`;
+    return soulCache;
   } catch {
     return `${SOUL_PREAMBLE}\n\nSoul file unavailable offline — operate from brain hard rules only.`;
   }
+}
+
+/** Test/dev helper — clear canon caches after file edits. */
+export function clearCanonCache() {
+  brainCache = null;
+  soulCache = null;
 }
 
 export function brainStatus(): CanonLoadStatus {
@@ -178,12 +192,42 @@ export function soulStatus(): CanonLoadStatus {
 }
 
 export function buildSystemPrompt(extras: string[] = []): string {
+  const t0 = Date.now();
+  const soul = loadSoul();
+  const brain = loadBrain();
   const parts = [
     structureBlock(),
     fableReasoningBlock(),
-    loadSoul(),
-    loadBrain(),
+    soul,
+    brain,
     ...extras.filter(Boolean),
   ];
-  return parts.join("\n\n---\n\n");
+  const out = parts.join("\n\n---\n\n");
+  // #region agent log
+  fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "f8c9f7",
+    },
+    body: JSON.stringify({
+      sessionId: "f8c9f7",
+      location: "brain.ts:buildSystemPrompt",
+      message: "system prompt assembled",
+      data: {
+        totalChars: out.length,
+        soulChars: soul.length,
+        brainChars: brain.length,
+        hasSoulPreamble: soul.includes("STARRA_SOUL"),
+        hasCopyRule: out.includes('Say "Copy."'),
+        extrasCount: extras.filter(Boolean).length,
+        assembleMs: Date.now() - t0,
+      },
+      timestamp: Date.now(),
+      hypothesisId: "H-C1",
+      runId: "post-fix",
+    }),
+  }).catch(() => {});
+  // #endregion
+  return out;
 }

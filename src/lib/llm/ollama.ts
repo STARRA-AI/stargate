@@ -64,21 +64,47 @@ export async function streamOllama(opts: {
   onText: (chunk: string) => void;
 }): Promise<{ provider: string; model: string }> {
   const { base, model } = ollamaConfig();
+  const errors: string[] = [];
 
   // Native path handles R1 "thinking" vs "content" correctly
   try {
     await streamNativeChat(base, model, opts);
     return { provider: "ollama-native", model };
-  } catch {
-    /* fall through */
+  } catch (err) {
+    errors.push(`native:${err instanceof Error ? err.message : String(err)}`);
   }
 
   try {
     await streamAnthropicCompat(base, model, opts);
     return { provider: "ollama-anthropic", model };
-  } catch {
+  } catch (err) {
+    errors.push(`anthropic:${err instanceof Error ? err.message : String(err)}`);
+  }
+
+  try {
     await streamOpenAICompat(base, model, opts);
     return { provider: "ollama-openai", model };
+  } catch (err) {
+    errors.push(`openai:${err instanceof Error ? err.message : String(err)}`);
+    // #region agent log
+    fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "f8c9f7",
+      },
+      body: JSON.stringify({
+        sessionId: "f8c9f7",
+        location: "ollama.ts:streamOllama",
+        message: "all ollama providers failed",
+        data: { model, systemChars: opts.system.length, errors },
+        timestamp: Date.now(),
+        hypothesisId: "H-C3",
+        runId: "pre",
+      }),
+    }).catch(() => {});
+    // #endregion
+    throw new Error(errors.join(" | ") || "ollama failed");
   }
 }
 
@@ -87,6 +113,8 @@ async function streamNativeChat(
   model: string,
   opts: { system: string; messages: ChatMessage[]; onText: (c: string) => void },
 ) {
+  // 8GB Mac: keep ctx modest; oversized system prompts were hanging at 0 tokens
+  const numCtx = model.includes("deepseek-r1") ? 8192 : 6144;
   const res = await fetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -98,10 +126,13 @@ async function streamNativeChat(
         ...opts.messages,
       ],
       options: {
-        num_predict: 1024,
-        temperature: 0.6,
+        // R1 burns predict budget on thinking — give headroom when using deepseek
+        num_predict: model.includes("deepseek-r1") ? 512 : 160,
+        temperature: model.includes("deepseek-r1") ? 0.4 : 0.45,
+        num_ctx: numCtx,
       },
     }),
+    signal: AbortSignal.timeout(90_000),
   });
 
   if (!res.ok || !res.body) {
@@ -139,6 +170,32 @@ async function streamNativeChat(
         if (json.done && emitted === 0 && lastThinking) {
           // Model spent budget on thinking only — surface a terse fallback
           const fallback = extractFinalFromThinking(lastThinking);
+          // #region agent log
+          fetch(
+            "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "f8c9f7",
+              },
+              body: JSON.stringify({
+                sessionId: "f8c9f7",
+                location: "ollama.ts:streamNativeChat",
+                message: "thinking-only fallback",
+                data: {
+                  model,
+                  thinkingChars: lastThinking.length,
+                  fallbackChars: fallback?.length ?? 0,
+                  fallbackPreview: (fallback ?? "").slice(0, 100),
+                },
+                timestamp: Date.now(),
+                hypothesisId: "H-C3",
+                runId: "pre",
+              }),
+            },
+          ).catch(() => {});
+          // #endregion
           if (fallback) opts.onText(fallback);
         }
       } catch {

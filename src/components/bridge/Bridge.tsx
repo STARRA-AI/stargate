@@ -61,10 +61,44 @@ function voteColor(vote: string) {
   return "var(--warn)";
 }
 
-function useInterval(fn: () => void, ms: number) {
+function useInterval(fn: () => void, ms: number, label?: string) {
   useEffect(() => {
-    fn();
-    const id = setInterval(fn, ms);
+    let fails = 0;
+    let oks = 0;
+    const wrapped = () => {
+      const t0 = Date.now();
+      try {
+        fn();
+        oks += 1;
+      } catch {
+        fails += 1;
+      }
+      // #region agent log
+      if (label && (oks + fails) % 3 === 1) {
+        fetch(
+          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "f8c9f7",
+            },
+            body: JSON.stringify({
+              sessionId: "f8c9f7",
+              location: "Bridge.tsx:useInterval",
+              message: "deck poll tick",
+              data: { label, ms, oks, fails, t0 },
+              timestamp: Date.now(),
+              hypothesisId: "H-D1",
+              runId: "pre",
+            }),
+          },
+        ).catch(() => {});
+      }
+      // #endregion
+    };
+    wrapped();
+    const id = setInterval(wrapped, ms);
     return () => clearInterval(id);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ms]);
@@ -111,22 +145,75 @@ export function Bridge() {
 
   /* ── live polling ── */
 
+  /* Poll rates: vitals/feed slightly relaxed under memory pressure (99% observed) */
   useInterval(() => {
     fetch("/api/vitals")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
       .then(setVitals)
-      .catch(() => {});
-  }, 5000);
+      .catch(() => {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "f8c9f7",
+            },
+            body: JSON.stringify({
+              sessionId: "f8c9f7",
+              location: "Bridge.tsx:vitals",
+              message: "vitals fetch failed",
+              data: {},
+              timestamp: Date.now(),
+              hypothesisId: "H-D2",
+              runId: "pre",
+            }),
+          },
+        ).catch(() => {});
+        // #endregion
+      });
+  }, 8000, "vitals");
 
   useInterval(() => {
     fetch("/api/dragon")
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
       .then((d: { watchlist: WatchMarket[]; portfolio: Portfolio }) => {
         setWatchlist(d.watchlist ?? []);
         setPortfolio(d.portfolio ?? { linked: false });
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "f8c9f7",
+            },
+            body: JSON.stringify({
+              sessionId: "f8c9f7",
+              location: "Bridge.tsx:dragon",
+              message: "dragon poll ok",
+              data: {
+                watchCount: (d.watchlist ?? []).length,
+                portfolioLinked: Boolean(d.portfolio?.linked),
+              },
+              timestamp: Date.now(),
+              hypothesisId: "H-D2",
+              runId: "pre",
+            }),
+          },
+        ).catch(() => {});
+        // #endregion
       })
       .catch(() => {});
-  }, 60_000);
+  }, 60_000, "dragon");
 
   useInterval(() => {
     fetch("/api/tank")
@@ -134,16 +221,38 @@ export function Bridge() {
       .then((d: { votes: TankVote[]; topic: string }) => {
         setTank(d.votes ?? []);
         setTankTopic(d.topic ?? "");
+        const linkCount = (d.votes ?? []).filter((v) => v.vote === "LINK").length;
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "f8c9f7",
+            },
+            body: JSON.stringify({
+              sessionId: "f8c9f7",
+              location: "Bridge.tsx:tank",
+              message: "tank poll",
+              data: { votes: d.votes?.length ?? 0, linkCount, topic: (d.topic ?? "").slice(0, 60) },
+              timestamp: Date.now(),
+              hypothesisId: "H-D3",
+              runId: "pre",
+            }),
+          },
+        ).catch(() => {});
+        // #endregion
       })
       .catch(() => {});
-  }, 30_000);
+  }, 45_000, "tank");
 
   useInterval(() => {
     fetch("/api/telemetry")
       .then((r) => r.json())
       .then(setTelemetry)
       .catch(() => {});
-  }, 45_000);
+  }, 45_000, "telemetry");
 
   useInterval(() => {
     fetch("/api/proposals")
@@ -153,14 +262,14 @@ export function Bridge() {
         setVentures(d.ventures ?? []);
       })
       .catch(() => {});
-  }, 60_000);
+  }, 60_000, "proposals");
 
   useInterval(() => {
     fetch("/api/feed")
       .then((r) => r.json())
       .then((d: { feed: FeedLine[] }) => setFeed(d.feed ?? []))
       .catch(() => {});
-  }, 6000);
+  }, 10_000, "feed");
 
   async function decide(id: number, action: "approve" | "later") {
     const res = await fetch("/api/proposals", {

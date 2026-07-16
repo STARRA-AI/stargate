@@ -52,15 +52,28 @@ export function ReactorEye({
     let blinkStartedAt = -1;
     let raf = 0;
 
+    let cachedScale = 1;
+    let scaleAt = 0;
+    let frameCount = 0;
+    let mouseMoveCount = 0;
+    let lastLogAt = 0;
+    let ecoPaused = false;
+
     const stageScale = () => {
+      const now = performance.now();
+      // Cache scale briefly — getBoundingClientRect every mousemove thrashs layout
+      if (now - scaleAt < 250) return cachedScale;
       const stage = document.getElementById("stage");
-      if (!stage) return 1;
-      return stage.getBoundingClientRect().width / 1680 || 1;
+      if (!stage) return cachedScale;
+      cachedScale = stage.getBoundingClientRect().width / 1680 || 1;
+      scaleAt = now;
+      return cachedScale;
     };
 
     const onMouseMove = (ev: MouseEvent) => {
       lastMouseAt = performance.now();
       cursorInWindow = true;
+      mouseMoveCount += 1;
       const rect = centerEl.getBoundingClientRect();
       const scale = stageScale();
       const dx = (ev.clientX - rect.left) / scale;
@@ -79,6 +92,44 @@ export function ReactorEye({
     };
 
     const frame = (now: number) => {
+      // ECO / low-power: skip iris RAF work (CSS anims already stilled)
+      ecoPaused = document.body.classList.contains("low-power");
+      if (ecoPaused) {
+        frameCount += 1;
+        if (now - lastLogAt > 2000) {
+          // #region agent log
+          fetch(
+            "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "f8c9f7",
+              },
+              body: JSON.stringify({
+                sessionId: "f8c9f7",
+                location: "ReactorEye.tsx:frame",
+                message: "eye RAF eco-paused",
+                data: { frameCount, mouseMoveCount, ecoPaused: true },
+                timestamp: Date.now(),
+                hypothesisId: "H-E1",
+                runId: "pre",
+              }),
+            },
+          ).catch(() => {});
+          // #endregion
+          lastLogAt = now;
+        }
+        // ECO: poll at ~4Hz instead of 60fps idle work
+        raf = window.setTimeout(
+          () => {
+            raf = requestAnimationFrame(frame);
+          },
+          250,
+        ) as unknown as number;
+        return;
+      }
+
       const target: Vec = { x: 0, y: 0 };
 
       // Camera gaze takes priority when armed and seeing motion/face
@@ -136,6 +187,41 @@ export function ReactorEye({
         ringOuterRef.current.style.transform = `translate(${gaze.x * 0.1}px, ${gaze.y * 0.1}px)`;
       }
 
+      frameCount += 1;
+      if (now - lastLogAt > 2000) {
+        // #region agent log
+        fetch(
+          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+          {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "X-Debug-Session-Id": "f8c9f7",
+            },
+            body: JSON.stringify({
+              sessionId: "f8c9f7",
+              location: "ReactorEye.tsx:frame",
+              message: "eye RAF sample",
+              data: {
+                frameCount,
+                mouseMoveCount,
+                cachedScale,
+                camMag: Number(camMag.toFixed(3)),
+                useCam,
+                gazeX: Number(gaze.x.toFixed(2)),
+                gazeY: Number(gaze.y.toFixed(2)),
+                ecoPaused: false,
+              },
+              timestamp: Date.now(),
+              hypothesisId: "H-E4",
+              runId: "pre",
+            }),
+          },
+        ).catch(() => {});
+        // #endregion
+        lastLogAt = now;
+      }
+
       raf = requestAnimationFrame(frame);
     };
 
@@ -146,6 +232,7 @@ export function ReactorEye({
 
     return () => {
       cancelAnimationFrame(raf);
+      clearTimeout(raf);
       window.removeEventListener("mousemove", onMouseMove);
       document.documentElement.removeEventListener("mouseleave", onMouseLeave);
       window.removeEventListener("blur", onMouseLeave);

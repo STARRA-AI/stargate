@@ -30,6 +30,26 @@ function sse(text: string) {
   return `data: ${JSON.stringify({ text })}\n\n`;
 }
 
+/** Local 1.5B on 8GB: ~60–80ms/token. Cap ~2k chars so prompt eval stays HUD-viable. */
+const LOCAL_SYSTEM_BUDGET = 2_200;
+
+const LOCAL_VOICE_TAIL = `
+VOICE (hard): You are STARRA. Calm. Dry. Decisive.
+Say "Copy." not "Sure!". No emoji. No "happy to help". Lead with the next move. Short sentences.
+`.trim();
+
+function clipSystemForLocal(system: string): string {
+  const reserve = LOCAL_VOICE_TAIL.length + 24;
+  const budget = Math.max(800, LOCAL_SYSTEM_BUDGET - reserve);
+  if (system.length <= budget) {
+    return `${system}\n\n${LOCAL_VOICE_TAIL}`;
+  }
+  // Keep head (structure/soul) + tail (brain/runtime) + hard voice rules
+  const head = Math.floor(budget * 0.55);
+  const tail = budget - head - 20;
+  return `${system.slice(0, head)}\n…[truncated]…\n${system.slice(-tail)}\n\n${LOCAL_VOICE_TAIL}`;
+}
+
 async function* stubStream(message: string) {
   const chunks = message.match(/.{1,12}/g) ?? [message];
   for (const c of chunks) {
@@ -87,6 +107,7 @@ export async function POST(req: Request) {
   const packPreview = await readLatestPackPreview(2500);
   const { model: ollamaModel } = ollamaConfig();
 
+  const tPrompt = Date.now();
   const system = buildSystemPrompt([
     serializeTier1(tier1),
     memoryForPrompt(memory, lastUser),
@@ -96,6 +117,31 @@ export async function POST(req: Request) {
       : 'RECENT REPOMIX PREVIEW: none — operator can say "pack the repo".',
     `RUNTIME: Prefer grounded STARRA canon. Local free model when Ollama is up (${ollamaModel}) with Fable-inspired reasoning scaffold.`,
   ]);
+  // #region agent log
+  fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Debug-Session-Id": "f8c9f7",
+    },
+    body: JSON.stringify({
+      sessionId: "f8c9f7",
+      location: "chat/route.ts:POST",
+      message: "chat request context",
+      data: {
+        model: ollamaModel,
+        systemChars: system.length,
+        lastUserChars: lastUser.length,
+        promptBuildMs: Date.now() - tPrompt,
+        prefer: (process.env.LLM_PROVIDER || "auto").toLowerCase(),
+        ollamaPriority: process.env.OLLAMA_PRIORITY === "1",
+      },
+      timestamp: Date.now(),
+      hypothesisId: "H-C2",
+      runId: "post-fix",
+    }),
+  }).catch(() => {});
+  // #endregion
 
   if (lastUser) {
     await recordExchange("user", lastUser);
@@ -116,6 +162,7 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       let full = "";
+      const tStream = Date.now();
       const push = (t: string) => {
         full += t;
         controller.enqueue(encoder.encode(sse(t)));
@@ -135,13 +182,98 @@ export async function POST(req: Request) {
               hasModel &&
               process.env.OLLAMA_PRIORITY === "1");
 
+          // #region agent log
+          fetch(
+            "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+            {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "X-Debug-Session-Id": "f8c9f7",
+              },
+              body: JSON.stringify({
+                sessionId: "f8c9f7",
+                location: "chat/route.ts:provider",
+                message: "provider branch",
+                data: {
+                  ollamaUp,
+                  hasModel,
+                  useOllama,
+                  hasAnthropic: Boolean(anthropicKey),
+                  prefer,
+                  model: ollamaModel,
+                },
+                timestamp: Date.now(),
+                hypothesisId: "H-C4",
+                runId: "post-fix",
+              }),
+            },
+          ).catch(() => {});
+          // #endregion
+
           if (useOllama && ollamaUp && hasModel) {
+            const localSystem = clipSystemForLocal(system);
+            // #region agent log
+            fetch(
+              "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Debug-Session-Id": "f8c9f7",
+                },
+                body: JSON.stringify({
+                  sessionId: "f8c9f7",
+                  location: "chat/route.ts:localClip",
+                  message: "local system clip",
+                  data: {
+                    before: system.length,
+                    after: localSystem.length,
+                    clipped: localSystem.length < system.length,
+                    model: ollamaModel,
+                  },
+                  timestamp: Date.now(),
+                  hypothesisId: "H-C5",
+                  runId: "post-fix",
+                }),
+              },
+            ).catch(() => {});
+            // #endregion
             await streamOllama({
-              system,
+              system: localSystem,
               messages,
               onText: (t) => push(t),
             });
+            const beforeStrip = full.length;
             full = stripThinkTags(full);
+            // #region agent log
+            fetch(
+              "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+              {
+                method: "POST",
+                headers: {
+                  "Content-Type": "application/json",
+                  "X-Debug-Session-Id": "f8c9f7",
+                },
+                body: JSON.stringify({
+                  sessionId: "f8c9f7",
+                  location: "chat/route.ts:ollama",
+                  message: "ollama stream complete",
+                  data: {
+                    model: ollamaModel,
+                    beforeStripChars: beforeStrip,
+                    afterStripChars: full.length,
+                    emptyAfterStrip: full.length === 0,
+                    streamMs: Date.now() - tStream,
+                    preview: full.slice(0, 120),
+                  },
+                  timestamp: Date.now(),
+                  hypothesisId: "H-C3",
+                  runId: "post-fix",
+                }),
+              },
+            ).catch(() => {});
+            // #endregion
           } else if (anthropicKey && prefer !== "ollama") {
             const Anthropic = (await import("@anthropic-ai/sdk")).default;
             const client = new Anthropic({ apiKey: anthropicKey });
@@ -165,8 +297,9 @@ export async function POST(req: Request) {
               }
             }
           } else if (ollamaUp && hasModel) {
+            const localSystem = clipSystemForLocal(system);
             await streamOllama({
-              system,
+              system: localSystem,
               messages,
               onText: (t) => push(t),
             });
