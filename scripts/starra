@@ -1,0 +1,191 @@
+#!/usr/bin/env bash
+# One-word launcher for STARRA / STARGATE.
+# Usage:
+#   starra          # up + open browser
+#   starra up       # start Ollama + deck in background
+#   starra open     # open HUD
+#   starra stop     # stop deck (Ollama stays)
+#   starra status   # health
+#   starra install  # put `starra` on PATH + double-clickable .command
+set -euo pipefail
+
+PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+STORAGE="/Volumes/Storage"
+MODELS="$STORAGE/STARRA/ollama/models"
+LOG_DIR="${STORAGE}/STARRA/logs"
+[[ -d "$STORAGE/STARRA" ]] || LOG_DIR="$PROJ/data/logs"
+mkdir -p "$LOG_DIR" "$PROJ/data" 2>/dev/null || true
+
+PID_FILE="$PROJ/data/starra-dev.pid"
+LOG="$LOG_DIR/starra-up.log"
+HOST="${STARRA_HOST:-0.0.0.0}"
+PORT="${STARRA_PORT:-3000}"
+URL="http://127.0.0.1:${PORT}"
+
+ollama_up() {
+  curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
+}
+
+deck_up() {
+  curl -sf --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
+}
+
+start_ollama() {
+  if ollama_up; then
+    echo "● Ollama already online"
+    return 0
+  fi
+  if [[ -d "$MODELS" ]]; then
+    export OLLAMA_MODELS="$MODELS"
+    echo "→ Ollama models: $OLLAMA_MODELS"
+  else
+    echo "→ Ollama models: default (Storage not mounted)"
+  fi
+  export OLLAMA_HOST="127.0.0.1:11434"
+  local bin="/usr/local/bin/ollama"
+  [[ -x "$bin" ]] || bin="$(command -v ollama || true)"
+  if [[ -z "$bin" ]]; then
+    echo "◆ Ollama not found. Install from https://ollama.com then retry."
+    return 1
+  fi
+  echo "→ Starting Ollama…"
+  nohup "$bin" serve >>"$LOG" 2>&1 &
+  for _ in $(seq 1 20); do
+    ollama_up && { echo "● Ollama online"; return 0; }
+    sleep 0.5
+  done
+  echo "◆ Ollama did not come up. Check $LOG"
+  return 1
+}
+
+start_deck() {
+  if deck_up; then
+    echo "● Deck already online at $URL"
+    return 0
+  fi
+  if [[ -f "$PID_FILE" ]]; then
+    local old
+    old="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
+      echo "→ Waiting for deck pid $old…"
+      for _ in $(seq 1 40); do
+        deck_up && { echo "● Deck online"; return 0; }
+        sleep 0.5
+      done
+    fi
+    rm -f "$PID_FILE"
+  fi
+  echo "→ Starting STARGATE on ${HOST}:${PORT}…"
+  cd "$PROJ"
+  # -H 0.0.0.0 so iPhone on same Wi‑Fi can reach the Mac
+  nohup npm run dev -- --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
+  echo $! >"$PID_FILE"
+  for _ in $(seq 1 60); do
+    if deck_up; then
+      echo "● Deck online at $URL"
+      echo "  Phone (same Wi‑Fi): http://$(ipconfig getifaddr en0 2>/dev/null || echo YOUR_LAN_IP):${PORT}"
+      return 0
+    fi
+    sleep 0.5
+  done
+  echo "◆ Deck did not come up. Check $LOG"
+  return 1
+}
+
+cmd_up() {
+  start_ollama
+  start_deck
+}
+
+cmd_open() {
+  if ! deck_up; then
+    cmd_up
+  fi
+  open "$URL"
+  echo "Copy. STARRA at $URL — say \"starra\" or press ⌥+Space."
+}
+
+cmd_stop() {
+  if [[ -f "$PID_FILE" ]]; then
+    local pid
+    pid="$(cat "$PID_FILE" 2>/dev/null || true)"
+    if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
+      echo "→ Stopping deck pid $pid…"
+      kill "$pid" 2>/dev/null || true
+      # also kill child next if present
+      pkill -f "next dev.*${PORT}" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+  else
+    pkill -f "next dev.*${PORT}" 2>/dev/null || true
+  fi
+  echo "● Deck stopped (Ollama left running)."
+}
+
+cmd_status() {
+  if ollama_up; then echo "● Ollama"; else echo "○ Ollama"; fi
+  if deck_up; then echo "● Deck $URL"; else echo "○ Deck"; fi
+  local lan
+  lan="$(ipconfig getifaddr en0 2>/dev/null || true)"
+  [[ -n "$lan" ]] && echo "  iPhone: http://${lan}:${PORT}"
+  [[ -f "$LOG" ]] && echo "  log: $LOG"
+}
+
+cmd_install() {
+  local dest="${HOME}/bin"
+  mkdir -p "$dest"
+  ln -sf "$PROJ/scripts/starra" "$dest/starra"
+  chmod +x "$PROJ/scripts/starra"
+
+  local cmd_file="${HOME}/Applications/STARRA.command"
+  mkdir -p "${HOME}/Applications"
+  cat >"$cmd_file" <<EOF
+#!/usr/bin/env bash
+"$PROJ/scripts/starra" open
+EOF
+  chmod +x "$cmd_file"
+
+  echo "● Installed:"
+  echo "  CLI:  $dest/starra"
+  echo "  App:  $cmd_file  (double-click in Finder)"
+  if ! echo ":$PATH:" | grep -q ":$dest:"; then
+    echo ""
+    echo "Add to ~/.zshrc:"
+    echo "  export PATH=\"\$HOME/bin:\$PATH\""
+    echo "Then: source ~/.zshrc"
+  fi
+  echo ""
+  echo "Wake: open the deck, allow mic, say \"starra\" (or ⌥+Space)."
+}
+
+usage() {
+  cat <<EOF
+starra — wake STARGATE
+
+  starra          up + open browser
+  starra up       start Ollama + deck (background)
+  starra open     open HUD (starts if needed)
+  starra stop     stop deck
+  starra status   health
+  starra install  PATH + double-click STARRA.command
+EOF
+}
+
+main() {
+  local cmd="${1:-}"
+  case "$cmd" in
+    ""|open) cmd_open ;;
+    up|start) cmd_up ;;
+    stop|down) cmd_stop ;;
+    status|st) cmd_status ;;
+    install) cmd_install ;;
+    -h|--help|help) usage ;;
+    *)
+      echo "Unknown: $cmd"
+      usage
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"

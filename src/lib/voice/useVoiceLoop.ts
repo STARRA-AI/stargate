@@ -1,11 +1,17 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useStargate } from "@/lib/stargate-context";
 import { COPY } from "@/lib/copy";
+import {
+  getWakeWordEnabled,
+  matchWakeWord,
+  setWakeWordEnabled,
+} from "@/lib/voice/wake-word";
 
 type RecogResultEvent = {
-  results: { 0: { transcript: string } }[];
+  results: { 0: { transcript: string }; isFinal?: boolean }[];
+  resultIndex?: number;
 };
 
 type Recog = {
@@ -18,17 +24,42 @@ type Recog = {
   onerror: ((ev: Event) => void) | null;
   onend: ((ev: Event) => void) | null;
   start: () => void;
+  stop: () => void;
+  abort?: () => void;
 };
 
+function getSR(): (new () => Recog) | null {
+  if (typeof window === "undefined") return null;
+  const w = window as Window & {
+    SpeechRecognition?: new () => Recog;
+    webkitSpeechRecognition?: new () => Recog;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
+}
+
 /**
- * Voice loop: Option/Alt+Space wake; badge tap calls wake().
- * Realtime session when keyed; Web Speech STT + browser TTS otherwise.
- * Barge-in cancels TTS immediately on new speech.
+ * Voice loop: say "starra" (wake word) or ⌥+Space / badge tap.
+ * Realtime session when keyed; Web Speech STT + Piper/Web Speech TTS otherwise.
  */
 export function useVoiceLoop() {
   const { setHudState, setLastReply, pushLog, hudState } = useStargate();
   const speakingRef = useRef(false);
   const abortSpeak = useRef<AbortController | null>(null);
+  const sessionActive = useRef(false);
+  const wakeRecogRef = useRef<Recog | null>(null);
+  const commandRecogRef = useRef<Recog | null>(null);
+  const [wakeWordOn, setWakeWordOn] = useState(true);
+
+  useEffect(() => {
+    setWakeWordOn(getWakeWordEnabled());
+    function onPref(e: Event) {
+      const detail = (e as CustomEvent<{ on: boolean }>).detail;
+      if (typeof detail?.on === "boolean") setWakeWordOn(detail.on);
+      else setWakeWordOn(getWakeWordEnabled());
+    }
+    window.addEventListener("stargate-wake-word", onPref);
+    return () => window.removeEventListener("stargate-wake-word", onPref);
+  }, []);
 
   const stopSpeaking = useCallback(() => {
     abortSpeak.current?.abort();
@@ -63,6 +94,7 @@ export function useVoiceLoop() {
 
   const sendToChat = useCallback(
     async (text: string) => {
+      sessionActive.current = true;
       setHudState("thinking");
       pushLog(`voice: ${text.slice(0, 40)}`);
       try {
@@ -75,6 +107,7 @@ export function useVoiceLoop() {
         });
         if (!res.body) {
           setHudState("error");
+          sessionActive.current = false;
           return;
         }
         const reader = res.body.getReader();
@@ -106,16 +139,30 @@ export function useVoiceLoop() {
       } catch {
         setHudState("error");
         setLastReply(COPY.error);
+      } finally {
+        sessionActive.current = false;
       }
     },
     [pushLog, setHudState, setLastReply, speak],
   );
+
+  const stopWakeListener = useCallback(() => {
+    try {
+      wakeRecogRef.current?.abort?.();
+      wakeRecogRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+    wakeRecogRef.current = null;
+  }, []);
 
   const wake = useCallback(async () => {
     if (speakingRef.current || hudState === "speaking") {
       stopSpeaking();
     }
 
+    stopWakeListener();
+    sessionActive.current = true;
     setHudState("wake");
     pushLog("wake");
 
@@ -123,20 +170,24 @@ export function useVoiceLoop() {
       .then((r) => r.json())
       .catch(() => ({ mode: "stub" }));
 
-    const w = window as Window & {
-      SpeechRecognition?: new () => Recog;
-      webkitSpeechRecognition?: new () => Recog;
-    };
-    const SR = w.SpeechRecognition || w.webkitSpeechRecognition;
-
+    const SR = getSR();
     if (!SR) {
       setHudState("idle");
       setLastReply(COPY.voiceUnavailable);
       pushLog("voice unavailable");
+      sessionActive.current = false;
       return;
     }
 
+    try {
+      commandRecogRef.current?.abort?.();
+      commandRecogRef.current?.stop();
+    } catch {
+      /* ignore */
+    }
+
     const recog = new SR();
+    commandRecogRef.current = recog;
     recog.continuous = false;
     recog.interimResults = false;
     recog.lang = "en-US";
@@ -149,22 +200,93 @@ export function useVoiceLoop() {
       const text = ev.results[0]?.[0]?.transcript ?? "";
       setHudState("transcribing");
       if (text) void sendToChat(text);
+      else sessionActive.current = false;
     };
     recog.onerror = () => {
       setHudState("error");
+      sessionActive.current = false;
       setTimeout(() => setHudState("idle"), 800);
     };
     recog.onend = () => {
-      setHudState("idle");
+      if (!speakingRef.current && hudState !== "thinking" && hudState !== "streaming") {
+        /* leave state machine to sendToChat / speak */
+      }
+      commandRecogRef.current = null;
     };
 
     try {
       recog.start();
     } catch {
       setHudState("idle");
+      sessionActive.current = false;
     }
-  }, [hudState, pushLog, sendToChat, setHudState, setLastReply, stopSpeaking]);
+  }, [
+    hudState,
+    pushLog,
+    sendToChat,
+    setHudState,
+    setLastReply,
+    stopSpeaking,
+    stopWakeListener,
+  ]);
 
+  const startWakeListener = useCallback(() => {
+    if (!getWakeWordEnabled()) return;
+    if (sessionActive.current) return;
+    if (speakingRef.current) return;
+    if (wakeRecogRef.current) return;
+
+    const SR = getSR();
+    if (!SR) return;
+
+    const recog = new SR();
+    wakeRecogRef.current = recog;
+    recog.continuous = true;
+    recog.interimResults = false;
+    recog.lang = "en-US";
+
+    recog.onresult = (ev) => {
+      const idx = ev.resultIndex ?? ev.results.length - 1;
+      const row = ev.results[idx];
+      const text = row?.[0]?.transcript ?? "";
+      if (!text) return;
+      const { woke, command } = matchWakeWord(text);
+      if (!woke) return;
+
+      pushLog("wake word");
+      stopWakeListener();
+
+      if (command) {
+        void sendToChat(command);
+      } else {
+        void wake();
+      }
+    };
+
+    recog.onerror = () => {
+      wakeRecogRef.current = null;
+    };
+
+    recog.onend = () => {
+      wakeRecogRef.current = null;
+      // Restart if still idle + enabled
+      if (
+        getWakeWordEnabled() &&
+        !sessionActive.current &&
+        !speakingRef.current
+      ) {
+        window.setTimeout(() => startWakeListener(), 400);
+      }
+    };
+
+    try {
+      recog.start();
+    } catch {
+      wakeRecogRef.current = null;
+    }
+  }, [pushLog, sendToChat, stopWakeListener, wake]);
+
+  // Hotkey ⌥+Space
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.code === "Space" && e.altKey) {
@@ -176,5 +298,51 @@ export function useVoiceLoop() {
     return () => window.removeEventListener("keydown", onKey);
   }, [wake]);
 
-  return { wake, stopSpeaking };
+  // Wake-word loop when idle
+  useEffect(() => {
+    const busy =
+      hudState === "wake" ||
+      hudState === "listening" ||
+      hudState === "transcribing" ||
+      hudState === "thinking" ||
+      hudState === "streaming" ||
+      hudState === "speaking" ||
+      hudState === "tool";
+
+    if (!wakeWordOn || busy) {
+      stopWakeListener();
+      return;
+    }
+
+    const t = window.setTimeout(() => startWakeListener(), 500);
+    return () => {
+      window.clearTimeout(t);
+    };
+  }, [hudState, wakeWordOn, startWakeListener, stopWakeListener]);
+
+  // Cleanup on unmount
+  useEffect(() => {
+    return () => {
+      stopWakeListener();
+      try {
+        commandRecogRef.current?.abort?.();
+        commandRecogRef.current?.stop();
+      } catch {
+        /* ignore */
+      }
+    };
+  }, [stopWakeListener]);
+
+  const setWakeWord = useCallback(
+    (on: boolean) => {
+      setWakeWordEnabled(on);
+      setWakeWordOn(on);
+      if (!on) stopWakeListener();
+      else if (hudState === "idle") startWakeListener();
+      pushLog(on ? "wake word on" : "wake word off");
+    },
+    [hudState, pushLog, startWakeListener, stopWakeListener],
+  );
+
+  return { wake, stopSpeaking, wakeWordOn, setWakeWord };
 }
