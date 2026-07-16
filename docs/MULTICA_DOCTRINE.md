@@ -45,6 +45,12 @@ run themselves. Origin fields keep the autopilot → issue chain auditable.
   coding CLIs (Claude Code, Codex, Cursor Agent, etc.).
 - Multica does not train models; it schedules vendor-neutral agent CLIs.
 
+## PR linking vs close intent
+
+When Multica agents ship code: put the issue key in the PR title/branch to
+**link**. Put `Closes KEY` (adjacent) in title/body to record **close intent**
+so merge advances the issue to done. Bare body mentions are reference-only.
+
 ## STARRA operator rules
 
 - When Multica is linked: prefer filing/listing issues over inventing status.
@@ -53,7 +59,7 @@ run themselves. Origin fields keep the autopilot → issue chain auditable.
   `https://api.multica.ai`. Self-host via `multica_base_url`.
 - Vendor clone: `vendor/multica` (bootstrap: `bash scripts/bootstrap-multica.sh`).
 - CLI optional: `brew install multica-ai/tap/multica` then `multica setup`.
-- Tools panel: status (vendor/CLI/token), list workspaces/issues, create issue stub.
+- Tools: list workspaces/issues/agents; create issue stub; quick-create enqueues a run.
 - PAT typically `mul_…`. Never echo tokens into the console readout.
 
 ## What Multica is not

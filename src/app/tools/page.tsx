@@ -105,9 +105,10 @@ export default function ToolsPage() {
 
   async function loadMulticaBoard() {
     setStatus("EXECUTING — MULTICA LIST");
-    const [wsRes, isRes] = await Promise.all([
+    const [wsRes, isRes, agRes] = await Promise.all([
       fetch("/api/tools/multica?action=workspaces").then((x) => x.json()),
       fetch("/api/tools/multica?action=issues").then((x) => x.json()),
+      fetch("/api/tools/multica?action=agents").then((x) => x.json()),
     ]);
     if (wsRes.error || isRes.error) {
       setStatus(`LINK DEGRADED · ${wsRes.error ?? isRes.error}`);
@@ -115,8 +116,9 @@ export default function ToolsPage() {
     }
     setWorkspaces(wsRes.workspaces ?? []);
     setIssues(isRes.issues ?? []);
+    const agentCount = Array.isArray(agRes.agents) ? agRes.agents.length : 0;
     setStatus(
-      `MULTICA · ${(wsRes.workspaces ?? []).length} workspaces · ${(isRes.issues ?? []).length} issues`,
+      `MULTICA · ${(wsRes.workspaces ?? []).length} workspaces · ${(isRes.issues ?? []).length} issues · ${agentCount} agents`,
     );
   }
 
@@ -131,6 +133,22 @@ export default function ToolsPage() {
     setStatus(
       res.ok
         ? `CREATED · ${data.identifier ?? data.id ?? "issue"}`
+        : `LINK DEGRADED · ${data.error ?? "retry"}`,
+    );
+    if (res.ok) await loadMulticaBoard();
+  }
+
+  async function quickCreateMultica() {
+    setStatus("EXECUTING — MULTICA QUICK");
+    const res = await fetch("/api/tools/multica", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ mode: "quick", prompt: issueTitle }),
+    });
+    const data = await res.json();
+    setStatus(
+      res.ok
+        ? `QUEUED · ${data.task_id ?? "run"}`
         : `LINK DEGRADED · ${data.error ?? "retry"}`,
     );
     if (res.ok) await loadMulticaBoard();
@@ -273,13 +291,22 @@ export default function ToolsPage() {
               className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
             />
           </label>
-          <button
-            type="button"
-            onClick={() => void createMulticaIssue()}
-            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-          >
-            Create issue stub
-          </button>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void createMulticaIssue()}
+              className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+            >
+              Create issue stub
+            </button>
+            <button
+              type="button"
+              onClick={() => void quickCreateMultica()}
+              className="focus-magenta border border-[var(--magenta)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+            >
+              Quick-create + enqueue
+            </button>
+          </div>
           <ul className="max-h-24 space-y-1 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
             {workspaces.slice(0, 5).map((w) => (
               <li key={w.id}>
