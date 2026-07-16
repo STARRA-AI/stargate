@@ -44,6 +44,7 @@ input::placeholder { color: #7a63a8; }
 @keyframes glowPulse { 0%, 100% { filter: drop-shadow(0 0 6px var(--accent-glow)); transform: scale(1); } 50% { filter: drop-shadow(0 0 18px var(--accent-glow)); transform: scale(1.04); } }
 /* Badge breath — transform only (2013 MBP budget). Cine webm carries the glow. */
 @keyframes badgeBreath { 0%, 100% { transform: scale(1); opacity: 0.92; } 50% { transform: scale(1.03); opacity: 1; } }
+@keyframes badgePulseDim { 0%, 100% { opacity: 0.78; } 50% { opacity: 1; } }
 @keyframes drift { from { background-position: 0 0; } to { background-position: -600px -600px; } }
 @keyframes sweep { 0% { top: -10%; } 100% { top: 110%; } }
 @keyframes wave { 0%, 100% { transform: scaleY(0.2); } 50% { transform: scaleY(1); } }
@@ -98,13 +99,13 @@ input::placeholder { color: #7a63a8; }
 .badge-wrap { width: 50px; height: 50px; flex-shrink: 0; }
 .badge {
   width: 50px; height: 50px; object-fit: contain; mix-blend-mode: screen;
-  animation: badgeBreath 4.2s ease-in-out infinite;
+  animation: badgeBreath 3s ease-in-out infinite;
 }
 #stage[data-hud="listening"] .badge,
-#stage[data-hud="wake"] .badge { animation-duration: 3.2s; }
+#stage[data-hud="wake"] .badge { animation-duration: 0.6s; }
 #stage[data-hud="thinking"] .badge,
 #stage[data-hud="transcribing"] .badge,
-#stage[data-hud="tool"] .badge { animation-duration: 2.6s; }
+#stage[data-hud="tool"] .badge { animation-duration: 2s; }
 #stage[data-hud="speaking"] .badge,
 #stage[data-hud="streaming"] .badge { animation-duration: 0.9s; }
 #stage[data-hud="error"] .badge { animation-duration: 3.2s; }
@@ -281,12 +282,12 @@ input::placeholder { color: #7a63a8; }
 .ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; }
 .ring-outer {
   width: 420px; height: 420px; margin-left: -210px; margin-top: -210px;
-  animation: spinCW 30s linear infinite; opacity: 0.95;
+  animation: spinCW 40s linear infinite; opacity: 0.95;
   filter: drop-shadow(0 0 14px rgba(176,77,252,0.55));
 }
 .ring-inner {
   width: 260px; height: 260px; margin-left: -130px; margin-top: -130px;
-  animation: spinCCW 22s linear infinite; opacity: 0.72;
+  animation: spinCCW 18s linear infinite; opacity: 0.72;
   filter: drop-shadow(0 0 10px rgba(211,139,255,0.4));
 }
 .ring-pupil {
@@ -359,7 +360,7 @@ input::placeholder { color: #7a63a8; }
 .wave-bar.speaking { background: var(--accent-glow); }
 
 .chat-log { flex: 1; overflow-y: auto; padding: 10px 14px; display: flex; flex-direction: column; gap: 7px; }
-.chat-line { font-size: 14px; line-height: 1.55; animation: feedIn 0.25s ease; }
+.chat-line { font-size: 14px; line-height: 1.55; animation: feedIn 0.22s ease-out; }
 .chat-who { font-family: var(--mono); font-size: 11px; letter-spacing: 1px; }
 .chat-who.you { color: var(--text); }
 .chat-who.starra { color: var(--accent-glow); }
@@ -404,7 +405,7 @@ input::placeholder { color: #7a63a8; }
 
 /* ── Agent Ops / feed ── */
 .feed-list { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
-.feed-line { display: flex; gap: 8px; align-items: baseline; font-family: var(--mono); font-size: 11px; line-height: 1.5; animation: feedIn 0.3s ease; }
+.feed-line { display: flex; gap: 8px; align-items: baseline; font-family: var(--mono); font-size: 11px; line-height: 1.5; animation: feedIn 0.22s ease-out; }
 .feed-time { color: var(--text-faint); flex-shrink: 0; }
 .feed-tag { flex-shrink: 0; }
 .feed-text { color: #cbb8ec; }
@@ -444,7 +445,11 @@ input::placeholder { color: #7a63a8; }
 .mobile-shell {
   position: relative;
   min-height: 100dvh;
-  padding: 12px 12px 20px;
+  padding:
+    max(12px, env(safe-area-inset-top))
+    max(12px, env(safe-area-inset-right))
+    max(20px, env(safe-area-inset-bottom))
+    max(12px, env(safe-area-inset-left));
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -493,6 +498,13 @@ input::placeholder { color: #7a63a8; }
 .mobile-badge-wrap {
   width: 40px;
   height: 40px;
+}
+.mobile-topbar-badge {
+  width: 40px;
+  height: 40px;
+  object-fit: contain;
+  mix-blend-mode: screen;
+  opacity: 0.88;
 }
 .mobile-topbar-copy {
   display: flex;
@@ -583,8 +595,10 @@ input::placeholder { color: #7a63a8; }
 .mobile-hero-badge {
   position: relative;
   z-index: 1;
-  width: 104px;
-  height: 104px;
+  width: 112px;
+  height: 112px;
+  min-width: 44px;
+  min-height: 44px;
   border: 0;
   background: transparent;
   padding: 0;
@@ -672,7 +686,11 @@ input::placeholder { color: #7a63a8; }
   border-radius: 999px;
   background: rgba(24,10,42,0.72);
   color: var(--text-dim);
-  padding: 9px 6px;
+  min-height: 44px;
+  padding: 10px 6px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
   font-family: var(--display);
   font-size: 10px;
   letter-spacing: 0.22em;
@@ -781,6 +799,7 @@ input::placeholder { color: #7a63a8; }
   align-items: start;
   padding-bottom: 8px;
   border-bottom: 1px solid rgba(168,85,247,0.08);
+  animation: feedIn 0.22s ease-out;
 }
 .mobile-feed-line p {
   grid-column: 2 / span 2;
@@ -800,6 +819,13 @@ input::placeholder { color: #7a63a8; }
 .mobile-console .chat-log {
   min-height: 120px;
   max-height: 180px;
+}
+.mobile-console .chat-input-row {
+  min-height: 44px;
+}
+.mobile-console .mic-btn,
+.mobile-console .send-btn {
+  min-height: 44px;
 }
 
 /* ── ECO / low-power mode ── */
@@ -832,18 +858,35 @@ body.low-power .panel-tag.pulse { animation: none; }
 body.low-power .panel,
 body.low-power .console { backdrop-filter: none; }
 body.low-power .chat-line,
-body.low-power .feed-line { animation: none; }
+body.low-power .feed-line,
+body.low-power .mobile-feed-line { animation: none; }
+body.low-power .mobile-reactor-rings,
+body.low-power .mobile-reactor-rings::before { animation: none; }
+body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0 8px rgba(168,85,247,0.45)); }
 
 @media (prefers-reduced-motion: reduce) {
-  .badge { animation: none; }
-  .ring-outer { animation: spinCW 60s linear infinite; }
-  .ring-inner { animation: spinCCW 44s linear infinite; }
-  .badge-cine, .wordmark-cine, .eye-cine, .boot-cine { opacity: 0 !important; }
-  .ambient-dots, .ambient-sweep { animation: none; }
+  .badge,
+  .boot-badge,
+  .mobile-hero-badge img {
+    animation: badgePulseDim 2.4s ease-in-out infinite !important;
+    transform: none;
+  }
+  .ring-outer,
+  .ring-inner,
+  .ring-pupil,
+  .reactor-core,
+  .ambient-dots,
+  .ambient-sweep,
   .mobile-reactor-rings,
-  .mobile-reactor-rings::before,
-  .mobile-hero-badge img { animation: none !important; }
-  .mobile-panel { animation: none; }
+  .mobile-reactor-rings::before {
+    animation: none !important;
+  }
+  .badge-cine, .wordmark-cine, .eye-cine, .boot-cine { opacity: 0 !important; }
+  .mobile-panel,
+  .chat-line,
+  .feed-line,
+  .mobile-feed-line,
+  .panel-tag.pulse { animation: none; }
   .chip:active,
   .mic-btn:active,
   .send-btn:active,
