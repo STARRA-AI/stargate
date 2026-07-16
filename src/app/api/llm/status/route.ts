@@ -1,3 +1,4 @@
+import { brainStatus, soulStatus } from "@/lib/brain";
 import {
   ollamaAvailable,
   ollamaConfig,
@@ -24,5 +25,7 @@ export async function GET() {
       process.env.OLLAMA_PRIORITY === "1"
         ? "ollama-first"
         : "anthropic-if-keyed-else-ollama",
+    soul: soulStatus(),
+    brain: brainStatus(),
   });
 }

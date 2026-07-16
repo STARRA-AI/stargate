@@ -20,18 +20,24 @@ function LlmStatus() {
           };
           anthropic?: boolean;
           priority?: string;
+          soul?: { loaded?: boolean; truncated?: boolean };
         }) => {
           const o = d.ollama;
+          const soulBit = d.soul?.loaded
+            ? d.soul.truncated
+              ? " · soul loaded (trimmed)"
+              : " · soul loaded"
+            : " · soul offline";
           if (!o?.up) {
-            setStatus("○ OLLAMA OFFLINE — run: ollama serve");
+            setStatus(`○ OLLAMA OFFLINE — run: ollama serve${soulBit}`);
             return;
           }
           if (!o.hasModel) {
-            setStatus(`○ MODEL MISSING — ollama pull ${o.model}`);
+            setStatus(`○ MODEL MISSING — ollama pull ${o.model}${soulBit}`);
             return;
           }
           setStatus(
-            `● ${o.model} · ${o.reasoning ?? "fable scaffold"} · ${d.priority ?? "auto"}${d.anthropic ? " · anthropic keyed" : ""}`,
+            `● ${o.model} · ${o.reasoning ?? "fable scaffold"} · ${d.priority ?? "auto"}${d.anthropic ? " · anthropic keyed" : ""}${soulBit}`,
           );
         },
       )

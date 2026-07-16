@@ -2,7 +2,7 @@
 
 Personal ops command deck for STARRA LLC. JARVIS-style PWA — voice-first, dark-only, operator register.
 
-Canon: `STARRA_STARGATE_UNIFIED.md`, `STARGATE_DESIGN_SPEC.md`, `STARRA_BRAIN.md`.
+Canon: `STARRA_STARGATE_UNIFIED.md`, `STARGATE_DESIGN_SPEC.md`, `STARRA_BRAIN.md`, `STARRA_SOUL.md`.
 
 ## Run
 
@@ -24,7 +24,7 @@ ollama pull deepseek-r1:1.5b   # already pulled if you followed setup
 npm run dev
 ```
 
-STARGATE injects: Fable-inspired reasoning scaffold + `STARRA_BRAIN.md` into local Ollama (`qwen2.5:1.5b` by default; optional `deepseek-r1:1.5b`). Priority over Anthropic when `OLLAMA_PRIORITY=1`. See `docs/tooling.md` §4.
+STARGATE injects: Fable-inspired reasoning scaffold + `STARRA_SOUL.md` (spiritual OS) + `STARRA_BRAIN.md` into local Ollama (`qwen2.5:1.5b` by default; optional `deepseek-r1:1.5b`). Priority over Anthropic when `OLLAMA_PRIORITY=1`. See `docs/tooling.md` §4.
 
 ## Screens
 

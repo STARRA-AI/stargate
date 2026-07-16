@@ -55,7 +55,7 @@ Reference library of extracted system prompts.
 | Piece | Detail |
 |-------|--------|
 | Reasoning scaffold | `src/lib/fable-reasoning.ts` (epistemology / verify-then-assert from Fable-5 patterns — **not** Claude impersonation) |
-| STARRA canon | `STARRA_BRAIN.md` via `buildSystemPrompt()` |
+| STARRA canon | `STARRA_SOUL.md` (spiritual OS, ~10K budget) + `STARRA_BRAIN.md` (~8K) via `buildSystemPrompt()` |
 | Free model | **`qwen2.5:1.5b`** default (instruction-tuned, Anthropic-API compatible, fits 8GB). Optional: `deepseek-r1:1.5b` for heavier chain-of-thought |
 | Wire | `src/lib/llm/ollama.ts` → `/api/chat` (native `/api/chat`, then Anthropic/OpenAI compat) |
 | Status | `GET /api/llm/status` · Settings deck readout |
