@@ -1,0 +1,26 @@
+# Minimal CodeRabbit config for STARGATE (Next.js / TypeScript)
+language: en-US
+reviews:
+  profile: chill
+  request_changes_workflow: false
+  high_level_summary: true
+  path_filters:
+    - "!vendor/**"
+    - "!.tools/**"
+    - "!data/**"
+    - "!**/*.webm"
+    - "!**/*.png"
+  path_instructions:
+    - path: "src/**/*.{ts,tsx}"
+      instructions: |
+        Focus on TypeScript correctness, Next.js App Router patterns, and regressions
+        in chat/stream/brain paths. Do not invent brand copy or UI chrome changes.
+        Flag accidental edits to Eye/Bridge/deck.css unless the PR describes them.
+    - path: "src/app/api/**/*.ts"
+      instructions: |
+        Prefer clear error handling, no leaked secrets, and stable streaming abort behavior.
+    - path: "docs/**/*.md"
+      instructions: |
+        Keep docs accurate to conference mandates; flag invented business facts.
+chat:
+  auto_reply: true
