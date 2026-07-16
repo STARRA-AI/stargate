@@ -48,6 +48,22 @@ const TOOLS: Anthropic.Tool[] = [
     },
   },
   {
+    name: "cortex_plan",
+    description:
+      "Create a Cortex-style (perceive/reason/act/reflect) planning outline. Text-only: does not run Cortex tools or scrape web.",
+    input_schema: {
+      type: "object",
+      properties: {
+        goal: {
+          type: "string",
+          description: "Operator goal / task to plan for",
+        },
+      },
+      required: ["goal"],
+      additionalProperties: false,
+    },
+  },
+  {
     name: "run_shell",
     description:
       "Run a shell command on the operator machine. Destructive commands are held for explicit confirmation.",
@@ -110,6 +126,35 @@ async function runTool(
     return redact(
       `Queued OpenMontage job ${job.id}. Brief on disk under data/openmontage-briefs/.`,
     );
+  }
+
+  if (name === "cortex_plan") {
+    const goal = String(input.goal ?? "").trim();
+    if (!goal) return "Copy. Missing goal.";
+
+    // STARRA gate: planning-only (no scraping, no external side effects).
+    // Mirrors Book 1's Tier 4 self-refine loop shape: critique/tuning only,
+    // with operator approval for any effectful actions.
+    const plan = [
+      "Copy. Cortex plan (planning-only; no cortex tools run).",
+      "",
+      "Perceive (state):",
+      `- Goal: ${goal}`,
+      "- Gather grounded context: Tier 1 typed context + Vault docs + relevant working/summary/archival memory.",
+      "",
+      "Reason (strategy):",
+      "- Pick a strategy: research/verify/synthesize, then define success criteria and constraints.",
+      "- Keep operator approval boundaries: no autonomous external execution; request explicit approval for any effectful step.",
+      "",
+      "Act (requests only):",
+      "- Produce a concrete next action list for the operator.",
+      "- If an action requires execution, ask for approval on the Tools/Proposals deck (never “self-approve” via tool text).",
+      "",
+      "Reflect (learning artifacts):",
+      "- After outcomes (once approved), write lessons back as prompt tuning only (no source rewriting without human diff review).",
+    ].join("\n");
+
+    return redact(plan);
   }
 
   if (name === "run_shell") {
