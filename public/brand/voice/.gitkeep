@@ -1,0 +1,2 @@
+# Piper voice models live here after `npm run voice:download`.
+# Cori en_GB high is STARRA's primary voice; Jenny kept for rollback.

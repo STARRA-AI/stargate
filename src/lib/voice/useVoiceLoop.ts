@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useStargate } from "@/lib/stargate-context";
 import { COPY } from "@/lib/copy";
-import { applyStarraVoice, voicesReady } from "@/lib/voice/voice-select";
+import { speakStarra, stopAllSpeech } from "@/lib/voice/speak";
 
 type RecogResultEvent = {
   results: { 0: { transcript: string } }[];
@@ -33,31 +33,28 @@ export function useVoiceLoop() {
 
   const stopSpeaking = useCallback(() => {
     abortSpeak.current?.abort();
-    if (typeof window !== "undefined" && window.speechSynthesis) {
-      window.speechSynthesis.cancel();
-    }
+    stopAllSpeech();
     speakingRef.current = false;
   }, []);
 
   const speak = useCallback(
     (text: string) => {
-      if (typeof window === "undefined" || !window.speechSynthesis) return;
+      if (typeof window === "undefined") return;
       stopSpeaking();
       const ac = new AbortController();
       abortSpeak.current = ac;
       speakingRef.current = true;
       setHudState("speaking");
-      void voicesReady().then(() => {
-        if (ac.signal.aborted) return;
-        const u = new SpeechSynthesisUtterance(text);
-        applyStarraVoice(u);
-        u.onend = () => {
-          if (!ac.signal.aborted) {
+      void speakStarra(text, ac.signal).then((engine) => {
+        if (ac.signal.aborted || engine === "none") {
+          if (!ac.signal.aborted && engine === "none") {
             speakingRef.current = false;
             setHudState("idle");
           }
-        };
-        window.speechSynthesis.speak(u);
+          return;
+        }
+        speakingRef.current = false;
+        setHudState("idle");
       });
     },
     [setHudState, stopSpeaking],

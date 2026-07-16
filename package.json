@@ -14,12 +14,16 @@
     "tools:distill": "node scripts/distill-prompt-patterns.mjs",
     "tools:montage-status": "node -e \"const fs=require('fs');const p='vendor/OpenMontage/README.md';console.log(fs.existsSync(p)?'OpenMontage: present':'OpenMontage: missing — npm run tools:bootstrap')\"",
     "starra:up": "bash scripts/starra-up.sh",
+    "voice:download": "python3 scripts/download_voice.py",
+    "setup:mac": "bash scripts/setup_mac.sh",
     "test:v2": "npx --yes tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
+    "@mintplex-labs/piper-tts-web": "^1.0.4",
     "next": "15.5.20",
+    "onnxruntime-web": "^1.27.0",
     "pdf-parse": "^2.4.5",
     "react": "19.1.0",
     "react-dom": "19.1.0",

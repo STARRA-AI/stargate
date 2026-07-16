@@ -65,5 +65,9 @@ next-env.d.ts
 /data/
 /vendor/
 
+# Piper voice models (download with npm run voice:download)
+/public/brand/voice/*.onnx
+/public/brand/voice/*.onnx.json
+
 # Local tooling
 .tools/

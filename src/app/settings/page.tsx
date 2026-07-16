@@ -55,6 +55,7 @@ function VoicePicker() {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selected, setSelected] = useState<string>("");
   const [autoName, setAutoName] = useState<string>("");
+  const [piperReady, setPiperReady] = useState<boolean | null>(null);
 
   useEffect(() => {
     let mounted = true;
@@ -68,6 +69,11 @@ function VoicePicker() {
         });
       },
     );
+    void import("@/lib/voice/piper-speak").then(({ piperModelAvailable }) => {
+      void piperModelAvailable().then((ok) => {
+        if (mounted) setPiperReady(ok);
+      });
+    });
     return () => {
       mounted = false;
     };
@@ -80,13 +86,9 @@ function VoicePicker() {
   }
 
   async function test() {
-    const { applyStarraVoice } = await import("@/lib/voice/voice-select");
-    window.speechSynthesis?.cancel();
-    const u = new SpeechSynthesisUtterance(
-      "Copy. STARGATE online. Standing by, operator.",
-    );
-    applyStarraVoice(u);
-    window.speechSynthesis?.speak(u);
+    const { speakStarra, stopAllSpeech } = await import("@/lib/voice/speak");
+    stopAllSpeech();
+    await speakStarra("Copy. STARGATE online. Standing by, operator.");
   }
 
   return (
@@ -95,8 +97,15 @@ function VoicePicker() {
         STARRA voice
       </h2>
       <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        AUTO prefers a British English female voice, then a Japanese female
-        voice, then any female English voice. Current auto pick: {autoName}.
+        {piperReady === null
+          ? "Checking Piper Cori model…"
+          : piperReady
+            ? "● Piper Cori en_GB high — primary voice (~1s/sentence on this machine). Web Speech below is fallback only."
+            : "○ Piper offline — run: npm run voice:download. Web Speech fallback active."}
+      </p>
+      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+        Web Speech AUTO prefers British English female, then Japanese female.
+        Current auto pick: {autoName}.
       </p>
       <select
         value={selected}
