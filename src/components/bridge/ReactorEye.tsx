@@ -1,20 +1,22 @@
 "use client";
 
+import { useCameraGaze } from "@/lib/vision/useCameraGaze";
 import { useEffect, useRef } from "react";
 
 /**
- * STARRA's living eye — the reactor core tracks the operator's cursor
- * like an iris, with smooth easing, bounded travel inside the inner ring,
- * blinks, idle saccades, and a subtle parallax on the HUD rings.
+ * STARRA's living eye — swirling HUD rings + iris that tracks the
+ * operator's cursor and (when armed) their face/motion via webcam.
+ * Think J.A.R.V.I.S.: she watches, she blinks, she is alive.
  *
- * The deck stage is a fixed 1680x1000 canvas scaled via transform, so
+ * The deck stage is a fixed 1680×1000 canvas scaled via transform, so
  * cursor direction is computed in client space from the eye's rendered
  * center, then converted to stage pixels for the bounded offset.
  */
 
 const MAX_TRAVEL = 62; // stage px — stays inside the 250px inner ring
-const FOLLOW_GAIN = 0.16; // fraction of cursor distance the iris moves
-const LERP = 0.1; // easing toward gaze target per frame
+const FOLLOW_GAIN = 0.16;
+const CAMERA_GAIN = 48; // stage px at full |gaze| = 1
+const LERP = 0.12;
 const IDLE_AFTER_MS = 4000;
 const BLINK_MS = 150;
 
@@ -33,6 +35,8 @@ export function ReactorEye({
   const eyeRef = useRef<HTMLDivElement>(null);
   const ringOuterRef = useRef<HTMLDivElement>(null);
   const ringInnerRef = useRef<HTMLDivElement>(null);
+  const { active: camActive, error: camError, gazeRef: camGaze, toggle: toggleCam } =
+    useCameraGaze();
 
   useEffect(() => {
     const eyeEl = eyeRef.current;
@@ -40,7 +44,7 @@ export function ReactorEye({
     if (!eyeEl || !centerEl) return;
 
     const gaze: Vec = { x: 0, y: 0 };
-    const target: Vec = { x: 0, y: 0 };
+    const cursorTarget: Vec = { x: 0, y: 0 };
     let lastMouseAt = 0;
     let cursorInWindow = false;
     let nextSaccadeAt = performance.now() + 2500;
@@ -64,36 +68,51 @@ export function ReactorEye({
       const dist = Math.hypot(dx, dy);
       if (dist < 1) return;
       const travel = Math.min(dist * FOLLOW_GAIN, MAX_TRAVEL);
-      target.x = (dx / dist) * travel;
-      target.y = (dy / dist) * travel;
+      cursorTarget.x = (dx / dist) * travel;
+      cursorTarget.y = (dy / dist) * travel;
     };
 
     const onMouseLeave = () => {
       cursorInWindow = false;
-      target.x = 0;
-      target.y = 0;
+      cursorTarget.x = 0;
+      cursorTarget.y = 0;
     };
 
     const frame = (now: number) => {
-      // Idle life: gentle drift + occasional saccade when cursor is quiet
-      const idle = !cursorInWindow || now - lastMouseAt > IDLE_AFTER_MS;
-      if (idle) {
+      const target: Vec = { x: 0, y: 0 };
+
+      // Camera gaze takes priority when armed and seeing motion/face
+      const cam = camGaze.current;
+      const camMag = Math.hypot(cam.x, cam.y);
+      const useCam = camMag > 0.08;
+
+      if (useCam) {
+        target.x = cam.x * CAMERA_GAIN;
+        target.y = cam.y * CAMERA_GAIN;
+        const mag = Math.hypot(target.x, target.y);
+        if (mag > MAX_TRAVEL) {
+          target.x = (target.x / mag) * MAX_TRAVEL;
+          target.y = (target.y / mag) * MAX_TRAVEL;
+        }
+      } else if (cursorInWindow && now - lastMouseAt <= IDLE_AFTER_MS) {
+        target.x = cursorTarget.x;
+        target.y = cursorTarget.y;
+      } else {
+        // Idle life: gentle drift + occasional saccade
         if (now >= nextSaccadeAt) {
           const angle = Math.random() * Math.PI * 2;
           const radius = Math.random() * MAX_TRAVEL * 0.45;
-          target.x = Math.cos(angle) * radius;
-          target.y = Math.sin(angle) * radius * 0.7;
+          cursorTarget.x = Math.cos(angle) * radius;
+          cursorTarget.y = Math.sin(angle) * radius * 0.7;
           nextSaccadeAt = now + 1800 + Math.random() * 3200;
         }
-        // slow breathing wander layered on top
-        target.x += Math.sin(now / 2300) * 0.06;
-        target.y += Math.cos(now / 2900) * 0.05;
+        target.x = cursorTarget.x + Math.sin(now / 2300) * 0.06;
+        target.y = cursorTarget.y + Math.cos(now / 2900) * 0.05;
       }
 
       gaze.x += (target.x - gaze.x) * LERP;
       gaze.y += (target.y - gaze.y) * LERP;
 
-      // Blink: quick scale-y squash, occasionally a double blink
       let blinkScale = 1;
       if (blinkStartedAt >= 0) {
         const t = (now - blinkStartedAt) / BLINK_MS;
@@ -101,11 +120,8 @@ export function ReactorEye({
           blinkStartedAt = -1;
           nextBlinkAt =
             now +
-            (Math.random() < 0.18
-              ? 260 // double blink
-              : 2800 + Math.random() * 3800);
+            (Math.random() < 0.18 ? 260 : 2800 + Math.random() * 3800);
         } else {
-          // 1 → 0.08 → 1 triangle
           blinkScale = t < 0.5 ? 1 - t * 2 * 0.92 : 0.08 + (t - 0.5) * 2 * 0.92;
         }
       } else if (now >= nextBlinkAt) {
@@ -114,10 +130,10 @@ export function ReactorEye({
 
       eyeEl.style.transform = `translate(${gaze.x}px, ${gaze.y}px) scaleY(${blinkScale})`;
       if (ringInnerRef.current) {
-        ringInnerRef.current.style.transform = `translate(${gaze.x * 0.18}px, ${gaze.y * 0.18}px)`;
+        ringInnerRef.current.style.transform = `translate(${gaze.x * 0.22}px, ${gaze.y * 0.22}px)`;
       }
       if (ringOuterRef.current) {
-        ringOuterRef.current.style.transform = `translate(${gaze.x * 0.08}px, ${gaze.y * 0.08}px)`;
+        ringOuterRef.current.style.transform = `translate(${gaze.x * 0.1}px, ${gaze.y * 0.1}px)`;
       }
 
       raf = requestAnimationFrame(frame);
@@ -134,7 +150,7 @@ export function ReactorEye({
       document.documentElement.removeEventListener("mouseleave", onMouseLeave);
       window.removeEventListener("blur", onMouseLeave);
     };
-  }, []);
+  }, [camGaze]);
 
   return (
     <div className="reactor-stage">
@@ -160,6 +176,23 @@ export function ReactorEye({
           <span id="core-status">{label}</span>
           <span className="reactor-cursor" />
         </div>
+        <button
+          type="button"
+          className={`eye-cam-btn${camActive ? " on" : ""}`}
+          title={
+            camActive
+              ? "Camera tracking ON — STARRA is watching"
+              : "Arm camera — STARRA tracks your face like a real eye"
+          }
+          onClick={toggleCam}
+        >
+          {camActive ? "EYE ON" : "EYE CAM"}
+        </button>
+        {camError ? (
+          <span className="eye-cam-err" title={camError}>
+            CAM DENIED
+          </span>
+        ) : null}
       </div>
     </div>
   );

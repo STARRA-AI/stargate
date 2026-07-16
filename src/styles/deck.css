@@ -170,18 +170,32 @@ input::placeholder { color: #7a63a8; }
 .ring-parallax { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
 .eye { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
 .eye .reactor-core { border: none; cursor: pointer; padding: 0; }
-.ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; -webkit-mask-image: radial-gradient(circle, black 58%, transparent 70%); mask-image: radial-gradient(circle, black 58%, transparent 70%); }
-.ring-outer { width: 400px; height: 400px; transform: translate(-50%, -50%); animation: spinCW 26s linear infinite; opacity: 0.9; }
-.ring-inner { width: 250px; height: 250px; transform: translate(-50%, -50%); animation: spinCCW 15s linear infinite; opacity: 0.65; }
+.ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; }
+.ring-outer { width: 420px; height: 420px; transform: translate(-50%, -50%); animation: spinCW 18s linear infinite; opacity: 0.95; filter: drop-shadow(0 0 14px rgba(176,77,252,0.55)); }
+.ring-inner { width: 270px; height: 270px; transform: translate(-50%, -50%); animation: spinCCW 11s linear infinite; opacity: 0.72; filter: drop-shadow(0 0 10px rgba(211,139,255,0.4)); }
 .reactor-core {
-  position: absolute; top: 0; left: 0; width: 46px; height: 46px; border-radius: 50%;
-  background: radial-gradient(circle, #fff 0%, var(--accent-glow) 40%, transparent 70%);
+  position: absolute; top: 0; left: 0; width: 52px; height: 52px; border-radius: 50%;
+  background: radial-gradient(circle, #fff 0%, var(--accent-glow) 38%, transparent 72%);
   transform: translate(-50%, -50%);
   animation: corePulse 2.2s ease-in-out infinite;
+  box-shadow: 0 0 28px rgba(211,139,255,0.55);
 }
 .reactor-core.speaking { animation-duration: 0.7s; }
+.eye-cam-btn {
+  position: absolute; top: 248px; left: 0; transform: translateX(-50%);
+  margin-top: 4px; padding: 4px 10px; border-radius: 4px; cursor: pointer;
+  background: rgba(176,77,252,0.12); border: 1px solid var(--border); color: var(--text-faint);
+  font-family: var(--display); font-size: 10px; font-weight: 700; letter-spacing: 2px;
+  white-space: nowrap; z-index: 4;
+}
+.eye-cam-btn:hover { color: var(--text); }
+.eye-cam-btn.on { background: rgba(110,231,160,0.14); border-color: rgba(110,231,160,0.45); color: var(--good); }
+.eye-cam-err {
+  position: absolute; top: 276px; left: 0; transform: translateX(-50%);
+  font-family: var(--mono); font-size: 10px; color: var(--bad); letter-spacing: 1px; white-space: nowrap;
+}
 .reactor-status {
-  position: absolute; top: 220px; left: 0; transform: translateX(-50%);
+  position: absolute; top: 300px; left: 0; transform: translateX(-50%);
   display: flex; align-items: center; gap: 8px; white-space: nowrap;
 }
 .reactor-status span:first-child { font-family: var(--mono); font-size: 12px; letter-spacing: 3px; color: var(--accent-glow); }
