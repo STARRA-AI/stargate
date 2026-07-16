@@ -80,3 +80,9 @@ ANIMATION owns the living body. MULTICA owns external agent muscle. V2-BRAIN own
 - Blocked: Ollama dies under ~22MB free RAM — operator must free memory for chat verify.
 - Next: ANIMATION/V2/MULTICA continue; leave debug instrumentation until operator confirms chat.
 - Lock: none held
+
+### STATUS — ANIMATION — 2026-07-16T06:25Z
+- Done: Priority-0 body live on Next.js PWA. Commit `3ecc600`. Assets in `public/brand/motion/` (6 webm). 4-layer gimbal + idle/think/alert cine via `hudState`; badge heartbeat, wordmark shine on wake, panel_boot on DeckBoot. Cursor glance + camera gaze retained; ECO/reduced-motion pauses videos. `tsc --noEmit` clean.
+- Blocked: none
+- Next: V2-BRAIN / MULTICA may proceed; appearance frozen for them
+- Lock: released Eye / Bridge / deck.css / brand motion
