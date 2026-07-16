@@ -44,11 +44,42 @@ type MulticaIssue = {
   status?: string;
 };
 
+type FundingSource = {
+  id: string;
+  repo: string;
+  name: string;
+  url: string;
+  domain: string;
+  kind: string;
+  fit: "accepted" | "future_hook" | "rejected";
+  access: string;
+  summary: string;
+  useNow: string;
+  reason: string;
+  operatorActions: string[];
+  futureHooks: string[];
+};
+
+type FundingState = {
+  registry: FundingSource[];
+  summary: {
+    counts: {
+      total: number;
+      acceptedNow: number;
+      futureHooks: number;
+      rejected: number;
+    };
+  };
+  keyHooks: { id: string; label: string; linked: boolean }[];
+  stance: string;
+};
+
 export default function ToolsPage() {
   const [repomix, setRepomix] = useState<RepomixState>({});
   const [montage, setMontage] = useState<MontageState | null>(null);
   const [prompts, setPrompts] = useState<PromptsState | null>(null);
   const [multica, setMultica] = useState<MulticaState | null>(null);
+  const [funding, setFunding] = useState<FundingState | null>(null);
   const [workspaces, setWorkspaces] = useState<MulticaWorkspace[]>([]);
   const [issues, setIssues] = useState<MulticaIssue[]>([]);
   const [issueTitle, setIssueTitle] = useState("STARRA stub — operator follow-up");
@@ -57,16 +88,18 @@ export default function ToolsPage() {
   const [packPreview, setPackPreview] = useState("");
 
   const refresh = useCallback(async () => {
-    const [r, m, p, mu] = await Promise.all([
+    const [r, m, p, mu, f] = await Promise.all([
       fetch("/api/tools/repomix").then((x) => x.json()),
       fetch("/api/tools/openmontage").then((x) => x.json()),
       fetch("/api/tools/prompts").then((x) => x.json()),
       fetch("/api/tools/multica").then((x) => x.json()),
+      fetch("/api/tools/funding").then((x) => x.json()),
     ]);
     setRepomix(r);
     setMontage(m);
     setPrompts(p);
     setMultica(mu);
+    setFunding(f);
     if (r.preview) setPackPreview(r.preview);
   }, []);
 
@@ -324,6 +357,117 @@ export default function ToolsPage() {
           </p>
         </section>
       </div>
+
+      <section className="panel-etch mt-4 space-y-4 p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <div>
+            <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
+              Funding intel
+            </h2>
+            <p className="mt-2 max-w-3xl font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+              {funding?.stance ??
+                "Normalizing public funding sources into operator-ready registry entries."}
+            </p>
+          </div>
+          <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
+            <span>sources · {funding?.summary.counts.total ?? "—"}</span>
+            <span>usable now · {funding?.summary.counts.acceptedNow ?? "—"}</span>
+            <span>future hooks · {funding?.summary.counts.futureHooks ?? "—"}</span>
+            <span>excluded · {funding?.summary.counts.rejected ?? "—"}</span>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap gap-2 font-[family-name:var(--font-mono)] text-[10px] uppercase">
+          {(funding?.keyHooks ?? []).map((hook) => (
+            <span
+              key={hook.id}
+              className={`border px-2 py-1 ${
+                hook.linked
+                  ? "border-[var(--ok)] text-[var(--ok)]"
+                  : "border-[var(--border)] text-[var(--star)]"
+              }`}
+            >
+              {hook.linked ? "●" : "○"} {hook.label}
+            </span>
+          ))}
+        </div>
+
+        <div className="grid gap-4 xl:grid-cols-3">
+          {(funding?.registry ?? []).map((source) => (
+            <article key={source.id} className="border border-[var(--border-soft)] p-4">
+              <div className="flex items-start gap-2">
+                <div>
+                  <h3 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.24em] text-[var(--chrome)] uppercase">
+                    {source.name}
+                  </h3>
+                  <p className="mt-1 font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+                    {source.repo}
+                  </p>
+                </div>
+                <span
+                  className={`ml-auto font-[family-name:var(--font-mono)] text-[10px] tracking-widest uppercase ${
+                    source.fit === "accepted"
+                      ? "text-[var(--ok)]"
+                      : source.fit === "future_hook"
+                        ? "text-[var(--magenta)]"
+                        : "text-[var(--danger)]"
+                  }`}
+                >
+                  {source.fit === "accepted"
+                    ? "LIVE NOW"
+                    : source.fit === "future_hook"
+                      ? "HOOK LATER"
+                      : "EXCLUDED"}
+                </span>
+              </div>
+
+              <p className="mt-3 font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+                {source.summary}
+              </p>
+              <p className="mt-2 font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--magenta)]">
+                USE NOW: {source.useNow}
+              </p>
+              <p className="mt-2 font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--star)]">
+                WHY: {source.reason}
+              </p>
+
+              <div className="mt-3 flex flex-wrap gap-2 font-[family-name:var(--font-mono)] text-[10px] uppercase">
+                <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
+                  {source.kind.replaceAll("_", " ")}
+                </span>
+                <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
+                  {source.domain.replaceAll("_", " ")}
+                </span>
+                <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
+                  access · {source.access.replaceAll("_", " ")}
+                </span>
+              </div>
+
+              <ul className="mt-3 space-y-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--chrome)]">
+                {source.operatorActions.map((action) => (
+                  <li key={action}>◆ {action}</li>
+                ))}
+              </ul>
+
+              <div className="mt-4 flex items-center gap-3">
+                <a
+                  href={source.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+                >
+                  Open source
+                </a>
+                {source.futureHooks.length > 0 ? (
+                  <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
+                    hooks · {source.futureHooks.join(" · ")}
+                  </span>
+                ) : null}
+              </div>
+            </article>
+          ))}
+        </div>
+      </section>
     </ScreenShell>
   );
 }

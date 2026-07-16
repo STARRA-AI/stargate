@@ -67,6 +67,24 @@ export const KEY_SLOTS = [
     hint: "https://api.multica.ai (optional; self-host override)",
     powers: "Multica cloud or self-hosted server",
   },
+  {
+    id: "github_token",
+    label: "GitHub token",
+    hint: "ghp_… or fine-grained GitHub PAT",
+    powers: "Future repo-level funding lookup",
+  },
+  {
+    id: "open_collective_api_key",
+    label: "Open Collective API key",
+    hint: "Open Collective API key",
+    powers: "Future funder-finder enrichment",
+  },
+  {
+    id: "aiassist_api_key",
+    label: "AiAssist API key",
+    hint: "aai_…",
+    powers: "Future angel-agent investor scans",
+  },
 ] as const;
 
 export type KeySlotId = (typeof KEY_SLOTS)[number]["id"];
@@ -96,6 +114,9 @@ export async function getKey(id: KeySlotId): Promise<string | undefined> {
     xai: process.env.XAI_API_KEY,
     multica_token: process.env.MULTICA_TOKEN,
     multica_base_url: process.env.MULTICA_SERVER_URL ?? process.env.MULTICA_BASE_URL,
+    github_token: process.env.GITHUB_TOKEN,
+    open_collective_api_key: process.env.OPEN_COLLECTIVE_API_KEY,
+    aiassist_api_key: process.env.AIAS_API_KEY ?? process.env.AIASSIST_API_KEY,
   };
   return envMap[id]?.trim() || undefined;
 }
