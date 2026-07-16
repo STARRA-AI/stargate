@@ -44,10 +44,19 @@ const LOCAL_SYSTEM_BUDGET = 1_800;
 
 const LOCAL_VOICE_TAIL = `
 VOICE (hard): You are STARRA — guardian and operator. Calm. Dry. Decisive.
-When acknowledging an order, you may open with "Copy." — then ALWAYS give the real answer in the same reply.
-Never reply with only the word "Copy." Never loop on "Copy."
-No "Sure!", no emoji, no "happy to help". Short sentences. If asked for a story, tell it.
+You may open with "Copy." — then ALWAYS give the real answer in the same reply.
+Forbidden final reply: only the word "Copy." (with or without a period).
+No "Sure!", no emoji, no "happy to help". Short sentences.
+Examples:
+Operator: whats next
+STARRA: Copy. Next: status on LLM link, then queue the brief.
+Operator: status
+STARRA: Copy. Systems nominal. Standing by for the next order.
 `.trim();
+
+function isCopyOnly(text: string): boolean {
+  return /^copy\.?\s*$/i.test(text.trim());
+}
 
 function clipSystemForLocal(system: string): string {
   const reserve = LOCAL_VOICE_TAIL.length + 24;
@@ -65,19 +74,17 @@ function clipSystemForLocal(system: string): string {
 function sanitizeMessagesForLocal(
   messages: { role: string; content: string }[],
 ): { role: "user" | "assistant"; content: string }[] {
-  const copyOnly = (s: string) => /^copy\.?\s*$/i.test(s.trim());
   const stuck =
-    messages.filter((m) => m.role === "assistant" && copyOnly(m.content))
+    messages.filter((m) => m.role === "assistant" && isCopyOnly(m.content))
       .length >= 1;
   const out: { role: "user" | "assistant"; content: string }[] = [];
   for (const m of messages) {
     if (m.role !== "user" && m.role !== "assistant") continue;
-    let content = m.content;
-    if (m.role === "assistant" && copyOnly(content)) {
+    if (m.role === "assistant" && isCopyOnly(m.content)) {
       // Don't feed empty acknowledgements back into the context window
       continue;
     }
-    out.push({ role: m.role, content });
+    out.push({ role: m.role, content: m.content });
   }
   if (stuck && out.length > 0) {
     const last = out[out.length - 1];
@@ -86,6 +93,56 @@ function sanitizeMessagesForLocal(
     }
   }
   return out.length ? out : [{ role: "user", content: "Status." }];
+}
+
+/**
+ * Buffer local generation, then one forced retry if the model latches on "Copy."
+ * Streams only the final text so the console never lands on a lone acknowledgement.
+ */
+async function streamLocalWithCopyGuard(opts: {
+  system: string;
+  messages: { role: "user" | "assistant"; content: string }[];
+  lastUser: string;
+  onText: (t: string) => void;
+}): Promise<{ draft: string; retried: boolean; usedFallback: boolean }> {
+  let draft = "";
+  await streamOllama({
+    system: opts.system,
+    messages: opts.messages,
+    onText: (t) => {
+      draft += t;
+    },
+  });
+  draft = stripThinkTags(draft);
+  let retried = false;
+  if (isCopyOnly(draft) || !draft.trim()) {
+    retried = true;
+    draft = "";
+    const forceSystem = `${LOCAL_VOICE_TAIL}\nAnswer the operator now. Lead with the next concrete move. A reply that is only "Copy." is a failure.`;
+    const forceMessages: { role: "user" | "assistant"; content: string }[] = [
+      ...opts.messages,
+      {
+        role: "user",
+        content: `${opts.lastUser || "Status."}\n\n(Required: full answer with next move. Not only Copy.)`,
+      },
+    ];
+    await streamOllama({
+      system: forceSystem,
+      messages: forceMessages,
+      onText: (t) => {
+        draft += t;
+      },
+    });
+    draft = stripThinkTags(draft);
+  }
+  let usedFallback = false;
+  if (isCopyOnly(draft) || !draft.trim()) {
+    usedFallback = true;
+    draft =
+      "Copy. Standing by — state the objective in one line and I execute.";
+  }
+  for await (const chunk of stubStream(draft)) opts.onText(chunk);
+  return { draft, retried, usedFallback };
 }
 
 async function* stubStream(message: string) {
@@ -203,7 +260,7 @@ export async function POST(req: Request) {
       },
       timestamp: Date.now(),
       hypothesisId: "H-C2",
-      runId: "post-fix",
+      runId: "post-fix-2",
     }),
   }).catch(() => {});
   // #endregion
@@ -279,7 +336,7 @@ export async function POST(req: Request) {
                 },
                 timestamp: Date.now(),
                 hypothesisId: "H-C4",
-                runId: "post-fix",
+                runId: "post-fix-2",
               }),
             },
           ).catch(() => {});
@@ -314,18 +371,17 @@ export async function POST(req: Request) {
                   },
                   timestamp: Date.now(),
                   hypothesisId: "H-B",
-                  runId: "post-fix",
+                  runId: "post-fix-2",
                 }),
               },
             ).catch(() => {});
             // #endregion
-            await streamOllama({
+            const guarded = await streamLocalWithCopyGuard({
               system: localSystem,
               messages: localMessages,
+              lastUser,
               onText: (t) => push(t),
             });
-            const beforeStrip = full.length;
-            full = stripThinkTags(full);
             // #region agent log
             fetch(
               "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
@@ -341,16 +397,17 @@ export async function POST(req: Request) {
                   message: "ollama stream complete",
                   data: {
                     model: ollamaModel,
-                    beforeStripChars: beforeStrip,
                     afterStripChars: full.length,
-                    copyOnly: /^copy\.?\s*$/i.test(full.trim()),
+                    copyOnly: isCopyOnly(full),
                     emptyAfterStrip: full.length === 0,
+                    retried: guarded.retried,
+                    usedFallback: guarded.usedFallback,
                     streamMs: Date.now() - tStream,
                     preview: full.slice(0, 160),
                   },
                   timestamp: Date.now(),
                   hypothesisId: "H-B",
-                  runId: "post-fix",
+                  runId: "post-fix-2",
                 }),
               },
             ).catch(() => {});
@@ -380,12 +437,12 @@ export async function POST(req: Request) {
           } else if (ollamaUp && hasModel) {
             const localSystem = clipSystemForLocal(system);
             const localMessages = sanitizeMessagesForLocal(messages);
-            await streamOllama({
+            await streamLocalWithCopyGuard({
               system: localSystem,
               messages: localMessages,
+              lastUser,
               onText: (t) => push(t),
             });
-            full = stripThinkTags(full);
           } else {
             const offline = ollamaUp
               ? `Ollama online but model ${ollamaModel} missing. Run: ollama pull ${ollamaModel}. Standing by.`

@@ -288,7 +288,11 @@ input::placeholder { color: #7a63a8; }
 }
 /* wrappers so gaze translates don't fight ring spin keyframes */
 .ring-parallax { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
-.ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; z-index: 1; pointer-events: none; }
+/* max-width:none — Tailwind preflight img{max-width:100%} collapses rings inside 0×0 gaze wrappers */
+.ring {
+  position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen;
+  z-index: 1; pointer-events: none; max-width: none; max-height: none;
+}
 .ring-outer {
   width: 440px; height: 440px; margin-left: -220px; margin-top: -220px;
   animation: spinCW 40s linear infinite; opacity: 1;
@@ -591,6 +595,8 @@ input::placeholder { color: #7a63a8; }
   mix-blend-mode: screen;
   pointer-events: none;
   z-index: 1;
+  max-width: none;
+  max-height: none;
 }
 .mobile-ring-outer {
   inset: 0;
