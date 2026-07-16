@@ -279,20 +279,20 @@ input::placeholder { color: #7a63a8; }
 }
 /* wrappers so gaze translates don't fight ring spin keyframes */
 .ring-parallax { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
-.ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; }
+.ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; z-index: 1; }
 .ring-outer {
-  width: 420px; height: 420px; margin-left: -210px; margin-top: -210px;
-  animation: spinCW 40s linear infinite; opacity: 0.95;
-  filter: drop-shadow(0 0 14px rgba(176,77,252,0.55));
+  width: 440px; height: 440px; margin-left: -220px; margin-top: -220px;
+  animation: spinCW 40s linear infinite; opacity: 1;
+  filter: drop-shadow(0 0 18px rgba(176,77,252,0.7));
 }
 .ring-inner {
-  width: 260px; height: 260px; margin-left: -130px; margin-top: -130px;
-  animation: spinCCW 18s linear infinite; opacity: 0.72;
-  filter: drop-shadow(0 0 10px rgba(211,139,255,0.4));
+  width: 280px; height: 280px; margin-left: -140px; margin-top: -140px;
+  animation: spinCCW 18s linear infinite; opacity: 0.88;
+  filter: drop-shadow(0 0 12px rgba(211,139,255,0.55));
 }
 .ring-pupil {
-  width: 118px; height: 118px; margin-left: -59px; margin-top: -59px;
-  opacity: 0.9; filter: drop-shadow(0 0 8px rgba(211,139,255,0.5));
+  width: 130px; height: 130px; margin-left: -65px; margin-top: -65px;
+  opacity: 0.95; filter: drop-shadow(0 0 10px rgba(211,139,255,0.6));
 }
 .reactor.think .ring-inner { animation-duration: 8.8s; } /* ×2.5 think spin */
 .reactor.sleep .ring-outer { animation-duration: 90s; }
@@ -574,23 +574,29 @@ input::placeholder { color: #7a63a8; }
   display: grid;
   place-items: center;
 }
-.mobile-reactor-rings,
-.mobile-reactor-rings::before {
-  content: "";
+.mobile-ring {
   position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: center / contain no-repeat url("/brand/hud_ring.png");
+  object-fit: contain;
   mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 0;
 }
-.mobile-reactor-rings {
+.mobile-ring-outer {
+  inset: 0;
+  width: 100%;
+  height: 100%;
   animation: spinCW 40s linear infinite;
-  filter: drop-shadow(0 0 20px rgba(168,85,247,0.4));
+  filter: drop-shadow(0 0 20px rgba(168,85,247,0.55));
+  opacity: 0.95;
 }
-.mobile-reactor-rings::before {
-  inset: 22%;
+.mobile-ring-inner {
+  inset: 18%;
+  width: 64%;
+  height: 64%;
+  margin: auto;
   animation: spinCCW 18s linear infinite;
-  opacity: 0.76;
+  filter: drop-shadow(0 0 12px rgba(211,139,255,0.45));
+  opacity: 0.8;
 }
 .mobile-hero-badge {
   position: relative;
@@ -618,8 +624,8 @@ input::placeholder { color: #7a63a8; }
   width: 100%;
   height: 100%;
   object-fit: contain;
-  mix-blend-mode: screen;
   animation: badgeBreath 3s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px rgba(168,85,247,0.55));
 }
 .mobile-hud-listening .mobile-hero-badge img,
 .mobile-hud-wake .mobile-hero-badge img {
@@ -860,8 +866,8 @@ body.low-power .console { backdrop-filter: none; }
 body.low-power .chat-line,
 body.low-power .feed-line,
 body.low-power .mobile-feed-line { animation: none; }
-body.low-power .mobile-reactor-rings,
-body.low-power .mobile-reactor-rings::before { animation: none; }
+body.low-power .mobile-ring-outer,
+body.low-power .mobile-ring-inner { animation: none; }
 body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0 8px rgba(168,85,247,0.45)); }
 
 @media (prefers-reduced-motion: reduce) {
@@ -877,8 +883,8 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
   .reactor-core,
   .ambient-dots,
   .ambient-sweep,
-  .mobile-reactor-rings,
-  .mobile-reactor-rings::before {
+  .mobile-ring-outer,
+  .mobile-ring-inner {
     animation: none !important;
   }
   .badge-cine, .wordmark-cine, .eye-cine, .boot-cine { opacity: 0 !important; }

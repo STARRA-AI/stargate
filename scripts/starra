@@ -93,16 +93,49 @@ start_deck() {
 }
 
 cmd_up() {
+  # Don't abort the whole launcher if one step returns non-zero.
+  set +e
   start_ollama
+  local o=$?
   start_deck
+  local d=$?
+  set -e
+  if [[ $o -ne 0 ]]; then
+    echo "⚠ Ollama step had trouble. You can still try the deck."
+  fi
+  if [[ $d -ne 0 ]]; then
+    echo "◆ Deck failed to start. Last log lines:"
+    tail -20 "$LOG" 2>/dev/null || true
+    return 1
+  fi
+  return 0
 }
 
 cmd_open() {
   if ! deck_up; then
+    echo "→ Deck is offline. Starting STARRA…"
+    set +e
     cmd_up
+    set -e
   fi
-  open "$URL"
-  echo "Copy. STARRA at $URL — say \"starra\" or press ⌥+Space."
+  if deck_up; then
+    open "$URL" 2>/dev/null || true
+    echo ""
+    echo "Copy. STARRA is up."
+    echo "  On this Mac:  $URL"
+    local lan
+    lan="$(ipconfig getifaddr en0 2>/dev/null || true)"
+    [[ -n "$lan" ]] && echo "  On iPhone:    http://${lan}:${PORT}"
+    echo "  Wake: say \"starra\" or press Option+Space"
+    echo ""
+  else
+    echo ""
+    echo "◆ Still offline. Use this safer command instead:"
+    echo "  cd $PROJ"
+    echo "  npm run starra"
+    echo ""
+    return 1
+  fi
 }
 
 cmd_stop() {
@@ -137,25 +170,20 @@ cmd_install() {
   ln -sf "$PROJ/scripts/starra" "$dest/starra"
   chmod +x "$PROJ/scripts/starra"
 
-  local cmd_file="${HOME}/Applications/STARRA.command"
-  mkdir -p "${HOME}/Applications"
-  cat >"$cmd_file" <<EOF
-#!/usr/bin/env bash
-"$PROJ/scripts/starra" open
-EOF
-  chmod +x "$cmd_file"
-
-  echo "● Installed:"
-  echo "  CLI:  $dest/starra"
-  echo "  App:  $cmd_file  (double-click in Finder)"
-  if ! echo ":$PATH:" | grep -q ":$dest:"; then
-    echo ""
-    echo "Add to ~/.zshrc:"
-    echo "  export PATH=\"\$HOME/bin:\$PATH\""
-    echo "Then: source ~/.zshrc"
+  if ! grep -q 'HOME/bin' "${HOME}/.zshrc" 2>/dev/null; then
+    echo 'export PATH="$HOME/bin:$PATH"' >> "${HOME}/.zshrc"
+    echo "● Added ~/bin to ~/.zshrc"
   fi
+
+  echo "● CLI: $dest/starra"
+  echo "→ Building STARRA.app with icon…"
+  bash "$PROJ/scripts/macos/install-app.sh"
+
   echo ""
-  echo "Wake: open the deck, allow mic, say \"starra\" (or ⌥+Space)."
+  echo "Launch her:"
+  echo "  • Double-click STARRA in Applications (or Spotlight: STARRA)"
+  echo "  • Or: npm run starra"
+  echo "Wake (after the page opens): allow mic, say \"starra\" or Option+Space."
 }
 
 usage() {

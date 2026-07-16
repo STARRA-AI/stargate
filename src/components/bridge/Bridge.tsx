@@ -97,7 +97,7 @@ export function Bridge() {
   const [ventures, setVentures] = useState<Venture[]>([]);
   const [feed, setFeed] = useState<FeedLine[]>([]);
   const [clock, setClock] = useState("—");
-  const [eco, setEco] = useState(false);
+  const [eco, setEco] = useState(true); /* default ECO — 8GB Mac stays responsive */
   const [shine, setShine] = useState(false);
   const [reduced, setReduced] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -176,10 +176,11 @@ export function Bridge() {
     return () => clearInterval(id);
   }, []);
 
-  /* ── live polling ── */
+  /* ── live polling (wait for boot; ECO doubles intervals) ── */
+  const pollMul = eco ? 2 : 1;
 
-  /* Poll rates: vitals/feed slightly relaxed under memory pressure (99% observed) */
   useInterval(() => {
+    if (!bootDone) return;
     fetch("/api/vitals")
       .then((r) => {
         if (!r.ok) throw new Error(String(r.status));
@@ -187,9 +188,10 @@ export function Bridge() {
       })
       .then(setVitals)
       .catch(() => {});
-  }, 8000);
+  }, 12_000 * pollMul);
 
   useInterval(() => {
+    if (!bootDone) return;
     fetch("/api/dragon")
       .then((r) => {
         if (!r.ok) throw new Error(String(r.status));
@@ -200,9 +202,10 @@ export function Bridge() {
         setPortfolio(d.portfolio ?? { linked: false });
       })
       .catch(() => {});
-  }, 60_000);
+  }, 90_000 * pollMul);
 
   useInterval(() => {
+    if (!bootDone) return;
     fetch("/api/tank")
       .then((r) => r.json())
       .then((d: { votes: TankVote[]; topic: string }) => {
@@ -210,16 +213,18 @@ export function Bridge() {
         setTankTopic(d.topic ?? "");
       })
       .catch(() => {});
-  }, 45_000);
+  }, 90_000 * pollMul);
 
   useInterval(() => {
+    if (!bootDone) return;
     fetch("/api/telemetry")
       .then((r) => r.json())
       .then(setTelemetry)
       .catch(() => {});
-  }, 45_000);
+  }, 90_000 * pollMul);
 
   useInterval(() => {
+    if (!bootDone) return;
     fetch("/api/proposals")
       .then((r) => r.json())
       .then((d: { proposals: Proposal[]; ventures: Venture[] }) => {
@@ -227,14 +232,15 @@ export function Bridge() {
         setVentures(d.ventures ?? []);
       })
       .catch(() => {});
-  }, 60_000);
+  }, 120_000 * pollMul);
 
   useInterval(() => {
+    if (!bootDone) return;
     fetch("/api/feed")
       .then((r) => r.json())
       .then((d: { feed: FeedLine[] }) => setFeed(d.feed ?? []))
       .catch(() => {});
-  }, 10_000);
+  }, 20_000 * pollMul);
 
   async function decide(id: number, action: "approve" | "later") {
     const res = await fetch("/api/proposals", {
@@ -302,7 +308,20 @@ export function Bridge() {
             <div className="mobile-hero-ring">
               <div className="mobile-hero-glow" />
               <div className="mobile-reactor">
-                <div className="mobile-reactor-rings" />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="mobile-ring mobile-ring-outer"
+                  src="/brand/hud_ring.png"
+                  alt=""
+                  aria-hidden
+                />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  className="mobile-ring mobile-ring-inner"
+                  src="/brand/hud_ring.png"
+                  alt=""
+                  aria-hidden
+                />
                 <button
                   type="button"
                   className="mobile-hero-badge"

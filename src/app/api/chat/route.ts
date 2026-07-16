@@ -40,7 +40,7 @@ function sse(text: string) {
 }
 
 /** Local 1.5B on 8GB: ~60–80ms/token. Cap ~2k chars so prompt eval stays HUD-viable. */
-const LOCAL_SYSTEM_BUDGET = 2_200;
+const LOCAL_SYSTEM_BUDGET = 1_800;
 
 const LOCAL_VOICE_TAIL = `
 VOICE (hard): You are STARRA. Calm. Dry. Decisive.

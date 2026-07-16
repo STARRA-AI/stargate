@@ -23,6 +23,7 @@
     "starra:stop": "bash scripts/starra stop",
     "starra:status": "bash scripts/starra status",
     "starra:install": "bash scripts/starra install",
+    "starra:app": "bash scripts/macos/install-app.sh",
     "voice:download": "python3 scripts/download_voice.py",
     "setup:mac": "bash scripts/setup_mac.sh",
     "test:v2": "npx --yes tsx --test tests/*.test.ts",

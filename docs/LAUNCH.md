@@ -1,14 +1,23 @@
 # Launch STARRA
 
-## One command (desktop)
+## Like a normal Mac app
 
 ```bash
 cd /Users/work/Projects/stargate
-npm run starra:install   # once — puts `starra` on PATH + ~/Applications/STARRA.command
-starra                   # starts Ollama + deck, opens the browser
+npm run starra:app
 ```
 
-Or without install:
+Then:
+
+1. Open **Finder**
+2. Press **Cmd + Shift + A** (Applications)
+3. Double-click **STARRA** (purple star + HUD ring icon)
+
+Or press **Cmd + Space**, type **STARRA**, Enter.
+
+That starts Ollama + the deck and opens the HUD in your browser.
+
+## Terminal (same thing)
 
 ```bash
 npm run starra
@@ -16,25 +25,28 @@ npm run starra
 
 | Command | What it does |
 |---------|----------------|
-| `starra` / `npm run starra` | Up + open http://localhost:3000 |
-| `starra stop` | Stop the deck (Ollama stays) |
-| `starra status` | Health + iPhone LAN URL |
-| Double-click `~/Applications/STARRA.command` | Same as `starra` |
+| `npm run starra` / `starra` | Up + open browser |
+| `npm run starra:stop` | Stop the deck |
+| `npm run starra:status` | Health + iPhone URL |
+| `npm run starra:app` | Reinstall STARRA.app + icon |
 
-Deck binds `0.0.0.0:3000` so an iPhone on the same Wi‑Fi can connect.
+## Wake her (HUD open)
 
-## Wake her (once the HUD is open)
+1. Allow microphone when asked.
+2. Say **“starra”**, or press **Option + Space**, or tap the badge (phone).
+3. Desktop eye camera: click **EYE CAM** under the reactor (permission required).
 
-1. Allow microphone when Safari/Chrome asks.
-2. Say **“starra”** — she enters listen mode (or **“starra what’s next”** to skip straight to a command).
-3. Or press **⌥ + Space**, or tap the badge (mobile).
+Settings → Deck → Wake word ON/OFF.
 
-Toggle wake word: Settings → Deck → Wake word ON/OFF.
+## iPhone (same Wi‑Fi)
 
-## iPhone
+1. On the Mac: leave STARRA running.
+2. On the phone, open the URL from `npm run starra:status`  
+   (example: `http://192.168.1.65:3000`).
+3. Share → **Add to Home Screen**.
 
-1. On the Mac: `starra` (leave it running).
-2. On the phone (same Wi‑Fi): open the URL from `starra status` (e.g. `http://192.168.x.x:3000`).
-3. Share → Add to Home Screen.
+## Speed (8GB Mac)
 
-Cellular / away-from-home needs a hosted deploy later — not in this path.
+- ECO mode defaults **ON** (pauses heavy animation; click ECO in the topbar to turn off).
+- Chat replies are capped short for snappier local Ollama.
+- Close Chrome tabs / other apps if she feels slow — RAM is the bottleneck.
