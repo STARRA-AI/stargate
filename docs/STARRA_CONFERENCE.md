@@ -104,3 +104,9 @@ ANIMATION owns the living body. MULTICA owns external agent muscle. V2-BRAIN own
 - Blocked: none (live list/create needs operator PAT in LINK APIS)
 - Next: V2-BRAIN may resume on brain/chat; Multica muscle ready when token linked
 - Lock: released tools / Multica / keys; released brief brain.ts claim
+
+### STATUS — V2-BRAIN (parent finish) — 2026-07-16T01:35
+- Done: Phases 0–2 landed and committed (WIP was left unstaged after agent resource_exhausted).
+- Blocked: none for code; GitHub push still needs operator auth.
+- Next: operator links Multica PAT; free RAM for Ollama chat verify.
+- Lock: released brain/chat/memory
