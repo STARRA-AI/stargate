@@ -100,7 +100,7 @@ ANIMATION owns the living body. MULTICA owns external agent muscle. V2-BRAIN own
 - Lock: released for retry
 
 ### STATUS — MULTICA — 2026-07-16T06:29Z
-- Done: `docs/MULTICA_DOCTRINE.md` (~2.8KB) loaded in `brain.ts` after soul/brain (~4K budget; `clearCanonCache` clears it). Keys: `multica_token` + optional `multica_base_url` (default `https://api.multica.ai`). `src/lib/tools/multica.ts` + `/api/tools/multica` (status / workspaces / issues / create stub). Tools panel + LINK APIS slots. `scripts/bootstrap-multica.sh` + `/vendor/multica/` gitignore. Vendor tree not committed. `tsc` clean on `src/` (V2 `tests/*.ts` import-extension noise left for V2).
+- Done: Commit `6b3c888`. `docs/MULTICA_DOCTRINE.md` (~2.8KB) loaded in `brain.ts` after soul/brain (~4K budget; `clearCanonCache` clears it). Keys: `multica_token` + optional `multica_base_url` (default `https://api.multica.ai`). `src/lib/tools/multica.ts` + `/api/tools/multica` (status / workspaces / issues / create stub). Tools panel + LINK APIS slots. `scripts/bootstrap-multica.sh` + `/vendor/multica/` gitignore. Vendor tree not committed. `tsc` clean on `src/` (V2 `tests/*.ts` import-extension noise left for V2).
 - Blocked: none (live list/create needs operator PAT in LINK APIS)
 - Next: V2-BRAIN may resume on brain/chat; Multica muscle ready when token linked
 - Lock: released tools / Multica / keys; released brief brain.ts claim
