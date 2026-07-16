@@ -142,7 +142,7 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
     hudState === "thinking";
 
   const standingBy =
-    "STARRA >> STARGATE online. Dragon Trader uplink is live, repo is clean, and I have 3 proposals waiting for you, boss.";
+    "STANDING BY. ASK FOR THE BRIEF.";
 
   return (
     <div className="console">
@@ -208,12 +208,12 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
           onClick={onMic}
           aria-label="Microphone"
         >
-          🎙
+          MIC
         </button>
         <input
           value={input}
           onChange={(e) => setInput(e.target.value)}
-          placeholder="Speak to STARRA — type, or use the mic..."
+          placeholder='> "GIVE ME THE BRIEF."'
           autoComplete="off"
           aria-label="Console input"
         />

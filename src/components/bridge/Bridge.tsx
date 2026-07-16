@@ -11,6 +11,7 @@ import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
 import { ReactorEye } from "./ReactorEye";
+import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
 import "@/styles/deck.css";
 
@@ -48,6 +49,7 @@ type Proposal = { id: number; tag: string; text: string; impact: string };
 type Venture = { name: string; status: string; color: string };
 
 type FeedLine = { id: string; time: string; tag: string; color: string; text: string };
+type MobileTab = "today" | "ops" | "memory" | "links";
 
 function fmtUptime(totalSec: number) {
   const h = String(Math.floor(totalSec / 3600)).padStart(2, "0");
@@ -107,7 +109,15 @@ function useInterval(fn: () => void, ms: number, label?: string) {
 }
 
 export function Bridge() {
-  const { statusLine, setBootDone, bootDone, hudState } = useStargate();
+  const {
+    statusLine,
+    setBootDone,
+    bootDone,
+    hudState,
+    lastReply,
+    snap,
+    connectors,
+  } = useStargate();
   const { wake } = useVoiceLoop();
   const stageRef = useStageScale();
 
@@ -124,6 +134,8 @@ export function Bridge() {
   const [eco, setEco] = useState(false);
   const [shine, setShine] = useState(false);
   const [reduced, setReduced] = useState(false);
+  const [isMobile, setIsMobile] = useState(false);
+  const [mobileTab, setMobileTab] = useState<MobileTab>("today");
   const badgeCineRef = useRef<HTMLVideoElement>(null);
   const shineRef = useRef<HTMLVideoElement>(null);
 
@@ -167,6 +179,20 @@ export function Bridge() {
     mq.addEventListener("change", sync);
     return () => mq.removeEventListener("change", sync);
   }, []);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(max-width: 767px)");
+    const sync = () => setIsMobile(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    if (isMobile && !bootDone) {
+      setBootDone(true);
+    }
+  }, [bootDone, isMobile, setBootDone]);
 
   useEffect(() => {
     const el = shineRef.current;
@@ -346,8 +372,197 @@ export function Bridge() {
       ? ((totalExposure / (portfolio.balanceDollars + totalExposure)) * 100).toFixed(1)
       : null;
 
+  const mobileReply = lastReply || "Two items need you today.";
+
+  if (isMobile) {
+    return (
+      <div className="mobile-bridge">
+        <SnapHydrator />
+        <div className="mobile-shell">
+          <div className="mobile-ambient mobile-ambient-a" />
+          <div className="mobile-ambient mobile-ambient-b" />
+
+          <header className="mobile-topbar">
+            <div className="mobile-topbar-left">
+              <div className="badge-wrap mobile-badge-wrap">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="badge" src="/brand/badge.png" alt="STARRA badge" />
+              </div>
+              <div className="mobile-topbar-copy">
+                <span className="mobile-topbar-kicker">STARGATE</span>
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="mobile-wordmark" src="/brand/wordmark.png" alt="STARRA" />
+              </div>
+            </div>
+            <div className="mobile-topbar-status">
+              <span className="mobile-topbar-dot" />
+              <span>{statusLine === COPY.systemsNominal ? "NOMINAL" : statusLine}</span>
+            </div>
+          </header>
+
+          <section className="mobile-hero">
+            <div className="mobile-hero-ring">
+              <div className="mobile-hero-glow" />
+              <div className="mobile-reactor">
+                <div className="mobile-reactor-rings" />
+                <button type="button" className="mobile-hero-badge" onClick={onMic}>
+                  {/* eslint-disable-next-line @next/next/no-img-element */}
+                  <img src="/brand/badge.png" alt="Activate voice" />
+                </button>
+              </div>
+            </div>
+            <p className="mobile-hero-label">{COPY.tapToSpeak}</p>
+            <p className="mobile-hero-status">{statusLine}</p>
+          </section>
+
+          <section className="mobile-last-reply">
+            <span className="mobile-last-reply-mark">◆</span>
+            <p>{mobileReply}</p>
+          </section>
+
+          <nav className="mobile-tabs" aria-label="Bridge panels">
+            {[
+              ["today", "TODAY"],
+              ["ops", "OPS"],
+              ["memory", "MEM"],
+              ["links", "LINKS"],
+            ].map(([tab, label]) => (
+              <button
+                key={tab}
+                type="button"
+                className={`mobile-tab${mobileTab === tab ? " active" : ""}`}
+                onClick={() => setMobileTab(tab as MobileTab)}
+              >
+                {label}
+              </button>
+            ))}
+          </nav>
+
+          <section className="mobile-panel">
+            {mobileTab === "today" ? (
+              <div className="mobile-stack">
+                <div className="mobile-block">
+                  <div className="mobile-block-head">
+                    <span>BUSINESS SNAP</span>
+                    <Link href="/settings">EDIT</Link>
+                  </div>
+                  <div className="mobile-stat-list">
+                    <div className="mobile-stat-row">
+                      <span>MRR</span>
+                      <strong>{snap.mrrLabel}</strong>
+                    </div>
+                    <div className="mobile-stat-row">
+                      <span>TASKS DUE</span>
+                      <strong>{String(snap.tasksDue).padStart(2, "0")}</strong>
+                    </div>
+                    <div className="mobile-stat-row">
+                      <span>PIPELINE OPEN</span>
+                      <strong>{String(snap.pipelineOpen).padStart(2, "0")}</strong>
+                    </div>
+                  </div>
+                </div>
+                <div className="mobile-block">
+                  <div className="mobile-block-head">
+                    <span>PROPOSALS</span>
+                    <span>{proposals.length} AWAITING</span>
+                  </div>
+                  <div className="mobile-list">
+                    {proposals.length === 0 ? (
+                      <p className="mobile-empty">QUEUE CLEAR.</p>
+                    ) : (
+                      proposals.slice(0, 3).map((pr) => (
+                        <div className="mobile-list-card" key={pr.id}>
+                          <span className="mobile-list-tag">{pr.tag}</span>
+                          <p>{pr.text}</p>
+                          <small>{pr.impact}</small>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {mobileTab === "ops" ? (
+              <div className="mobile-stack">
+                <div className="mobile-block">
+                  <div className="mobile-block-head">
+                    <span>AGENT OPS</span>
+                    <span>LIVE</span>
+                  </div>
+                  <div className="mobile-feed">
+                    {feed.length === 0 ? (
+                      <p className="mobile-empty">AWAITING AGENT ACTIVITY.</p>
+                    ) : (
+                      feed.slice(0, 7).map((item) => (
+                        <div className="mobile-feed-line" key={item.id}>
+                          <span>{item.time}</span>
+                          <strong style={{ color: item.color }}>{item.tag}</strong>
+                          <p>{item.text}</p>
+                        </div>
+                      ))
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {mobileTab === "memory" ? (
+              <div className="mobile-stack">
+                <div className="mobile-block">
+                  <div className="mobile-block-head">
+                    <span>MEMORY</span>
+                    <Link href="/memory">OPEN</Link>
+                  </div>
+                  <div className="mobile-stat-list">
+                    <div className="mobile-stat-row">
+                      <span>WORKING</span>
+                      <strong>{snap.working} MSGS</strong>
+                    </div>
+                    <div className="mobile-stat-row">
+                      <span>SUMMARY</span>
+                      <strong>{snap.summaries} SUMS</strong>
+                    </div>
+                    <div className="mobile-stat-row">
+                      <span>ARCHIVAL</span>
+                      <strong>{snap.archival} ARC</strong>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : null}
+
+            {mobileTab === "links" ? (
+              <div className="mobile-stack">
+                <div className="mobile-block">
+                  <div className="mobile-block-head">
+                    <span>CONNECTORS</span>
+                    <Link href="/connectors">MANAGE</Link>
+                  </div>
+                  <div className="mobile-connectors">
+                    {connectors.map((connector) => (
+                      <div className="mobile-connector-row" key={connector.id}>
+                        <span>{connector.name}</span>
+                        <strong>{connector.status}</strong>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            ) : null}
+          </section>
+
+          <div className="mobile-console">
+            <DeckConsole onMic={onMic} />
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div id="stage-wrap">
+      <SnapHydrator />
       <div id="stage" ref={stageRef} data-hud={hudState}>
         <div className="ambient-dots" />
         <div className="ambient-scanlines" />
@@ -440,6 +655,49 @@ export function Bridge() {
         <div className="main-grid">
           {/* ── LEFT ── */}
           <div className="col col-left">
+            <div className="panel" id="panel-snap">
+              <div className="panel-head">
+                <span className="dot" />
+                <span className="panel-title">BUSINESS SNAP</span>
+                <div className="spacer" />
+                <Link href="/settings" className="panel-tag">
+                  EDIT
+                </Link>
+              </div>
+              <div className="snap-metrics">
+                <div className="snap-metric">
+                  <span className="snap-label">MRR</span>
+                  <span className="snap-value">{snap.mrrLabel}</span>
+                </div>
+                <div className="snap-metric">
+                  <span className="snap-label">TASKS DUE</span>
+                  <span className="snap-value">
+                    {String(snap.tasksDue).padStart(2, "0")}
+                  </span>
+                </div>
+                <div className="snap-metric">
+                  <span className="snap-label">PIPELINE OPEN</span>
+                  <span className="snap-value">
+                    {String(snap.pipelineOpen).padStart(2, "0")}
+                  </span>
+                </div>
+              </div>
+              <div className="memory-strip">
+                <div className="memory-cell">
+                  <span className="memory-label">WORKING</span>
+                  <span className="memory-value">{snap.working}</span>
+                </div>
+                <div className="memory-cell">
+                  <span className="memory-label">SUMMARY</span>
+                  <span className="memory-value">{snap.summaries}</span>
+                </div>
+                <div className="memory-cell">
+                  <span className="memory-label">ARCHIVAL</span>
+                  <span className="memory-value">{snap.archival}</span>
+                </div>
+              </div>
+            </div>
+
             <div className="panel" id="panel-dragon">
               <div className="panel-head">
                 <span className="dot" />
