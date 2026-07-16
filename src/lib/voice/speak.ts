@@ -6,7 +6,6 @@
 import { applyStarraVoice, voicesReady } from "@/lib/voice/voice-select";
 import {
   piperModelAvailable,
-  speakPiper,
   stopPiperAudio,
   PIPER_VOICE_ID,
 } from "@/lib/voice/piper-speak";
@@ -41,6 +40,7 @@ export async function speakStarra(
   stopAllSpeech();
 
   if (await piperModelAvailable()) {
+    const { speakPiper } = await import("@/lib/voice/piper-runtime");
     const ok = await speakPiper(text, signal);
     if (ok && !signal?.aborted) {
       lastEngine = "piper";

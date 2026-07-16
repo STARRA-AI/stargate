@@ -3,7 +3,6 @@
 import { useCallback, useEffect, useRef } from "react";
 import { useStargate } from "@/lib/stargate-context";
 import { COPY } from "@/lib/copy";
-import { speakStarra, stopAllSpeech } from "@/lib/voice/speak";
 
 type RecogResultEvent = {
   results: { 0: { transcript: string } }[];
@@ -33,7 +32,7 @@ export function useVoiceLoop() {
 
   const stopSpeaking = useCallback(() => {
     abortSpeak.current?.abort();
-    stopAllSpeech();
+    void import("@/lib/voice/speak").then(({ stopAllSpeech }) => stopAllSpeech());
     speakingRef.current = false;
   }, []);
 
@@ -45,17 +44,19 @@ export function useVoiceLoop() {
       abortSpeak.current = ac;
       speakingRef.current = true;
       setHudState("speaking");
-      void speakStarra(text, ac.signal).then((engine) => {
-        if (ac.signal.aborted || engine === "none") {
-          if (!ac.signal.aborted && engine === "none") {
-            speakingRef.current = false;
-            setHudState("idle");
+      void import("@/lib/voice/speak").then(({ speakStarra }) =>
+        speakStarra(text, ac.signal).then((engine) => {
+          if (ac.signal.aborted || engine === "none") {
+            if (!ac.signal.aborted && engine === "none") {
+              speakingRef.current = false;
+              setHudState("idle");
+            }
+            return;
           }
-          return;
-        }
-        speakingRef.current = false;
-        setHudState("idle");
-      });
+          speakingRef.current = false;
+          setHudState("idle");
+        }),
+      );
     },
     [setHudState, stopSpeaking],
   );
