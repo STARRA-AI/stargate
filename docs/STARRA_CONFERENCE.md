@@ -14,9 +14,9 @@
 | Resource | Holder | Since |
 |----------|--------|-------|
 | Eye / Bridge / deck.css / brand motion | — free — | |
-| brain.ts / chat loop / memory | V2-BRAIN | 2026-07-16T06:19Z |
+| brain.ts / chat loop / memory | V2-BRAIN (+ MULTICA brief doctrine insert) | 2026-07-16T06:19Z |
 | tools / Multica / keys | MULTICA | 2026-07-16T06:19Z |
-| GitHub remote | GITHUB+DOCS | 2026-07-16T06:19Z |
+| GitHub remote | — free — | |
 
 ---
 
@@ -50,12 +50,12 @@
 ### A4 — GITHUB PRIVATE REPO
 **Mandate:** Auth + `gh repo create stargate --private --source=. --remote=origin --push`. Blocked until Classic completes device login.  
 **Agent:** GITHUB+DOCS  
-**Status:** IN PROGRESS — device login started; lock claimed
+**Status:** BLOCKED — device login timed out; needs Classic auth (code was `8FD6-30FE` / https://github.com/login/device — likely expired; re-run login)
 
 ### A5 — CODERABBIT (advisory)
 **Mandate:** Short operator guide: how to use CodeRabbit PRs to debug this repo once remote exists. Optional `.coderabbit.yaml`.  
 **Agent:** GITHUB+DOCS  
-**Status:** IN PROGRESS — writing `docs/CODERABBIT.md` + `.coderabbit.yaml`
+**Status:** DONE — `docs/CODERABBIT.md` + `.coderabbit.yaml` committed (`fa5443f`)
 
 ### A6 — DEBUG/OPTIMIZE (prior thread)
 **Note:** Agent previously ran; chat hang fix landed as `a9b582b`. Re-check only if ANIMATION/V2 regress.
@@ -86,3 +86,9 @@ ANIMATION owns the living body. MULTICA owns external agent muscle. V2-BRAIN own
 - Blocked: none
 - Next: V2-BRAIN / MULTICA may proceed; appearance frozen for them
 - Lock: released Eye / Bridge / deck.css / brand motion
+
+### STATUS — GITHUB+DOCS — 2026-07-16T06:25Z
+- Done: Mandate B — `docs/CODERABBIT.md` + `.coderabbit.yaml` (Next.js/TS focus). `.gitignore` already excludes `data/keys.json`, `vendor/`, `.tools/`, `.env.local`. Docs commit `fa5443f`.
+- Blocked: Mandate A — `gh` not logged in. Device flow started; one-time code `8FD6-30FE` at https://github.com/login/device; wait timed out (~4 min). No `origin` remote; no push.
+- Next: Classic completes `gh auth login` (or re-run with fresh code), then `gh repo create stargate --private --source=. --remote=origin --push` (no force-push).
+- Lock: released GitHub remote
