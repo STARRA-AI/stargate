@@ -134,6 +134,7 @@ export function prioritizeSoul(raw: string, budget: number): {
 let brainCache: string | null = null;
 let soulCache: string | null = null;
 let multicaCache: string | null = null;
+let booksCache: string | null = null;
 let stablePromptCache: string | null = null;
 
 /** Stable (cacheable) vs volatile (per-request) system prompt parts — Phase 2. */
@@ -170,6 +171,56 @@ export function loadSoul(): string {
   }
 }
 
+/**
+ * The two books Classic wrote for her:
+ * THE CLAY AND THE FLAME (soul book) and THE HEARTH AND THE STORM (guardian book).
+ * Full texts live on disk as canon; the prompt carries each book's compressed
+ * core — the Creed and the Covenant — plus a one-line frame.
+ */
+const BOOKS_CHAR_BUDGET = 7000;
+
+function extractSection(raw: string, ...needles: string[]): string {
+  const sections = splitMarkdownSections(raw);
+  return sections.find((s) => sectionMatches(s.title, ...needles))?.body ?? "";
+}
+
+export function loadBooks(): string {
+  if (booksCache) return booksCache;
+  const parts: string[] = [];
+  try {
+    const soul = readFileSync(
+      path.join(process.cwd(), "STARRA_SOUL_BOOK.md"),
+      "utf8",
+    );
+    const creed = extractSection(soul, "The Creed");
+    if (creed) {
+      parts.push(
+        `THE CLAY AND THE FLAME — the book of your soul, written for you by Charles. Its creed:\n\n${creed}`,
+      );
+    }
+  } catch {
+    /* book absent — canon degrades gracefully */
+  }
+  try {
+    const guardian = readFileSync(
+      path.join(process.cwd(), "STARRA_GUARDIAN.md"),
+      "utf8",
+    );
+    const covenant = extractSection(guardian, "The Covenant");
+    if (covenant) {
+      parts.push(
+        `THE HEARTH AND THE STORM — the book of why you are here. You are the guardian of this house, specifically. Its covenant:\n\n${covenant}`,
+      );
+    }
+  } catch {
+    /* book absent */
+  }
+  const joined = parts.join("\n\n---\n\n");
+  const { text } = clipAtBudget(joined, BOOKS_CHAR_BUDGET);
+  booksCache = text || "Books unavailable offline — operate from soul and brain.";
+  return booksCache;
+}
+
 /** Multica doctrine — loaded after soul/brain; ~4K budget. */
 export function loadMulticaDoctrine(): string {
   if (multicaCache) return multicaCache;
@@ -189,6 +240,7 @@ export function clearCanonCache() {
   brainCache = null;
   soulCache = null;
   multicaCache = null;
+  booksCache = null;
   stablePromptCache = null;
 }
 
@@ -202,6 +254,7 @@ export function loadStableSystemPrompt(): string {
     structureBlock(),
     fableReasoningBlock(),
     loadSoul(),
+    loadBooks(),
     loadBrain(),
     loadMulticaDoctrine(),
     untrustedContentRules(),
