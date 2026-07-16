@@ -379,9 +379,10 @@ export async function POST(req: Request) {
             }
           } else if (ollamaUp && hasModel) {
             const localSystem = clipSystemForLocal(system);
+            const localMessages = sanitizeMessagesForLocal(messages);
             await streamOllama({
               system: localSystem,
-              messages,
+              messages: localMessages,
               onText: (t) => push(t),
             });
             full = stripThinkTags(full);
