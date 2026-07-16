@@ -378,7 +378,7 @@ export function Bridge() {
     return (
       <div className="mobile-bridge">
         <SnapHydrator />
-        <div className="mobile-shell">
+        <div className={`mobile-shell mobile-hud-${hudState}`}>
           <div className="mobile-ambient mobile-ambient-a" />
           <div className="mobile-ambient mobile-ambient-b" />
 
@@ -396,7 +396,7 @@ export function Bridge() {
             </div>
             <div className="mobile-topbar-status">
               <span className="mobile-topbar-dot" />
-              <span>{statusLine === COPY.systemsNominal ? "NOMINAL" : statusLine}</span>
+              <span>{statusLine === COPY.systemsNominal ? "NOMINAL" : statusLine.toUpperCase()}</span>
             </div>
           </header>
 
@@ -405,7 +405,19 @@ export function Bridge() {
               <div className="mobile-hero-glow" />
               <div className="mobile-reactor">
                 <div className="mobile-reactor-rings" />
-                <button type="button" className="mobile-hero-badge" onClick={onMic}>
+                <button
+                  type="button"
+                  className="mobile-hero-badge"
+                  onClick={onMic}
+                  aria-label="Activate voice"
+                  aria-pressed={
+                    hudState === "wake" ||
+                    hudState === "listening" ||
+                    hudState === "thinking" ||
+                    hudState === "streaming" ||
+                    hudState === "speaking"
+                  }
+                >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img src="/brand/badge.png" alt="Activate voice" />
                 </button>
@@ -432,6 +444,7 @@ export function Bridge() {
                 type="button"
                 className={`mobile-tab${mobileTab === tab ? " active" : ""}`}
                 onClick={() => setMobileTab(tab as MobileTab)}
+                aria-pressed={mobileTab === tab}
               >
                 {label}
               </button>
@@ -894,7 +907,7 @@ export function Bridge() {
               <div className="feed-list">
                 {feed.length === 0 ? (
                   <div className="feed-empty">
-                    Awaiting agent activity — tool calls will appear here.
+                    AWAITING AGENT ACTIVITY.
                   </div>
                 ) : (
                   feed.map((f) => (
@@ -921,7 +934,7 @@ export function Bridge() {
               </div>
               <div className="proposals-list">
                 {proposals.length === 0 ? (
-                  <div className="feed-empty">Queue clear. STARRA will file new proposals here.</div>
+                  <div className="feed-empty">QUEUE CLEAR.</div>
                 ) : (
                   proposals.map((pr) => (
                     <div className="proposal-card" key={pr.id}>

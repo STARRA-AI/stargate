@@ -32,7 +32,7 @@ async function revealText(
     if (signal.aborted) return;
     out += ch;
     onTick(out);
-    await new Promise((r) => setTimeout(r, 18));
+    await new Promise((r) => setTimeout(r, 30));
   }
 }
 

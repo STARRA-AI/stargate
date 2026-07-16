@@ -370,16 +370,23 @@ input::placeholder { color: #7a63a8; }
 .chip {
   background: rgba(176,77,252,0.12); border: 1px solid var(--border); color: var(--accent-glow);
   font-family: var(--display); font-size: 11px; font-weight: 700; letter-spacing: 2px;
-  padding: 4px 10px; border-radius: 4px; cursor: pointer; transition: background 0.15s, color 0.15s;
+  padding: 4px 10px; border-radius: 4px; cursor: pointer;
+  transition: background 0.18s ease-out, color 0.18s ease-out, transform 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
 }
 .chip:hover { background: rgba(176,77,252,0.3); color: var(--text); }
+.chip:active { transform: scale(0.98); }
+.chip:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
 
 .chat-input-row { display: flex; align-items: stretch; border-top: 1px solid rgba(176,77,252,0.25); }
 .mic-btn {
   width: 52px; border: none; cursor: pointer; border-right: 1px solid rgba(176,77,252,0.25);
   font-size: 11px; letter-spacing: 0.25em; font-family: var(--display); background: rgba(176,77,252,0.1); color: var(--accent-glow);
-  transition: background 0.15s, color 0.15s;
+  transition: background 0.18s ease-out, color 0.18s ease-out, transform 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
 }
+.mic-btn:active { transform: scale(0.97); }
+.mic-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: -2px; }
 .mic-btn.recording { background: rgba(255,107,138,0.25); color: var(--bad); animation: blink 1s ease-in-out infinite; }
 .chat-input-row input {
   flex: 1; background: transparent; border: none; color: var(--text);
@@ -388,8 +395,12 @@ input::placeholder { color: #7a63a8; }
 .send-btn {
   background: var(--accent); color: #150826; border: none; font-family: var(--display);
   font-weight: 700; letter-spacing: 2px; font-size: 13px; padding: 0 22px; cursor: pointer;
+  transition: background 0.18s ease-out, transform 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
 }
 .send-btn:hover { background: var(--accent-glow); }
+.send-btn:active { transform: scale(0.98); }
+.send-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: -2px; }
 
 /* ── Agent Ops / feed ── */
 .feed-list { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
@@ -577,6 +588,17 @@ input::placeholder { color: #7a63a8; }
   border: 0;
   background: transparent;
   padding: 0;
+  cursor: pointer;
+  border-radius: 999px;
+  transition: transform 0.18s ease-out, filter 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-hero-badge:active {
+  transform: scale(0.97);
+}
+.mobile-hero-badge:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 4px;
 }
 .mobile-hero-badge img {
   width: 100%;
@@ -584,6 +606,22 @@ input::placeholder { color: #7a63a8; }
   object-fit: contain;
   mix-blend-mode: screen;
   animation: badgeBreath 3s ease-in-out infinite;
+}
+.mobile-hud-listening .mobile-hero-badge img,
+.mobile-hud-wake .mobile-hero-badge img {
+  animation-duration: 0.6s;
+}
+.mobile-hud-thinking .mobile-hero-badge img,
+.mobile-hud-transcribing .mobile-hero-badge img,
+.mobile-hud-tool .mobile-hero-badge img {
+  animation-duration: 2s;
+}
+.mobile-hud-speaking .mobile-hero-badge img,
+.mobile-hud-streaming .mobile-hero-badge img {
+  animation-duration: 0.9s;
+}
+.mobile-hud-error .mobile-hero-badge img {
+  animation-duration: 3.2s;
 }
 .mobile-hero-label,
 .mobile-hero-status {
@@ -638,6 +676,21 @@ input::placeholder { color: #7a63a8; }
   font-family: var(--display);
   font-size: 10px;
   letter-spacing: 0.22em;
+  cursor: pointer;
+  transition:
+    background 0.2s ease-out,
+    border-color 0.2s ease-out,
+    color 0.2s ease-out,
+    box-shadow 0.2s ease-out,
+    transform 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.mobile-tab:active {
+  transform: scale(0.98);
+}
+.mobile-tab:focus-visible {
+  outline: 2px solid var(--accent-glow);
+  outline-offset: 2px;
 }
 .mobile-tab.active {
   border-color: var(--border);
@@ -647,6 +700,11 @@ input::placeholder { color: #7a63a8; }
 }
 .mobile-panel {
   padding: 14px;
+  animation: panelSlideIn 0.2s ease-out;
+}
+@keyframes panelSlideIn {
+  from { opacity: 0; transform: translateY(6px); }
+  to { opacity: 1; transform: translateY(0); }
 }
 .mobile-stack,
 .mobile-list,
@@ -785,6 +843,12 @@ body.low-power .feed-line { animation: none; }
   .mobile-reactor-rings,
   .mobile-reactor-rings::before,
   .mobile-hero-badge img { animation: none !important; }
+  .mobile-panel { animation: none; }
+  .chip:active,
+  .mic-btn:active,
+  .send-btn:active,
+  .mobile-tab:active,
+  .mobile-hero-badge:active { transform: none; }
 }
 
 /* ── boot overlay ── */
