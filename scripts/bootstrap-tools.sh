@@ -34,6 +34,13 @@ else
   echo "✓ OpenAlice present"
 fi
 
+if [[ ! -d vendor/obsidian-skills/.git ]]; then
+  echo "→ Cloning kepano/obsidian-skills (shallow, optional reference)…"
+  git clone --depth 1 https://github.com/kepano/obsidian-skills.git vendor/obsidian-skills || echo "⚠ obsidian-skills clone skipped"
+else
+  echo "✓ obsidian-skills present"
+fi
+
 echo "→ Distilling prompt structure patterns…"
 node scripts/distill-prompt-patterns.mjs
 

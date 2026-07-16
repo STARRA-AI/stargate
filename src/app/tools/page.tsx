@@ -101,6 +101,27 @@ type FundingState = {
   stance: string;
 };
 
+type ObsidianState = {
+  present: boolean;
+  vaultRootRel: string;
+  noteCount: number;
+  folders: { name: string; present: boolean }[];
+  skillsVendorPresent: boolean;
+  guide: string;
+  layers: {
+    longTermMemory: string;
+    assistant: string;
+    backupSync: string;
+  };
+};
+
+type ObsidianNote = {
+  rel: string;
+  title: string;
+  bytes: number;
+  mtime: string;
+};
+
 export default function ToolsPage() {
   const [repomix, setRepomix] = useState<RepomixState>({});
   const [montage, setMontage] = useState<MontageState | null>(null);
@@ -108,6 +129,17 @@ export default function ToolsPage() {
   const [multica, setMultica] = useState<MulticaState | null>(null);
   const [openalice, setOpenalice] = useState<OpenAliceState | null>(null);
   const [funding, setFunding] = useState<FundingState | null>(null);
+  const [obsidian, setObsidian] = useState<ObsidianState | null>(null);
+  const [vaultNotes, setVaultNotes] = useState<ObsidianNote[]>([]);
+  const [vaultQuery, setVaultQuery] = useState("");
+  const [vaultSearchHits, setVaultSearchHits] = useState<
+    { rel: string; snippet: string; line: number }[]
+  >([]);
+  const [notePath, setNotePath] = useState("0-Inbox/Capture.md");
+  const [noteContent, setNoteContent] = useState(
+    "# Capture\n\n[[Inbox]] — note from Tools.\n",
+  );
+  const [confirmToken, setConfirmToken] = useState("");
   const [workspaces, setWorkspaces] = useState<MulticaWorkspace[]>([]);
   const [issues, setIssues] = useState<MulticaIssue[]>([]);
   const [aliceIssues, setAliceIssues] = useState<OpenAliceIssue[]>([]);
@@ -120,13 +152,14 @@ export default function ToolsPage() {
   const [packPreview, setPackPreview] = useState("");
 
   const refresh = useCallback(async () => {
-    const [r, m, p, mu, oa, f] = await Promise.all([
+    const [r, m, p, mu, oa, f, ob] = await Promise.all([
       fetch("/api/tools/repomix").then((x) => x.json()),
       fetch("/api/tools/openmontage").then((x) => x.json()),
       fetch("/api/tools/prompts").then((x) => x.json()),
       fetch("/api/tools/multica").then((x) => x.json()),
       fetch("/api/tools/openalice").then((x) => x.json()),
       fetch("/api/tools/funding").then((x) => x.json()),
+      fetch("/api/tools/obsidian?action=status").then((x) => x.json()),
     ]);
     setRepomix(r);
     setMontage(m);
@@ -134,6 +167,7 @@ export default function ToolsPage() {
     setMultica(mu);
     setOpenalice(oa);
     setFunding(f);
+    setObsidian(ob);
     if (r.preview) setPackPreview(r.preview);
   }, []);
 
@@ -252,6 +286,79 @@ export default function ToolsPage() {
       `${data.readout}\n\n${data.steps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")}\n\n${data.executionNote}`,
     );
     setStatus(`PLAN · ${data.query}`);
+  }
+
+  async function initVault() {
+    setStatus("EXECUTING — VAULT INIT");
+    const res = await fetch("/api/tools/obsidian", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "init" }),
+    });
+    const data = await res.json();
+    setStatus(
+      res.ok
+        ? `VAULT · ${data.alreadyPresent ? "ready" : `created ${data.created?.length ?? 0}`}`
+        : `LINK DEGRADED · ${data.error ?? "retry"}`,
+    );
+    await refresh();
+  }
+
+  async function listVaultNotes() {
+    setStatus("EXECUTING — VAULT LIST");
+    const res = await fetch("/api/tools/obsidian?action=list");
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
+      return;
+    }
+    setVaultNotes(data.notes ?? []);
+    setStatus(`VAULT · ${(data.notes ?? []).length} notes`);
+  }
+
+  async function searchVault() {
+    setStatus("EXECUTING — VAULT SEARCH");
+    const res = await fetch(
+      `/api/tools/obsidian?action=search&q=${encodeURIComponent(vaultQuery)}`,
+    );
+    const data = await res.json();
+    if (!res.ok) {
+      setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
+      return;
+    }
+    setVaultSearchHits(data.hits ?? []);
+    setStatus(`HITS · ${(data.hits ?? []).length}`);
+  }
+
+  async function writeVaultNote(mode: "create" | "append" | "overwrite") {
+    setStatus(`EXECUTING — VAULT ${mode.toUpperCase()}`);
+    const res = await fetch("/api/tools/obsidian", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        action: "write",
+        path: notePath,
+        content: noteContent,
+        mode,
+        confirmToken: confirmToken || undefined,
+      }),
+    });
+    const data = await res.json();
+    if (res.status === 428 && data.token) {
+      setConfirmToken(data.token);
+      setStatus(`HELD · confirm ${data.token}`);
+      return;
+    }
+    setStatus(
+      res.ok
+        ? `${mode.toUpperCase()} · ${data.rel}`
+        : `LINK DEGRADED · ${data.error ?? "retry"}`,
+    );
+    if (res.ok) {
+      setConfirmToken("");
+      await listVaultNotes();
+      await refresh();
+    }
   }
 
   return (
@@ -486,6 +593,159 @@ export default function ToolsPage() {
           </p>
         </section>
       </div>
+
+      <section className="panel-etch mt-4 space-y-4 p-4">
+        <div className="flex flex-wrap items-start gap-3">
+          <div>
+            <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
+              Memory / Vault
+            </h2>
+            <p className="mt-2 max-w-3xl font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+              Three layers: local Obsidian markdown (long-term), STARRA grammar +
+              gated note ops (assistant), private Git sync (backup). Never into
+              the app repo.
+            </p>
+          </div>
+          <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
+            <span>
+              {obsidian?.present ? "● vault online" : "○ vault missing"} ·{" "}
+              {obsidian?.noteCount ?? 0} notes
+            </span>
+            <span>path · {obsidian?.vaultRootRel ?? "data/vault"}</span>
+            <span>
+              skills ·{" "}
+              {obsidian?.skillsVendorPresent ? "vendor present" : "optional clone"}
+            </span>
+          </div>
+        </div>
+
+        <div className="grid gap-2 font-[family-name:var(--font-mono)] text-[11px] text-[var(--chrome)] md:grid-cols-3">
+          <p>
+            <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
+              L1 memory
+            </span>
+            <br />
+            {obsidian?.layers.longTermMemory ?? "—"}
+          </p>
+          <p>
+            <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
+              L2 assistant
+            </span>
+            <br />
+            {obsidian?.layers.assistant ?? "—"}
+          </p>
+          <p>
+            <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
+              L3 backup
+            </span>
+            <br />
+            {obsidian?.layers.backupSync ?? "—"}
+          </p>
+        </div>
+
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => void initVault()}
+            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+          >
+            Init vault
+          </button>
+          <button
+            type="button"
+            onClick={() => void listVaultNotes()}
+            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+          >
+            List notes
+          </button>
+        </div>
+
+        <div className="grid gap-4 lg:grid-cols-2">
+          <div className="space-y-3">
+            <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+              Search
+              <div className="mt-1 flex gap-2">
+                <input
+                  value={vaultQuery}
+                  onChange={(e) => setVaultQuery(e.target.value)}
+                  className="focus-magenta w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+                />
+                <button
+                  type="button"
+                  onClick={() => void searchVault()}
+                  className="focus-magenta border border-[var(--purple)] px-3 py-1 font-[family-name:var(--font-display)] text-[10px] tracking-[0.2em] uppercase"
+                >
+                  Go
+                </button>
+              </div>
+            </label>
+            <ul className="max-h-36 space-y-1 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
+              {vaultSearchHits.map((h) => (
+                <li key={`${h.rel}-${h.line}`}>
+                  {h.rel}:{h.line} · {h.snippet}
+                </li>
+              ))}
+              {vaultNotes.slice(0, 12).map((n) => (
+                <li key={n.rel}>
+                  {n.rel} · {n.bytes}b
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div className="space-y-3">
+            <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+              Path
+              <input
+                value={notePath}
+                onChange={(e) => setNotePath(e.target.value)}
+                className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+              />
+            </label>
+            <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+              Content
+              <textarea
+                value={noteContent}
+                onChange={(e) => setNoteContent(e.target.value)}
+                rows={5}
+                className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+              />
+            </label>
+            {confirmToken ? (
+              <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--magenta)]">
+                Confirm token · {confirmToken} — re-run overwrite to apply
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => void writeVaultNote("create")}
+                className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+              >
+                Create
+              </button>
+              <button
+                type="button"
+                onClick={() => void writeVaultNote("append")}
+                className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+              >
+                Append
+              </button>
+              <button
+                type="button"
+                onClick={() => void writeVaultNote("overwrite")}
+                className="focus-magenta border border-[var(--magenta)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+              >
+                Overwrite (gated)
+              </button>
+            </div>
+          </div>
+        </div>
+
+        <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
+          {obsidian?.guide} · docs/OBSIDIAN_MEMORY.md · npm run vault:sync
+        </p>
+      </section>
 
       <section className="panel-etch mt-4 space-y-4 p-4">
         <div className="flex flex-wrap items-start gap-3">

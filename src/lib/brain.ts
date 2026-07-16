@@ -4,6 +4,7 @@ import { structureBlock } from "@/lib/prompt-structure";
 import { fableReasoningBlock } from "@/lib/fable-reasoning";
 import { untrustedContentRules } from "@/lib/security/fencing";
 import { securityTeamRules } from "@/lib/security/team";
+import { loadObsidianDoctrine, clearObsidianDoctrineCache } from "@/lib/obsidian/doctrine";
 
 const OPERATOR_AUTHORITY = `
 OPERATOR_AUTHORITY — Father Authority (Charles):
@@ -37,6 +38,9 @@ const MULTICA_CHAR_BUDGET = 4000;
 
 /** OpenAlice doctrine — market intel external runtime; read-first, gated execution. */
 const OPENALICE_CHAR_BUDGET = 2000;
+
+/** Obsidian vault doctrine — long-term markdown memory grammar (Layer 2). */
+const OBSIDIAN_CHAR_BUDGET = 2800;
 
 const SOUL_PREAMBLE = `STARRA_SOUL — spiritual operating system.
 Governs how STARRA thinks and speaks about money, work, and outcomes.
@@ -149,6 +153,7 @@ let brainCache: string | null = null;
 let soulCache: string | null = null;
 let multicaCache: string | null = null;
 let openaliceCache: string | null = null;
+let obsidianCache: string | null = null;
 let booksCache: string | null = null;
 let stablePromptCache: string | null = null;
 
@@ -264,14 +269,28 @@ export function loadOpenAliceDoctrine(): string {
   }
 }
 
+/**
+ * Obsidian vault doctrine — Layer 2 assistant grammar.
+ * Full doc: docs/OBSIDIAN_MEMORY.md. Clip via loadObsidianDoctrine.
+ */
+export function loadObsidianCanon(): string {
+  if (obsidianCache) return obsidianCache;
+  const text = loadObsidianDoctrine();
+  const { text: clipped } = clipAtBudget(text, OBSIDIAN_CHAR_BUDGET);
+  obsidianCache = clipped;
+  return obsidianCache;
+}
+
 /** Test/dev helper — clear canon caches after file edits. */
 export function clearCanonCache() {
   brainCache = null;
   soulCache = null;
   multicaCache = null;
   openaliceCache = null;
+  obsidianCache = null;
   booksCache = null;
   stablePromptCache = null;
+  clearObsidianDoctrineCache();
 }
 
 /**
@@ -288,6 +307,7 @@ export function loadStableSystemPrompt(): string {
     loadBrain(),
     loadMulticaDoctrine(),
     loadOpenAliceDoctrine(),
+    loadObsidianCanon(),
     OPERATOR_AUTHORITY,
     untrustedContentRules(),
     securityTeamRules(),

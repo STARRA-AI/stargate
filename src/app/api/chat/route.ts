@@ -6,6 +6,7 @@ import {
   recordExchange,
 } from "@/lib/memory/store";
 import { getVault, vaultForPrompt } from "@/lib/vault/store";
+import { obsidianForPrompt } from "@/lib/obsidian";
 import { runRepomix, readLatestPackPreview } from "@/lib/tools/repomix";
 import {
   queueMontageJob,
@@ -111,10 +112,11 @@ export async function POST(req: Request) {
   const lastUser =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
-  const [tier1, memory, vault] = await Promise.all([
+  const [tier1, memory, vault, obsidianVolatile] = await Promise.all([
     getTier1(),
     getMemory(),
     getVault(),
+    obsidianForPrompt(),
   ]);
 
   const packPreview = await readLatestPackPreview(2500);
@@ -135,6 +137,7 @@ export async function POST(req: Request) {
     serializeTier1(tier1),
     memoryForPrompt(memory, lastUser),
     vaultForPrompt(vault.docs, lastUser),
+    obsidianVolatile,
     packPreview
       ? fenceUntrusted(
           `RECENT REPOMIX PREVIEW (truncated):\n${packPreview}`,
