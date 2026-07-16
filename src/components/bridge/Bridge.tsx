@@ -1,9 +1,11 @@
 "use client";
 
 import Link from "next/link";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { COPY } from "@/lib/copy";
 import { fmtMoney } from "@/lib/deck-demo";
+import { MOTION } from "@/lib/motion/assets";
+import { useCineVideo } from "@/lib/motion/useCineVideo";
 import { useStargate } from "@/lib/stargate-context";
 import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
@@ -120,11 +122,34 @@ export function Bridge() {
   const [feed, setFeed] = useState<FeedLine[]>([]);
   const [clock, setClock] = useState("—");
   const [eco, setEco] = useState(false);
+  const [shine, setShine] = useState(false);
+  const [reduced, setReduced] = useState(false);
+  const badgeCineRef = useRef<HTMLVideoElement>(null);
+  const shineRef = useRef<HTMLVideoElement>(null);
 
-  const onBootDone = useCallback(() => setBootDone(true), [setBootDone]);
+  const onBootDone = useCallback(() => {
+    setBootDone(true);
+    setShine(true);
+  }, [setBootDone]);
   const onMic = useCallback(() => {
     void wake();
   }, [wake]);
+
+  const motionOk = !eco && !reduced && bootDone;
+
+  useCineVideo(badgeCineRef, {
+    src: MOTION.badgeHeartbeat,
+    active: motionOk,
+    loop: true,
+    allowPlay: motionOk,
+  });
+
+  useCineVideo(shineRef, {
+    src: MOTION.wordmarkShine,
+    active: shine && motionOk,
+    loop: false,
+    allowPlay: motionOk,
+  });
 
   useEffect(() => {
     document.documentElement.classList.add("deck-active");
@@ -134,6 +159,22 @@ export function Bridge() {
   useEffect(() => {
     document.body.classList.toggle("low-power", eco);
   }, [eco]);
+
+  useEffect(() => {
+    const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const sync = () => setReduced(mq.matches);
+    sync();
+    mq.addEventListener("change", sync);
+    return () => mq.removeEventListener("change", sync);
+  }, []);
+
+  useEffect(() => {
+    const el = shineRef.current;
+    if (!el || !shine) return;
+    const onEnded = () => setShine(false);
+    el.addEventListener("ended", onEnded);
+    return () => el.removeEventListener("ended", onEnded);
+  }, [shine]);
 
   useEffect(() => {
     const tick = () =>
@@ -289,9 +330,6 @@ export function Bridge() {
       ? COPY.systemsNominal
       : statusLine.toUpperCase();
 
-  const speaking =
-    hudState === "speaking" || hudState === "streaming" || hudState === "thinking";
-
   const activeVotes = tank.filter((t) => t.vote === "LONG" || t.vote === "SHORT" || t.vote === "HOLD");
   const longs = activeVotes.filter((t) => t.vote === "LONG").length;
   const avgConf = activeVotes.length
@@ -310,16 +348,39 @@ export function Bridge() {
 
   return (
     <div id="stage-wrap">
-      <div id="stage" ref={stageRef}>
+      <div id="stage" ref={stageRef} data-hud={hudState}>
         <div className="ambient-dots" />
         <div className="ambient-scanlines" />
         <div className="ambient-sweep" />
 
         <header className="topbar">
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="badge" src="/brand/badge.png" alt="STARRA badge" />
-          {/* eslint-disable-next-line @next/next/no-img-element */}
-          <img className="wordmark" src="/brand/wordmark.png" alt="STARRA" />
+          <div className="badge-wrap">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="badge" src="/brand/badge.png" alt="STARRA badge" />
+            <video
+              ref={badgeCineRef}
+              className="badge-cine"
+              muted
+              playsInline
+              loop
+              preload="metadata"
+              style={{ opacity: motionOk ? 0.55 : 0 }}
+              aria-hidden
+            />
+          </div>
+          <div className="wordmark-wrap">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="wordmark" src="/brand/wordmark.png" alt="STARRA" />
+            <video
+              ref={shineRef}
+              className="wordmark-cine"
+              muted
+              playsInline
+              preload="metadata"
+              style={{ opacity: shine && motionOk ? 0.85 : 0 }}
+              aria-hidden
+            />
+          </div>
           <div className="topbar-id">
             <span className="topbar-label">
               STARGATE&nbsp;·&nbsp;STARRA&nbsp;LLC&nbsp;COMMAND
@@ -559,7 +620,7 @@ export function Bridge() {
 
           {/* ── CENTER ── */}
           <div className="col col-center">
-            <ReactorEye speaking={speaking} label={coreLabel} onMic={onMic} />
+            <ReactorEye hudState={hudState} label={coreLabel} onMic={onMic} />
             <DeckConsole onMic={onMic} />
           </div>
 

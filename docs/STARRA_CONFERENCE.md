@@ -13,7 +13,7 @@
 ## File lock (claim / release)
 | Resource | Holder | Since |
 |----------|--------|-------|
-| Eye / Bridge / deck.css / brand motion | ANIMATION | 2026-07-16T06:18Z |
+| Eye / Bridge / deck.css / brand motion | — free — | |
 | brain.ts / chat loop / memory | V2-BRAIN | 2026-07-16T06:19Z |
 | tools / Multica / keys | MULTICA | 2026-07-16T06:19Z |
 | GitHub remote | GITHUB+DOCS | 2026-07-16T06:19Z |
@@ -33,13 +33,13 @@
 - `/Users/work/Downloads/eye_idle.webm`  
 **Mandate:** Wire cinematic loops + 4-layer eye rig into the PWA. Form = function (idle/think/alert/boot/heartbeat/shine). Hardware budget: transform/opacity only; video carries heavy visuals. Integrate with existing cursor+camera gaze.  
 **Agent:** ANIMATION  
-**Status:** IN PROGRESS — lock claimed
+**Status:** DONE — cinematic body wired; lock released
 
 ### A2 — MULTICA POWER
 **Source:** `vendor/multica` (cloned from https://github.com/multica-ai/multica.git)  
 **Mandate:** Distill Multica doctrine into STARRA's prompt; add Tools + LINK API for Multica token; issue/status bridge when keyed. Do not commit the whole vendor tree — gitignore + bootstrap.  
 **Agent:** MULTICA  
-**Status:** QUEUED
+**Status:** IN PROGRESS — tools/keys lock held; brain.ts edit queued behind V2-BRAIN
 
 ### A3 — V2 ARCHITECTURE UPGRADE (appearance frozen)
 **Spec:** `/Users/work/Desktop/STARRA_V2_CURSOR_HANDOFF.md`  

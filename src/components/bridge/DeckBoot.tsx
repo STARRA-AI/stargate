@@ -1,7 +1,8 @@
 "use client";
 
 import Image from "next/image";
-import { useEffect, useState } from "react";
+import { MOTION } from "@/lib/motion/assets";
+import { useEffect, useRef, useState } from "react";
 
 const BOOT_LINES = [
   "INITIALIZING STARGATE KERNEL",
@@ -18,6 +19,7 @@ export function DeckBoot({ onDone }: { onDone: () => void }) {
   const [lines, setLines] = useState<string[]>([]);
   const [pct, setPct] = useState(0);
   const [phase, setPhase] = useState<"run" | "fading" | "hidden">("run");
+  const bootCineRef = useRef<HTMLVideoElement>(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -44,10 +46,42 @@ export function DeckBoot({ onDone }: { onDone: () => void }) {
     };
   }, [onDone]);
 
+  /* panel_boot.webm — one-shot stage ignition behind boot chrome */
+  useEffect(() => {
+    const el = bootCineRef.current;
+    if (!el) return;
+    const reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    const eco = document.body.classList.contains("low-power");
+    if (reduce || eco) return;
+
+    el.src = MOTION.panelBoot;
+    el.muted = true;
+    el.playsInline = true;
+    el.loop = false;
+    const play = () => {
+      void el.play().catch(() => {});
+    };
+    if (el.readyState >= 2) play();
+    else el.addEventListener("canplay", play, { once: true });
+
+    return () => {
+      el.pause();
+      el.removeEventListener("canplay", play);
+    };
+  }, []);
+
   if (phase === "hidden") return null;
 
   return (
     <div id="boot-overlay" className={phase === "fading" ? "fading" : undefined}>
+      <video
+        ref={bootCineRef}
+        className="boot-cine"
+        muted
+        playsInline
+        preload="metadata"
+        aria-hidden
+      />
       <Image
         className="boot-badge"
         src="/brand/badge.png"
