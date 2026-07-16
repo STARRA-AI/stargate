@@ -1,5 +1,6 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { redact } from "@/lib/security/redact";
 
 export type Exchange = {
   role: "user" | "assistant";
@@ -43,7 +44,11 @@ export async function recordExchange(
   content: string,
 ): Promise<MemoryStore> {
   const store = await getMemory();
-  store.working.push({ role, content, at: new Date().toISOString() });
+  store.working.push({
+    role,
+    content: redact(content),
+    at: new Date().toISOString(),
+  });
 
   // Keep last ~10 raw exchanges in working; roll older into summary every 30
   if (store.working.length > 10) {
@@ -51,7 +56,7 @@ export async function recordExchange(
     const blob = overflow.map((e) => `${e.role}: ${e.content}`).join(" | ");
     store.archival.push({
       id: `arc-${Date.now()}`,
-      text: blob.slice(0, 500),
+      text: redact(blob.slice(0, 500)),
       at: new Date().toISOString(),
     });
   }
@@ -66,7 +71,7 @@ export async function recordExchange(
         .join(" ")
         .slice(0, 400);
       if (para && !store.summaries.includes(para)) {
-        store.summaries.push(para);
+        store.summaries.push(redact(para));
       }
     }
   }

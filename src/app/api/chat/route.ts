@@ -1,4 +1,4 @@
-import { buildSystemPrompt } from "@/lib/brain";
+import { buildSystemPromptBlocks } from "@/lib/brain";
 import { getTier1, serializeTier1 } from "@/lib/context/tier1";
 import {
   getMemory,
@@ -20,6 +20,13 @@ import {
 } from "@/lib/llm/ollama";
 import { addTokens } from "@/lib/metrics";
 import { pushFeed } from "@/lib/feed";
+import { fenceUntrusted } from "@/lib/security/fencing";
+import { redact } from "@/lib/security/redact";
+import {
+  runAnthropicAgent,
+  streamAnthropicCached,
+} from "@/lib/agent/anthropic";
+import { MAX_AGENT_TURNS } from "@/lib/agent/loop";
 
 export const runtime = "nodejs";
 export const maxDuration = 180;
@@ -58,6 +65,7 @@ async function* stubStream(message: string) {
   }
 }
 
+/** Fast keyword tools — still count as a single agent turn (Phase 0). */
 async function maybeToolReply(lastUser: string): Promise<string | null> {
   const q = lastUser.toLowerCase().trim();
 
@@ -93,7 +101,11 @@ async function maybeToolReply(lastUser: string): Promise<string | null> {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as { messages?: ChatMessage[] };
+  const body = (await req.json()) as {
+    messages?: ChatMessage[];
+    /** When true, Anthropic path may use tool_use (bounded by MAX_AGENT_TURNS). */
+    agentTools?: boolean;
+  };
   const messages = body.messages ?? [];
   const lastUser =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
@@ -108,15 +120,21 @@ export async function POST(req: Request) {
   const { model: ollamaModel } = ollamaConfig();
 
   const tPrompt = Date.now();
-  const system = buildSystemPrompt([
+  // Phase 2: build once per request — stable canon reused from in-process cache;
+  // volatile extras (memory/vault/pack) stay out of the Anthropic cache prefix.
+  const systemBlocks = buildSystemPromptBlocks([
     serializeTier1(tier1),
     memoryForPrompt(memory, lastUser),
     vaultForPrompt(vault.docs, lastUser),
     packPreview
-      ? `RECENT REPOMIX PREVIEW (truncated):\n${packPreview}`
+      ? fenceUntrusted(
+          `RECENT REPOMIX PREVIEW (truncated):\n${packPreview}`,
+          "repomix-pack",
+        )
       : 'RECENT REPOMIX PREVIEW: none — operator can say "pack the repo".',
-    `RUNTIME: Prefer grounded STARRA canon. Local free model when Ollama is up (${ollamaModel}) with Fable-inspired reasoning scaffold.`,
+    `RUNTIME: Prefer grounded STARRA canon. Local free model when Ollama is up (${ollamaModel}) with Fable-inspired reasoning scaffold. Agent tool rounds capped at ${MAX_AGENT_TURNS}.`,
   ]);
+  const system = systemBlocks.full;
   // #region agent log
   fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
     method: "POST",
@@ -131,10 +149,13 @@ export async function POST(req: Request) {
       data: {
         model: ollamaModel,
         systemChars: system.length,
+        stableChars: systemBlocks.stable.length,
+        volatileChars: systemBlocks.volatile.length,
         lastUserChars: lastUser.length,
         promptBuildMs: Date.now() - tPrompt,
         prefer: (process.env.LLM_PROVIDER || "auto").toLowerCase(),
         ollamaPriority: process.env.OLLAMA_PRIORITY === "1",
+        maxAgentTurns: MAX_AGENT_TURNS,
       },
       timestamp: Date.now(),
       hypothesisId: "H-C2",
@@ -146,7 +167,7 @@ export async function POST(req: Request) {
   if (lastUser) {
     await recordExchange("user", lastUser);
     addTokens(lastUser.length + system.length / 8);
-    pushFeed("EXEC", `Operator: ${lastUser.slice(0, 70)}`);
+    pushFeed("EXEC", `Operator: ${redact(lastUser).slice(0, 70)}`);
   }
 
   const encoder = new TextEncoder();
@@ -158,6 +179,8 @@ export async function POST(req: Request) {
       | "anthropic";
 
   const toolReply = lastUser ? await maybeToolReply(lastUser) : null;
+  const useAgentTools =
+    body.agentTools === true || process.env.STARRA_AGENT_TOOLS === "1";
 
   const stream = new ReadableStream({
     async start(controller) {
@@ -202,6 +225,7 @@ export async function POST(req: Request) {
                   hasAnthropic: Boolean(anthropicKey),
                   prefer,
                   model: ollamaModel,
+                  useAgentTools,
                 },
                 timestamp: Date.now(),
                 hypothesisId: "H-C4",
@@ -275,26 +299,26 @@ export async function POST(req: Request) {
             ).catch(() => {});
             // #endregion
           } else if (anthropicKey && prefer !== "ollama") {
-            const Anthropic = (await import("@anthropic-ai/sdk")).default;
-            const client = new Anthropic({ apiKey: anthropicKey });
-            const response = await client.messages.create({
-              model: "claude-sonnet-4-20250514",
-              max_tokens: 1024,
-              system,
-              messages: messages.map((m) => ({
-                role: m.role,
-                content: m.content,
-              })),
-              stream: true,
-            });
-
-            for await (const event of response) {
-              if (
-                event.type === "content_block_delta" &&
-                event.delta.type === "text_delta"
-              ) {
-                push(event.delta.text);
+            if (useAgentTools) {
+              // Phase 0: bounded tool loop (non-stream rounds → stub stream final).
+              const result = await runAnthropicAgent({
+                apiKey: anthropicKey,
+                system: systemBlocks,
+                messages,
+                enableTools: true,
+              });
+              if (result.capped) {
+                pushFeed("ORACLE", `Agent loop capped at ${result.turns} turns`);
               }
+              for await (const chunk of stubStream(result.text)) push(chunk);
+            } else {
+              // Phase 2: streaming with cache_control on stable system block.
+              await streamAnthropicCached({
+                apiKey: anthropicKey,
+                system: systemBlocks,
+                messages,
+                onText: (t) => push(t),
+              });
             }
           } else if (ollamaUp && hasModel) {
             const localSystem = clipSystemForLocal(system);

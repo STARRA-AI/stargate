@@ -1,5 +1,7 @@
 import { promises as fs } from "fs";
 import path from "path";
+import { redact } from "@/lib/security/redact";
+import { fenceUntrusted } from "@/lib/security/fencing";
 
 export type VaultDoc = {
   id: string;
@@ -85,8 +87,8 @@ export async function ingestTextFile(
     id,
     name,
     mime,
-    text: text.slice(0, 50000),
-    facts: extractFacts(text),
+    text: redact(text.slice(0, 50000)),
+    facts: extractFacts(text).map((f) => redact(f)),
     at: new Date().toISOString(),
   };
 
@@ -105,11 +107,12 @@ export function vaultForPrompt(docs: VaultDoc[], query: string): string {
     return bs - as;
   });
   const top = ranked.slice(0, 3);
-  return [
+  const body = [
     "VAULT FACTS",
     ...top.map(
       (d) =>
         `${d.name}: ${d.facts.slice(0, 5).join(" · ") || d.text.slice(0, 200)}`,
     ),
   ].join("\n");
+  return fenceUntrusted(body, "vault");
 }

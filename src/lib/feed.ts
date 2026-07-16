@@ -3,6 +3,8 @@
  * (chat, tool calls, market refresh, proposal decisions).
  */
 
+import { redact } from "@/lib/security/redact";
+
 export type FeedLine = {
   id: string;
   time: string;
@@ -42,7 +44,7 @@ export function pushFeed(tag: string, text: string) {
     }),
     tag: `[${tag}]`,
     color: TAG_COLORS[tag] ?? TAG_COLORS.SYS,
-    text,
+    text: redact(text, 160),
   });
   if (list.length > 60) list.length = 60;
 }
