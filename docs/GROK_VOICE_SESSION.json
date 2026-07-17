@@ -1,0 +1,103 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "STARGATE handoff — xAI Voice Agent session template. Paste STARRA_GROK_SYSTEM.md body into session.instructions before connect. WebSocket: wss://api.x.ai/v1/realtime?model=grok-voice-latest",
+  "websocket_url": "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
+  "auth": {
+    "header": "Authorization",
+    "value": "Bearer ${XAI_API_KEY}",
+    "note": "For browser clients use ephemeral token from POST /v1/realtime/client_secrets — never expose raw key in client bundle."
+  },
+  "session_update": {
+    "type": "session.update",
+    "session": {
+      "voice": "ara",
+      "instructions": "<PASTE CONTENTS OF docs/STARRA_GROK_SYSTEM.md HERE>",
+      "turn_detection": {
+        "type": "server_vad"
+      },
+      "audio": {
+        "input": {
+          "format": {
+            "type": "audio/pcm",
+            "rate": 24000
+          }
+        },
+        "output": {
+          "format": {
+            "type": "audio/pcm",
+            "rate": 24000
+          }
+        }
+      },
+      "tools": [
+        {
+          "type": "function",
+          "name": "stargate_status",
+          "description": "Operator deck snapshot: LLM link, tier-1 tasks, memory counts, canon load status.",
+          "parameters": {
+            "type": "object",
+            "properties": {},
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "stargate_memory_search",
+          "description": "Search STARGATE working memory, summaries, and archival tiers.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "query": {
+                "type": "string",
+                "description": "Search string (case-insensitive substring match)."
+              }
+            },
+            "required": ["query"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "function",
+          "name": "stargate_queue_brief",
+          "description": "Queue a Silent Shadow / OpenMontage video brief. Human posting gate — does not auto-publish.",
+          "parameters": {
+            "type": "object",
+            "properties": {
+              "topic": {
+                "type": "string",
+                "description": "Brief topic or hook for the short."
+              },
+              "pipeline": {
+                "type": "string",
+                "enum": ["silent-shadow-short", "book-of-starra"],
+                "default": "silent-shadow-short"
+              }
+            },
+            "required": ["topic"],
+            "additionalProperties": false
+          }
+        },
+        {
+          "type": "web_search",
+          "type_comment": "xAI built-in — enable when operator needs live web intel."
+        }
+      ]
+    }
+  },
+  "bridge_proxy_target": {
+    "comment": "When STARGATE Bridge hosts the Realtime client, replace OpenAI stub at POST /api/realtime with xAI client_secrets + model grok-voice-latest, voice ara.",
+    "route": "/api/realtime",
+    "expected_response_live": {
+      "mode": "live",
+      "client_secret": "<ephemeral>",
+      "model": "grok-voice-latest",
+      "voice": "ara"
+    }
+  },
+  "notes": [
+    "Ara = xAI built-in voice (consensus: Aria maps to Ara in xAI roster).",
+    "grok-voice-latest tracks current recommended model (e.g. grok-voice-think-fast-1.0).",
+    "OpenAI Realtime-compatible — same event types (session.update, input_audio_buffer.append, response.output_audio.delta).",
+    "See docs/VOICE-INTEGRATION.md for Bridge swap spec."
+  ]
+}

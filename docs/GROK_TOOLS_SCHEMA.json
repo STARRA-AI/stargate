@@ -1,0 +1,281 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$comment": "Function-tool stubs for Grok Voice / Chat — map handlers to STARGATE /api/* when Bridge is running on localhost:3000 (or deployed origin). Schema only; no secrets.",
+  "tools": [
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_status",
+        "description": "Full operator status: LLM provider, Ollama health, soul/brain canon load, tier-1 snap (tasks, pipeline, memory counts).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "routes": [
+          { "method": "GET", "path": "/api/llm/status" },
+          { "method": "GET", "path": "/api/context" }
+        ],
+        "merge": "Combine llm.status + context.snap into one spoken brief."
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_memory_search",
+        "description": "Search STARGATE memory store (working, summaries, archival).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "query": {
+              "type": "string",
+              "description": "Case-insensitive substring to match in memory entries."
+            }
+          },
+          "required": ["query"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/memory?q={query}" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_memory_read",
+        "description": "Return full memory store when operator asks for everything on file.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/memory" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_tier1_read",
+        "description": "Read Tier-1 context: goals, projects, tasks, decisions, MRR label.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/context" },
+        "field": "tier1"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_tier1_update",
+        "description": "Update Tier-1 context. Requires human gate — confirm with operator before PUT.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "tier1": {
+              "type": "object",
+              "description": "Full Tier1Schema object — see src/lib/context/tier1.ts"
+            }
+          },
+          "required": ["tier1"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "PUT", "path": "/api/context" },
+        "gate": "operator_confirmation_required"
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_queue_brief",
+        "description": "Queue OpenMontage video brief (Silent Shadow short or Book of Starra). Higgsfield retired.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "topic": { "type": "string" },
+            "brief": { "type": "string", "description": "Optional extended brief text." },
+            "pipeline": {
+              "type": "string",
+              "enum": ["silent-shadow-short", "book-of-starra"],
+              "default": "silent-shadow-short"
+            }
+          },
+          "required": ["topic"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": {
+          "method": "POST",
+          "path": "/api/tools/openmontage",
+          "body": { "topic": "{topic}", "brief": "{brief}", "pipeline": "{pipeline}" }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_montage_status",
+        "description": "OpenMontage queue status and pending jobs.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/tools/openmontage" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_repomix_pack",
+        "description": "Pack repo via Repomix into data/packs/stargate-repomix.xml.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "target": {
+              "type": "string",
+              "description": "Optional subpath to pack; default whole repo."
+            }
+          },
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "routes": [
+          { "method": "POST", "path": "/api/tools/repomix", "body": { "target": "{target}" } },
+          { "method": "GET", "path": "/api/tools/repomix" }
+        ]
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_multica_status",
+        "description": "Multica integration health: vendor clone, CLI, PAT link.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/tools/multica?action=status" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_multica_list_issues",
+        "description": "List Multica issues for a workspace.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "workspaceId": { "type": "string" }
+          },
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": {
+          "method": "GET",
+          "path": "/api/tools/multica?action=issues&workspaceId={workspaceId}"
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_dragon_snapshot",
+        "description": "Dragon Tradar deck: Kalshi watchlist + portfolio. Not financial advice.",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/dragon" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_think_tank",
+        "description": "Think Tank vote snapshot (uses keyed providers including xAI grok-3-mini).",
+        "parameters": {
+          "type": "object",
+          "properties": {},
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "GET", "path": "/api/tank" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_feed_push",
+        "description": "Push a line to the Bridge deck feed (max 160 chars).",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "tag": { "type": "string", "default": "SYS" },
+            "text": { "type": "string", "maxLength": 160 }
+          },
+          "required": ["text"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": {
+          "method": "POST",
+          "path": "/api/feed",
+          "body": { "tag": "{tag}", "text": "{text}" }
+        }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_chat",
+        "description": "Fallback text brain when not in Realtime mode. Streams SSE from full canon pipeline.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "message": { "type": "string" }
+          },
+          "required": ["message"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": {
+          "method": "POST",
+          "path": "/api/chat",
+          "body": { "messages": [{ "role": "user", "content": "{message}" }] },
+          "response": "SSE stream — aggregate text chunks before TTS in Path B"
+        }
+      }
+    }
+  ],
+  "xai_builtin_tools_optional": [
+    { "type": "web_search", "when": "operator needs live web intel" },
+    { "type": "x_search", "when": "operator needs X/Twitter realtime" },
+    { "type": "file_search", "when": "xAI file store attached" }
+  ]
+}
