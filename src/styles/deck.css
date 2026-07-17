@@ -263,14 +263,23 @@ input::placeholder { color: #7a63a8; }
 .site-delta { font-family: var(--mono); font-size: 11px; color: var(--good); }
 
 /* ── center: reactor (4-layer eye rig) ── */
-.col-center { min-width: 0; }
-.reactor-stage { flex: 1; position: relative; min-height: 0; }
+.col-center { min-width: 0; overflow: visible; }
+.reactor-stage {
+  flex: 1 1 0;
+  position: relative;
+  min-height: 460px;
+  overflow: visible;
+  z-index: 2;
+}
 .reactor {
   position: absolute; top: 50%; left: 50%; width: 0; height: 0;
   --pupil-scale: 1;
+  overflow: visible;
 }
 .eye-socket {
   position: absolute; top: 0; left: 0; width: 0; height: 0;
+  overflow: visible;
+  isolation: isolate;
 }
 .eye-gimbal {
   position: absolute; top: 0; left: 0; width: 0; height: 0;
@@ -279,20 +288,24 @@ input::placeholder { color: #7a63a8; }
 }
 /* wrappers so gaze translates don't fight ring spin keyframes */
 .ring-parallax { position: absolute; top: 0; left: 0; width: 0; height: 0; will-change: transform; }
-.ring { position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen; }
+/* max-width:none — Tailwind preflight img{max-width:100%} collapses rings inside 0×0 gaze wrappers */
+.ring {
+  position: absolute; top: 0; left: 0; object-fit: contain; mix-blend-mode: screen;
+  z-index: 1; pointer-events: none; max-width: none; max-height: none;
+}
 .ring-outer {
-  width: 420px; height: 420px; margin-left: -210px; margin-top: -210px;
-  animation: spinCW 40s linear infinite; opacity: 0.95;
-  filter: drop-shadow(0 0 14px rgba(176,77,252,0.55));
+  width: 440px; height: 440px; margin-left: -220px; margin-top: -220px;
+  animation: spinCW 40s linear infinite; opacity: 1;
+  filter: drop-shadow(0 0 18px rgba(176,77,252,0.7)) brightness(1.12);
 }
 .ring-inner {
-  width: 260px; height: 260px; margin-left: -130px; margin-top: -130px;
-  animation: spinCCW 18s linear infinite; opacity: 0.72;
-  filter: drop-shadow(0 0 10px rgba(211,139,255,0.4));
+  width: 280px; height: 280px; margin-left: -140px; margin-top: -140px;
+  animation: spinCCW 18s linear infinite; opacity: 0.92;
+  filter: drop-shadow(0 0 12px rgba(211,139,255,0.55)) brightness(1.08);
 }
 .ring-pupil {
-  width: 118px; height: 118px; margin-left: -59px; margin-top: -59px;
-  opacity: 0.9; filter: drop-shadow(0 0 8px rgba(211,139,255,0.5));
+  width: 130px; height: 130px; margin-left: -65px; margin-top: -65px;
+  opacity: 0.98; filter: drop-shadow(0 0 10px rgba(211,139,255,0.6)) brightness(1.06);
 }
 .reactor.think .ring-inner { animation-duration: 8.8s; } /* ×2.5 think spin */
 .reactor.sleep .ring-outer { animation-duration: 90s; }
@@ -573,28 +586,38 @@ input::placeholder { color: #7a63a8; }
   height: 220px;
   display: grid;
   place-items: center;
+  overflow: visible;
+  isolation: isolate;
 }
-.mobile-reactor-rings,
-.mobile-reactor-rings::before {
-  content: "";
+.mobile-ring {
   position: absolute;
-  inset: 0;
-  border-radius: 999px;
-  background: center / contain no-repeat url("/brand/hud_ring.png");
+  object-fit: contain;
   mix-blend-mode: screen;
+  pointer-events: none;
+  z-index: 1;
+  max-width: none;
+  max-height: none;
 }
-.mobile-reactor-rings {
+.mobile-ring-outer {
+  inset: 0;
+  width: 100%;
+  height: 100%;
   animation: spinCW 40s linear infinite;
-  filter: drop-shadow(0 0 20px rgba(168,85,247,0.4));
+  filter: drop-shadow(0 0 20px rgba(168,85,247,0.65)) brightness(1.15);
+  opacity: 1;
 }
-.mobile-reactor-rings::before {
-  inset: 22%;
+.mobile-ring-inner {
+  inset: 18%;
+  width: 64%;
+  height: 64%;
+  margin: auto;
   animation: spinCCW 18s linear infinite;
-  opacity: 0.76;
+  filter: drop-shadow(0 0 12px rgba(211,139,255,0.5)) brightness(1.1);
+  opacity: 0.9;
 }
 .mobile-hero-badge {
   position: relative;
-  z-index: 1;
+  z-index: 2;
   width: 112px;
   height: 112px;
   min-width: 44px;
@@ -618,8 +641,8 @@ input::placeholder { color: #7a63a8; }
   width: 100%;
   height: 100%;
   object-fit: contain;
-  mix-blend-mode: screen;
   animation: badgeBreath 3s ease-in-out infinite;
+  filter: drop-shadow(0 0 14px rgba(168,85,247,0.55));
 }
 .mobile-hud-listening .mobile-hero-badge img,
 .mobile-hud-wake .mobile-hero-badge img {
@@ -860,8 +883,8 @@ body.low-power .console { backdrop-filter: none; }
 body.low-power .chat-line,
 body.low-power .feed-line,
 body.low-power .mobile-feed-line { animation: none; }
-body.low-power .mobile-reactor-rings,
-body.low-power .mobile-reactor-rings::before { animation: none; }
+body.low-power .mobile-ring-outer,
+body.low-power .mobile-ring-inner { animation: none; }
 body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0 8px rgba(168,85,247,0.45)); }
 
 @media (prefers-reduced-motion: reduce) {
@@ -877,8 +900,8 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
   .reactor-core,
   .ambient-dots,
   .ambient-sweep,
-  .mobile-reactor-rings,
-  .mobile-reactor-rings::before {
+  .mobile-ring-outer,
+  .mobile-ring-inner {
     animation: none !important;
   }
   .badge-cine, .wordmark-cine, .eye-cine, .boot-cine { opacity: 0 !important; }

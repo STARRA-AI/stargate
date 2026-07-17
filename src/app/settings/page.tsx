@@ -51,6 +51,40 @@ function LlmStatus() {
   );
 }
 
+function WakeWordToggle() {
+  const [on, setOn] = useState(true);
+
+  useEffect(() => {
+    void import("@/lib/voice/wake-word").then(({ getWakeWordEnabled }) => {
+      setOn(getWakeWordEnabled());
+    });
+  }, []);
+
+  async function toggle() {
+    const { setWakeWordEnabled, getWakeWordEnabled } = await import(
+      "@/lib/voice/wake-word"
+    );
+    setWakeWordEnabled(!getWakeWordEnabled());
+    setOn(getWakeWordEnabled());
+  }
+
+  return (
+    <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
+      <span>
+        Wake word — say &quot;starra&quot; (mic stays listening while deck is open)
+      </span>
+      <button
+        type="button"
+        onClick={() => void toggle()}
+        className="focus-magenta shrink-0 border border-[var(--border)] px-3 py-1 text-[10px] tracking-widest uppercase"
+        aria-pressed={on}
+      >
+        {on ? "ON" : "OFF"}
+      </button>
+    </label>
+  );
+}
+
 function VoicePicker() {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selected, setSelected] = useState<string>("");
@@ -279,9 +313,11 @@ export default function SettingsPage() {
               className="mt-2 w-full accent-[var(--purple)]"
             />
           </label>
+          <WakeWordToggle />
           <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-            Wake: ⌥ + Space · Brain: Fable-reasoning scaffold on local Ollama
-            (qwen2.5:1.5b) · Anthropic optional
+            Wake: say &quot;starra&quot; or ⌥ + Space · Launch:{" "}
+            <span className="text-[var(--magenta)]">npm run starra</span> · Brain:
+            local Ollama (qwen2.5:1.5b) · Anthropic optional
           </p>
           <LlmStatus />
         </section>

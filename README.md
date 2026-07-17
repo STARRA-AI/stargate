@@ -11,10 +11,12 @@ cd ~/Projects/stargate
 cp .env.example .env.local   # optional: ANTHROPIC_API_KEY, OPENAI_API_KEY
 npm install
 npm run tools:bootstrap      # OpenMontage + system_prompts_leaks + distill
-npm run dev
+npm run starra:install       # once — `starra` on PATH + double-click STARRA.command
+starra                       # Ollama + deck + browser
 ```
 
-Open [http://localhost:3000](http://localhost:3000).
+Or: `npm run starra`. Open [http://localhost:3000](http://localhost:3000).  
+Wake: say **“starra”** or ⌥+Space. See [`docs/LAUNCH.md`](docs/LAUNCH.md).
 
 ## Local free brain (Fable reasoning + Ollama)
 

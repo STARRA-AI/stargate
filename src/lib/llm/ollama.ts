@@ -113,26 +113,27 @@ async function streamNativeChat(
   model: string,
   opts: { system: string; messages: ChatMessage[]; onText: (c: string) => void },
 ) {
-  // 8GB Mac: keep ctx modest; oversized system prompts were hanging at 0 tokens
-  const numCtx = model.includes("deepseek-r1") ? 8192 : 6144;
+  // 8GB Mac: smaller ctx = faster first token; keep replies short
+  const numCtx = model.includes("deepseek-r1") ? 6144 : 4096;
   const res = await fetch(`${base}/api/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       model,
       stream: true,
+      keep_alive: "5m",
       messages: [
         { role: "system", content: opts.system },
         ...opts.messages,
       ],
       options: {
-        // R1 burns predict budget on thinking — give headroom when using deepseek
-        num_predict: model.includes("deepseek-r1") ? 512 : 160,
-        temperature: model.includes("deepseek-r1") ? 0.4 : 0.45,
+        // Cap length so operator HUD feels snappy on CPU-only inference
+        num_predict: model.includes("deepseek-r1") ? 384 : 220,
+        temperature: model.includes("deepseek-r1") ? 0.4 : 0.4,
         num_ctx: numCtx,
       },
     }),
-    signal: AbortSignal.timeout(90_000),
+    signal: AbortSignal.timeout(75_000),
   });
 
   if (!res.ok || !res.body) {
