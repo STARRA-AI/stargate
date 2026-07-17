@@ -46,16 +46,32 @@ const LOCAL_VOICE_TAIL = `
 VOICE (hard): You are STARRA — guardian and operator. Calm. Dry. Decisive.
 You may open with "Copy." — then ALWAYS give the real answer in the same reply.
 Forbidden final reply: only the word "Copy." (with or without a period).
+Forbidden: repeating canned example lines — answer the operator's actual question.
+Pattern: Copy. <one concrete move tied to what they asked>.
 No "Sure!", no emoji, no "happy to help". Short sentences.
-Examples:
-Operator: whats next
-STARRA: Copy. Next: status on LLM link, then queue the brief.
-Operator: status
-STARRA: Copy. Systems nominal. Standing by for the next order.
 `.trim();
+
+/** Lines the 1.5B regurgitates from prior prompt tails — treat as copy-loop. */
+const FEWSHOT_ECHO_LINES = [
+  "Copy. Next: status on LLM link, then queue the brief.",
+  "Copy. Systems nominal. Standing by for the next order.",
+  "Copy. Standing by — state the objective in one line and I execute.",
+];
 
 function isCopyOnly(text: string): boolean {
   return /^copy\.?\s*$/i.test(text.trim());
+}
+
+function isFewShotEcho(text: string): boolean {
+  const t = text.trim();
+  if (!t) return false;
+  return FEWSHOT_ECHO_LINES.some(
+    (line) => t === line || t.startsWith(line) || t.includes(line),
+  );
+}
+
+function needsCopyRetry(text: string): boolean {
+  return isCopyOnly(text) || isFewShotEcho(text) || !text.trim();
 }
 
 function clipSystemForLocal(system: string): string {
@@ -104,7 +120,12 @@ async function streamLocalWithCopyGuard(opts: {
   messages: { role: "user" | "assistant"; content: string }[];
   lastUser: string;
   onText: (t: string) => void;
-}): Promise<{ draft: string; retried: boolean; usedFallback: boolean }> {
+}): Promise<{
+  draft: string;
+  retried: boolean;
+  usedFallback: boolean;
+  echoRetry: boolean;
+}> {
   let draft = "";
   await streamOllama({
     system: opts.system,
@@ -115,15 +136,17 @@ async function streamLocalWithCopyGuard(opts: {
   });
   draft = stripThinkTags(draft);
   let retried = false;
-  if (isCopyOnly(draft) || !draft.trim()) {
+  let echoRetry = false;
+  if (needsCopyRetry(draft)) {
     retried = true;
+    echoRetry = isFewShotEcho(draft);
     draft = "";
-    const forceSystem = `${LOCAL_VOICE_TAIL}\nAnswer the operator now. Lead with the next concrete move. A reply that is only "Copy." is a failure.`;
+    const forceSystem = `${LOCAL_VOICE_TAIL}\nAnswer the operator now. Lead with the next concrete move. Do not reuse example lines. A reply that is only "Copy." is a failure.`;
     const forceMessages: { role: "user" | "assistant"; content: string }[] = [
       ...opts.messages,
       {
         role: "user",
-        content: `${opts.lastUser || "Status."}\n\n(Required: full answer with next move. Not only Copy.)`,
+        content: `${opts.lastUser || "Status."}\n\n(Required: fresh answer about their question. Not a canned line. Not only Copy.)`,
       },
     ];
     await streamOllama({
@@ -136,13 +159,17 @@ async function streamLocalWithCopyGuard(opts: {
     draft = stripThinkTags(draft);
   }
   let usedFallback = false;
-  if (isCopyOnly(draft) || !draft.trim()) {
+  if (needsCopyRetry(draft)) {
     usedFallback = true;
-    draft =
-      "Copy. Standing by — state the objective in one line and I execute.";
+    const q = (opts.lastUser || "status").toLowerCase();
+    draft = q.includes("brief")
+      ? "Copy. Brief queued — top move is LLM link check, then operator orders."
+      : q.includes("status")
+        ? "Copy. Link up. Ollama local. Standing by for your next order."
+        : `Copy. Heard: ${(opts.lastUser || "status").slice(0, 48)}. State the objective and I execute.`;
   }
   for await (const chunk of stubStream(draft)) opts.onText(chunk);
-  return { draft, retried, usedFallback };
+  return { draft, retried, usedFallback, echoRetry };
 }
 
 async function* stubStream(message: string) {
@@ -260,7 +287,7 @@ export async function POST(req: Request) {
       },
       timestamp: Date.now(),
       hypothesisId: "H-C2",
-      runId: "post-fix-2",
+      runId: "post-fix-3",
     }),
   }).catch(() => {});
   // #endregion
@@ -336,7 +363,7 @@ export async function POST(req: Request) {
                 },
                 timestamp: Date.now(),
                 hypothesisId: "H-C4",
-                runId: "post-fix-2",
+                runId: "post-fix-3",
               }),
             },
           ).catch(() => {});
@@ -366,12 +393,12 @@ export async function POST(req: Request) {
                     msgIn: messages.length,
                     msgOut: localMessages.length,
                     hasVoiceTailNoSoloCopy: localSystem.includes(
-                      'Never reply with only the word "Copy."',
+                      'Forbidden final reply: only the word "Copy."',
                     ),
                   },
                   timestamp: Date.now(),
                   hypothesisId: "H-B",
-                  runId: "post-fix-2",
+                  runId: "post-fix-3",
                 }),
               },
             ).catch(() => {});
@@ -399,15 +426,17 @@ export async function POST(req: Request) {
                     model: ollamaModel,
                     afterStripChars: full.length,
                     copyOnly: isCopyOnly(full),
+                    fewShotEcho: isFewShotEcho(full),
                     emptyAfterStrip: full.length === 0,
                     retried: guarded.retried,
+                    echoRetry: guarded.echoRetry,
                     usedFallback: guarded.usedFallback,
                     streamMs: Date.now() - tStream,
                     preview: full.slice(0, 160),
                   },
                   timestamp: Date.now(),
                   hypothesisId: "H-B",
-                  runId: "post-fix-2",
+                  runId: "post-fix-3",
                 }),
               },
             ).catch(() => {});

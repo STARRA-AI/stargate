@@ -45,10 +45,62 @@ export async function speakStarra(
     window.speechSynthesis.resume();
   }
 
-  if (await piperModelAvailable()) {
+  const piperAvailable = await piperModelAvailable();
+  // #region agent log
+  fetch(
+    "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+    {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Debug-Session-Id": "f8c9f7",
+      },
+      body: JSON.stringify({
+        sessionId: "f8c9f7",
+        location: "speak.ts:entry",
+        message: "speakStarra start",
+        data: {
+          textChars: text.length,
+          piperAvailable,
+          pausedBefore,
+          voiceCount: window.speechSynthesis?.getVoices().length ?? 0,
+        },
+        timestamp: Date.now(),
+        hypothesisId: "H-A",
+        runId: "post-fix-3",
+      }),
+    },
+  ).catch(() => {});
+  // #endregion
+
+  if (piperAvailable) {
     const { speakPiper } = await import("@/lib/voice/piper-runtime");
-    const ok = await speakPiper(text, signal);
-    if (ok && !signal?.aborted) {
+    const piperOk = await Promise.race<boolean>([
+      speakPiper(text, signal),
+      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000)),
+    ]);
+    // #region agent log
+    fetch(
+      "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
+      {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-Debug-Session-Id": "f8c9f7",
+        },
+        body: JSON.stringify({
+          sessionId: "f8c9f7",
+          location: "speak.ts:piper-branch",
+          message: piperOk ? "piper spoke" : "piper skipped or timed out",
+          data: { piperOk, aborted: signal?.aborted ?? false },
+          timestamp: Date.now(),
+          hypothesisId: "H-E",
+          runId: "post-fix-3",
+        }),
+      },
+    ).catch(() => {});
+    // #endregion
+    if (piperOk && !signal?.aborted) {
       lastEngine = "piper";
       return "piper";
     }
@@ -101,7 +153,7 @@ export async function speakStarra(
             },
             timestamp: Date.now(),
             hypothesisId: "H-A",
-            runId: "post-fix-2",
+            runId: "post-fix-3",
           }),
         },
       ).catch(() => {});
@@ -131,7 +183,7 @@ export async function speakStarra(
             },
             timestamp: Date.now(),
             hypothesisId: "H-A",
-            runId: "post-fix-2",
+            runId: "post-fix-3",
           }),
         },
       ).catch(() => {});
