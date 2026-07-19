@@ -30,6 +30,19 @@ deck_up() {
   curl -sf --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
 }
 
+# Guard against the dead-symlink trap: if ~/.ollama/models is a symlink whose
+# target is gone (e.g. Storage reformatted/unmounted), Ollama's MkdirAll follows
+# the link, gets ENOENT, then mkdir()s the link itself → "mkdir …: file exists".
+# Removing a *dangling* link loses no data (the target is already gone).
+heal_default_models() {
+  local d="$HOME/.ollama/models"
+  if [[ -L "$d" && ! -e "$d" ]]; then
+    echo "⚠ ~/.ollama/models is a dangling symlink → $(readlink "$d")"
+    echo "  Healing: replacing dead link with a real directory (no models lost — target was gone)."
+    rm -f "$d" && mkdir -p "$d" && echo "● ~/.ollama/models is now a real directory"
+  fi
+}
+
 start_ollama() {
   if ollama_up; then
     echo "● Ollama already online"
@@ -39,6 +52,7 @@ start_ollama() {
     export OLLAMA_MODELS="$MODELS"
     echo "→ Ollama models: $OLLAMA_MODELS"
   else
+    heal_default_models
     echo "→ Ollama models: default (Storage not mounted)"
   fi
   export OLLAMA_HOST="127.0.0.1:11434"
