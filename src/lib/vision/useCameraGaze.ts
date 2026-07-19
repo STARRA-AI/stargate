@@ -22,11 +22,66 @@ declare global {
 }
 
 /**
+ * Lazily load a MediaPipe BlazeFace (short-range) detector from the locally
+ * vendored WASM + model (public/vendor/mediapipe — provision with
+ * `npm run face:download`). No CDN at runtime; STARGATE stays offline-capable.
+ * Wrapped to the FaceDetectorLike interface (originX/originY → x/y). Cached; on
+ * failure returns null so tick() degrades to the motion-centroid fallback.
+ * NOTE: frames never leave the browser — detection is entirely local, nothing
+ * is saved or uploaded.
+ */
+let mpDetectorPromise: Promise<FaceDetectorLike | null> | null = null;
+async function loadMediaPipeDetector(): Promise<FaceDetectorLike | null> {
+  if (mpDetectorPromise) return mpDetectorPromise;
+  mpDetectorPromise = (async () => {
+    try {
+      const { FaceDetector, FilesetResolver } = await import(
+        "@mediapipe/tasks-vision"
+      );
+      const fileset = await FilesetResolver.forVisionTasks(
+        "/vendor/mediapipe/wasm",
+      );
+      const detector = await FaceDetector.createFromOptions(fileset, {
+        baseOptions: {
+          modelAssetPath: "/vendor/mediapipe/blaze_face_short_range.tflite",
+          delegate: "CPU",
+        },
+        runningMode: "IMAGE",
+        minDetectionConfidence: 0.4,
+      });
+      return {
+        detect: async (source) => {
+          const res = detector.detect(source as HTMLCanvasElement);
+          return (res.detections ?? [])
+            .filter((d) => d.boundingBox)
+            .map((d) => ({
+              boundingBox: {
+                x: d.boundingBox!.originX,
+                y: d.boundingBox!.originY,
+                width: d.boundingBox!.width,
+                height: d.boundingBox!.height,
+              },
+            }));
+        },
+      };
+    } catch (err) {
+      console.warn(
+        "[useCameraGaze] MediaPipe face detector unavailable — run `npm run face:download`. Falling back to motion tracking.",
+        err,
+      );
+      mpDetectorPromise = null; // allow a retry next time the camera is armed
+      return null;
+    }
+  })();
+  return mpDetectorPromise;
+}
+
+/**
  * Camera gaze — STARRA watches the operator through the webcam.
- * Prefers Chromium FaceDetector when available; otherwise uses
- * frame-differencing motion centroid. Returns a unit-ish gaze vector
- * in screen space (x right, y down), mirrored so looking left at the
- * camera drives the iris left on the HUD.
+ * Real face tracking via MediaPipe BlazeFace (vendored, offline); if that model
+ * can't load, degrades to a frame-differencing motion centroid. Returns a
+ * unit-ish gaze vector in screen space (x right, y down), mirrored so looking
+ * left at the camera drives the iris left on the HUD.
  */
 export function useCameraGaze() {
   const [active, setActive] = useState(false);
@@ -56,6 +111,8 @@ export function useCameraGaze() {
   const lastTickLogRef = useRef(0);
   const sizedRef = useRef(false);
   const lastTickAtRef = useRef(0);
+  const lastDetectAtRef = useRef(0);
+  const lastFaceRef = useRef<{ x: number; y: number; at: number } | null>(null);
 
   const tick = useCallback(async () => {
     const video = videoRef.current;
@@ -98,23 +155,39 @@ export function useCameraGaze() {
     let gotFace = false;
 
     if (detectorRef.current) {
-      try {
-        const faces = await detectorRef.current.detect(canvas);
-        if (faces[0]) {
-          const b = faces[0].boundingBox;
-          const cx = b.x + b.width / 2;
-          const cy = b.y + b.height / 2;
-          // Map face center from canvas mid to [-1, 1]
-          nx = (cx / w - 0.5) * 2;
-          ny = (cy / h - 0.5) * 2;
-          gotFace = true;
+      // Real detector present: throttle inference to ~150ms (~6-7fps) — the
+      // hardware budget on a dual-core i5. The gaze lerp below still runs every
+      // tick, so detection at 6-7fps + lerp = smooth pursuit, no jitter.
+      if (now - lastDetectAtRef.current >= 150) {
+        lastDetectAtRef.current = now;
+        try {
+          const faces = await detectorRef.current.detect(canvas);
+          if (faces[0]) {
+            const b = faces[0].boundingBox;
+            // Map face center from canvas mid to [-1, 1]
+            lastFaceRef.current = {
+              x: ((b.x + b.width / 2) / w - 0.5) * 2,
+              y: ((b.y + b.height / 2) / h - 0.5) * 2,
+              at: now,
+            };
+          } else if (
+            lastFaceRef.current &&
+            now - lastFaceRef.current.at > 2000
+          ) {
+            lastFaceRef.current = null; // face lost > 2s → release to idle wander
+          }
+        } catch {
+          /* keep last face briefly */
         }
-      } catch {
-        /* fall through to motion */
       }
-    }
-
-    if (!gotFace) {
+      if (lastFaceRef.current) {
+        nx = lastFaceRef.current.x;
+        ny = lastFaceRef.current.y;
+        gotFace = true;
+      }
+      // Detector present but no face → nx/ny stay 0, gaze decays, eye idles.
+    } else {
+      // No real detector — legacy frame-differencing motion centroid fallback.
       const frame = ctx.getImageData(0, 0, w, h).data;
       const prev = prevRef.current;
       if (prev && prev.length === frame.length) {
@@ -192,12 +265,6 @@ export function useCameraGaze() {
       return;
     }
     try {
-      if (window.FaceDetector) {
-        detectorRef.current = new window.FaceDetector({
-          fastMode: true,
-          maxDetectedFaces: 1,
-        });
-      }
       const stream = await navigator.mediaDevices.getUserMedia({
         video: {
           facingMode: "user",
@@ -207,6 +274,15 @@ export function useCameraGaze() {
         audio: false,
       });
       streamRef.current = stream;
+      // Real face detection via vendored MediaPipe BlazeFace; if it can't load,
+      // fall back to Chromium's FaceDetector (rarely present) then motion tracking.
+      detectorRef.current = await loadMediaPipeDetector();
+      if (!detectorRef.current && window.FaceDetector) {
+        detectorRef.current = new window.FaceDetector({
+          fastMode: true,
+          maxDetectedFaces: 1,
+        });
+      }
       const video = document.createElement("video");
       video.playsInline = true;
       video.muted = true;

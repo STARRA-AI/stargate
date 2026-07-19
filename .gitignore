@@ -72,3 +72,6 @@ next-env.d.ts
 
 # Local tooling
 .tools/
+
+# MediaPipe face detector — wasm + model (provision with npm run face:download)
+/public/vendor/mediapipe/
