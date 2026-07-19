@@ -12,7 +12,7 @@ import {
 
 export { PIPER_VOICE_ID };
 
-export type SpeakEngine = "piper" | "webspeech" | "none";
+export type SpeakEngine = "ara" | "piper" | "webspeech" | "none";
 
 let lastEngine: SpeakEngine = "none";
 
@@ -20,10 +20,82 @@ export function getLastSpeakEngine(): SpeakEngine {
   return lastEngine;
 }
 
+/** Active Ara audio element, tracked so stopAllSpeech()/barge-in can cancel it. */
+let araAudio: HTMLAudioElement | null = null;
+
+function stopAraAudio() {
+  if (araAudio) {
+    try {
+      araAudio.pause();
+      araAudio.src = "";
+    } catch {
+      /* ignore */
+    }
+    araAudio = null;
+  }
+}
+
 export function stopAllSpeech() {
+  stopAraAudio();
   stopPiperAudio();
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.cancel();
+  }
+}
+
+/**
+ * Ara (xAI TTS) via the server /api/tts proxy — preferred online voice.
+ * Returns false on any miss (no key → 204, network/offline, aborted, decode
+ * failure) so speakStarra falls through to Piper. Key never touches the client.
+ */
+async function speakAra(text: string, signal?: AbortSignal): Promise<boolean> {
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal,
+    });
+    if (!res.ok || res.status === 204) return false;
+    const blob = await res.blob();
+    if (!blob.size || signal?.aborted) return false;
+
+    const url = URL.createObjectURL(blob);
+    stopAraAudio();
+    const audio = new Audio(url);
+    araAudio = audio;
+
+    return await new Promise<boolean>((resolve) => {
+      const cleanup = () => URL.revokeObjectURL(url);
+      const onAbort = () => {
+        try {
+          audio.pause();
+        } catch {
+          /* ignore */
+        }
+        cleanup();
+        resolve(false);
+      };
+      signal?.addEventListener("abort", onAbort, { once: true });
+      audio.onended = () => {
+        signal?.removeEventListener("abort", onAbort);
+        cleanup();
+        if (araAudio === audio) araAudio = null;
+        resolve(true);
+      };
+      audio.onerror = () => {
+        signal?.removeEventListener("abort", onAbort);
+        cleanup();
+        if (araAudio === audio) araAudio = null;
+        resolve(false);
+      };
+      audio.play().catch(() => {
+        cleanup();
+        resolve(false);
+      });
+    });
+  } catch {
+    return false;
   }
 }
 
@@ -43,6 +115,15 @@ export async function speakStarra(
     typeof window !== "undefined" ? window.speechSynthesis?.paused : null;
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.resume();
+  }
+
+  // Ara (xAI) first when reachable; Piper remains the offline fallback below.
+  if (!signal?.aborted) {
+    const araOk = await speakAra(text, signal);
+    if (araOk && !signal?.aborted) {
+      lastEngine = "ara";
+      return "ara";
+    }
   }
 
   const piperAvailable = await piperModelAvailable();
