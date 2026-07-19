@@ -21,10 +21,10 @@ export async function GET() {
       reasoning: "fable-inspired scaffold + local free model",
     },
     anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
-    priority:
-      process.env.OLLAMA_PRIORITY === "1"
-        ? "ollama-first"
-        : "anthropic-if-keyed-else-ollama",
+    groq: Boolean(process.env.GROQ_API_KEY),
+    grok: Boolean(process.env.XAI_API_KEY),
+    groqModel: process.env.GROQ_MODEL || "moonshotai/kimi-k2-instruct-0905",
+    grokModel: process.env.XAI_MODEL || "grok-4.5",
     soul: soulStatus(),
     brain: brainStatus(),
   });

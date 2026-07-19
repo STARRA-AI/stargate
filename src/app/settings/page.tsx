@@ -12,33 +12,40 @@ function LlmStatus() {
       .then((r) => r.json())
       .then(
         (d: {
-          ollama?: {
-            up?: boolean;
-            hasModel?: boolean;
-            model?: string;
-            reasoning?: string;
-          };
+          provider?: string;
+          ollama?: { up?: boolean; hasModel?: boolean; model?: string };
           anthropic?: boolean;
-          priority?: string;
+          groq?: boolean;
+          grok?: boolean;
+          groqModel?: string;
+          grokModel?: string;
           soul?: { loaded?: boolean; truncated?: boolean };
         }) => {
           const o = d.ollama;
           const soulBit = d.soul?.loaded
             ? d.soul.truncated
-              ? " · soul loaded (trimmed)"
+              ? " · soul trimmed"
               : " · soul loaded"
             : " · soul offline";
-          if (!o?.up) {
-            setStatus(`○ OLLAMA OFFLINE — run: ollama serve${soulBit}`);
-            return;
-          }
-          if (!o.hasModel) {
-            setStatus(`○ MODEL MISSING — ollama pull ${o.model}${soulBit}`);
-            return;
-          }
-          setStatus(
-            `● ${o.model} · ${o.reasoning ?? "fable scaffold"} · ${d.priority ?? "auto"}${d.anthropic ? " · anthropic keyed" : ""}${soulBit}`,
-          );
+          // Active daily driver from LLM_PROVIDER, then the local fallback state.
+          const p = (d.provider ?? "auto").toLowerCase();
+          const brain =
+            p === "kimi"
+              ? `Kimi/Groq (${d.groqModel})${d.groq ? "" : " — NO KEY"}`
+              : p === "grok"
+                ? `Grok (${d.grokModel})${d.grok ? "" : " — NO KEY"}`
+                : p === "anthropic"
+                  ? `Anthropic${d.anthropic ? "" : " — NO KEY"}`
+                  : p === "ollama"
+                    ? `local Ollama (${o?.model})`
+                    : "auto";
+          const fallback =
+            o?.up && o?.hasModel
+              ? `Ollama ${o.model} ready`
+              : o?.up
+                ? `Ollama up — pull ${o?.model}`
+                : "Ollama offline";
+          setStatus(`● Brain: ${brain} · fallback: ${fallback}${soulBit}`);
         },
       )
       .catch(() => setStatus("◆ LINK DEGRADED"));
@@ -98,7 +105,8 @@ function VoicePicker() {
         void voicesReady().then((list) => {
           if (!mounted) return;
           setVoices(list);
-          setSelected(getStoredVoiceUri() ?? "");
+          // Unset → Ara is the default primary voice.
+          setSelected(getStoredVoiceUri() ?? "ara");
           setAutoName(pickStarraVoice(list)?.name ?? "system default");
         });
       },
@@ -131,15 +139,17 @@ function VoicePicker() {
         STARRA voice
       </h2>
       <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+        ● Ara (xAI TTS) — primary voice. Piper Cori and Web Speech are fallback
+        only, used offline or when Ara is unreachable.{" "}
         {piperReady === null
-          ? "Checking Piper Cori model…"
+          ? "Checking Piper model…"
           : piperReady
-            ? "● Piper Cori en_GB high — primary voice (~1s/sentence on this machine). Web Speech below is fallback only."
-            : "○ Piper offline — run: npm run voice:download. Web Speech fallback active."}
+            ? "Piper ready."
+            : "Piper offline — run: npm run voice:download."}
       </p>
       <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        Web Speech AUTO prefers British English female, then Japanese female.
-        Current auto pick: {autoName}.
+        Pick a specific Web Speech voice to override Ara. AUTO prefers British
+        English female, then Japanese female — current auto pick: {autoName}.
       </p>
       <select
         value={selected}
@@ -147,7 +157,8 @@ function VoicePicker() {
         className="focus-magenta w-full border border-[var(--border)] bg-[var(--void)] px-2 py-2 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
         aria-label="STARRA voice"
       >
-        <option value="">AUTO — STARRA picks</option>
+        <option value="ara">Ara (xAI) — primary</option>
+        <option value="auto">AUTO — Web Speech picks</option>
         {voices.map((v) => (
           <option key={v.voiceURI} value={v.voiceURI}>
             {v.name} ({v.lang})
@@ -317,7 +328,7 @@ export default function SettingsPage() {
           <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
             Wake: say &quot;starra&quot; or ⌥ + Space · Launch:{" "}
             <span className="text-[var(--magenta)]">npm run starra</span> · Brain:
-            local Ollama (qwen2.5:1.5b) · Anthropic optional
+            Kimi/Groq daily driver · Grok opt-in · Ollama fallback
           </p>
           <LlmStatus />
         </section>
