@@ -34,6 +34,13 @@ const BRAIN_CHAR_BUDGET = 8000;
  */
 const SOUL_CHAR_BUDGET = 10000;
 
+/**
+ * Personality — behavioral / voice layer (how she shows up). Sits on top of
+ * soul/brain; where it overlaps the soul docs, the soul docs remain canon.
+ * Full budget so the HARD RULE + technical self-knowledge tail never clips.
+ */
+const PERSONALITY_CHAR_BUDGET = 8000;
+
 /** Multica doctrine — agents-as-teammates ops context (after soul/brain). */
 const MULTICA_CHAR_BUDGET = 4000;
 
@@ -155,6 +162,7 @@ export function prioritizeSoul(raw: string, budget: number): {
 /** Cache static canon — rebuildSystemPrompt was re-reading disk every chat token path. */
 let brainCache: string | null = null;
 let soulCache: string | null = null;
+let personalityCache: string | null = null;
 let multicaCache: string | null = null;
 let openaliceCache: string | null = null;
 let openmontageCache: string | null = null;
@@ -193,6 +201,23 @@ export function loadSoul(): string {
     return soulCache;
   } catch {
     return `${SOUL_PREAMBLE}\n\nSoul file unavailable offline — operate from brain hard rules only.`;
+  }
+}
+
+/**
+ * Personality layer — how STARRA shows up (tone, delivery, turn-to-turn
+ * behavior). Loaded after soul/brain; defers to the soul docs on overlap.
+ */
+export function loadPersonality(): string {
+  if (personalityCache) return personalityCache;
+  try {
+    const p = path.join(process.cwd(), "STARRA_PERSONALITY.md");
+    const raw = readFileSync(p, "utf8");
+    const { text } = clipAtBudget(raw, PERSONALITY_CHAR_BUDGET);
+    personalityCache = text;
+    return personalityCache;
+  } catch {
+    return "STARRA personality layer unavailable offline — operate from soul and brain voice rules.";
   }
 }
 
@@ -304,6 +329,7 @@ export function loadObsidianCanon(): string {
 export function clearCanonCache() {
   brainCache = null;
   soulCache = null;
+  personalityCache = null;
   multicaCache = null;
   openaliceCache = null;
   openmontageCache = null;
@@ -325,6 +351,7 @@ export function loadStableSystemPrompt(): string {
     loadSoul(),
     loadBooks(),
     loadBrain(),
+    loadPersonality(),
     loadMulticaDoctrine(),
     loadOpenAliceDoctrine(),
     loadOpenMontageDoctrine(),
