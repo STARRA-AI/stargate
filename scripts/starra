@@ -81,7 +81,7 @@ start_deck() {
     local old
     old="$(cat "$PID_FILE" 2>/dev/null || true)"
     if [[ -n "$old" ]] && kill -0 "$old" 2>/dev/null; then
-      echo "→ Waiting for deck pid $old…"
+      echo "→ Waiting for deck pid ${old}…"
       for _ in $(seq 1 40); do
         deck_up && { echo "● Deck online"; return 0; }
         sleep 0.5
@@ -157,7 +157,7 @@ cmd_stop() {
     local pid
     pid="$(cat "$PID_FILE" 2>/dev/null || true)"
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
-      echo "→ Stopping deck pid $pid…"
+      echo "→ Stopping deck pid ${pid}…"
       kill "$pid" 2>/dev/null || true
       # also kill child next if present
       pkill -f "next dev.*${PORT}" 2>/dev/null || true
