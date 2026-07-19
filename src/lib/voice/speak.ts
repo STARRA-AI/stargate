@@ -116,8 +116,6 @@ export async function speakStarra(
 
   stopAllSpeech();
 
-  const pausedBefore =
-    typeof window !== "undefined" ? window.speechSynthesis?.paused : null;
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.resume();
   }
@@ -138,32 +136,6 @@ export async function speakStarra(
   const piperAvailable = isSpecificWebSpeechVoice()
     ? false
     : await piperModelAvailable();
-  // #region agent log
-  fetch(
-    "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-    {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Debug-Session-Id": "f8c9f7",
-      },
-      body: JSON.stringify({
-        sessionId: "f8c9f7",
-        location: "speak.ts:entry",
-        message: "speakStarra start",
-        data: {
-          textChars: text.length,
-          piperAvailable,
-          pausedBefore,
-          voiceCount: window.speechSynthesis?.getVoices().length ?? 0,
-        },
-        timestamp: Date.now(),
-        hypothesisId: "H-A",
-        runId: "post-fix-3",
-      }),
-    },
-  ).catch(() => {});
-  // #endregion
 
   if (piperAvailable) {
     const { speakPiper } = await import("@/lib/voice/piper-runtime");
@@ -171,27 +143,6 @@ export async function speakStarra(
       speakPiper(text, signal),
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000)),
     ]);
-    // #region agent log
-    fetch(
-      "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "f8c9f7",
-        },
-        body: JSON.stringify({
-          sessionId: "f8c9f7",
-          location: "speak.ts:piper-branch",
-          message: piperOk ? "piper spoke" : "piper skipped or timed out",
-          data: { piperOk, aborted: signal?.aborted ?? false },
-          timestamp: Date.now(),
-          hypothesisId: "H-E",
-          runId: "post-fix-3",
-        }),
-      },
-    ).catch(() => {});
-    // #endregion
     if (piperOk && !signal?.aborted) {
       lastEngine = "piper";
       return "piper";
@@ -224,62 +175,11 @@ export async function speakStarra(
     u.onend = () => {
       signal?.removeEventListener("abort", onAbort);
       lastEngine = "webspeech";
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "f8c9f7",
-          },
-          body: JSON.stringify({
-            sessionId: "f8c9f7",
-            location: "speak.ts:webspeech-end",
-            message: "webspeech utterance ended",
-            data: {
-              engine: "webspeech",
-              textChars: text.length,
-              pausedBefore,
-              pausedAfter: window.speechSynthesis?.paused ?? null,
-            },
-            timestamp: Date.now(),
-            hypothesisId: "H-A",
-            runId: "post-fix-3",
-          }),
-        },
-      ).catch(() => {});
-      // #endregion
       resolve("webspeech");
     };
-    u.onerror = (ev) => {
+    u.onerror = () => {
       signal?.removeEventListener("abort", onAbort);
       lastEngine = "none";
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "f8c9f7",
-          },
-          body: JSON.stringify({
-            sessionId: "f8c9f7",
-            location: "speak.ts:webspeech-error",
-            message: "webspeech utterance error",
-            data: {
-              textChars: text.length,
-              pausedBefore,
-              error: (ev as SpeechSynthesisErrorEvent).error ?? "unknown",
-            },
-            timestamp: Date.now(),
-            hypothesisId: "H-A",
-            runId: "post-fix-3",
-          }),
-        },
-      ).catch(() => {});
-      // #endregion
       resolve("none");
     };
     window.speechSynthesis.speak(u);

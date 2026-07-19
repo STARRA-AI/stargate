@@ -400,37 +400,9 @@ export function soulStatus(): CanonLoadStatus {
  * Volatile = memory / vault / pack / runtime (per turn — do not cache).
  */
 export function buildSystemPromptBlocks(extras: string[] = []): SystemPromptBlocks {
-  const t0 = Date.now();
   const stable = loadStableSystemPrompt();
   const volatile = extras.filter(Boolean).join("\n\n---\n\n");
   const full = volatile ? `${stable}\n\n---\n\n${volatile}` : stable;
-  // #region agent log
-  fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "f8c9f7",
-    },
-    body: JSON.stringify({
-      sessionId: "f8c9f7",
-      location: "brain.ts:buildSystemPromptBlocks",
-      message: "system prompt assembled",
-      data: {
-        totalChars: full.length,
-        stableChars: stable.length,
-        volatileChars: volatile.length,
-        hasSoulPreamble: stable.includes("STARRA_SOUL"),
-        hasCopyRule: stable.includes('Say "Copy."'),
-        hasUntrustedFenceRules: stable.includes("BEGIN_UNTRUSTED_WEB_CONTENT"),
-        extrasCount: extras.filter(Boolean).length,
-        assembleMs: Date.now() - t0,
-      },
-      timestamp: Date.now(),
-      hypothesisId: "H-C1",
-      runId: "post-fix-2",
-    }),
-  }).catch(() => {});
-  // #endregion
   return { stable, volatile, full };
 }
 

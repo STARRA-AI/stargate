@@ -84,51 +84,6 @@ export function ReactorEye({
   });
 
   useEffect(() => {
-    const el = centerRef.current;
-    if (!el) return;
-    const logLayout = () => {
-      const stageEl = el.closest(".reactor-stage") as HTMLElement | null;
-      const outer = outerRef.current?.querySelector(".ring-outer") as
-        | HTMLImageElement
-        | null;
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "f8c9f7",
-          },
-          body: JSON.stringify({
-            sessionId: "f8c9f7",
-            location: "ReactorEye.tsx:layout",
-            message: "reactor eye layout",
-            data: {
-              stageW: stageEl?.clientWidth ?? 0,
-              stageH: stageEl?.clientHeight ?? 0,
-              ringNaturalW: outer?.naturalWidth ?? 0,
-              ringClientW: outer?.clientWidth ?? 0,
-              ringOpacity: outer ? getComputedStyle(outer).opacity : null,
-              eco,
-              reduced,
-              viewportW: window.innerWidth,
-            },
-            timestamp: Date.now(),
-            hypothesisId: "H-D",
-            runId: "post-fix-2",
-          }),
-        },
-      ).catch(() => {});
-      // #endregion
-    };
-    logLayout();
-    const ro = new ResizeObserver(logLayout);
-    ro.observe(el);
-    return () => ro.disconnect();
-  }, [eco, reduced]);
-
-  useEffect(() => {
     const syncEco = () =>
       setEco(document.body.classList.contains("low-power"));
     syncEco();
@@ -470,61 +425,6 @@ export function ReactorEye({
                 className="ring ring-outer"
                 src="/brand/hud_ring.png"
                 alt=""
-                onLoad={(e) => {
-                  const img = e.currentTarget;
-                  // #region agent log
-                  fetch(
-                    "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        "X-Debug-Session-Id": "f8c9f7",
-                      },
-                      body: JSON.stringify({
-                        sessionId: "f8c9f7",
-                        location: "ReactorEye.tsx:ring-outer",
-                        message: "ring image loaded",
-                        data: {
-                          w: img.naturalWidth,
-                          h: img.naturalHeight,
-                          displayW: img.clientWidth,
-                          displayH: img.clientHeight,
-                          opacity: getComputedStyle(img).opacity,
-                          eco,
-                          reduced,
-                        },
-                        timestamp: Date.now(),
-                        hypothesisId: "H-D",
-                        runId: "post-fix-2",
-                      }),
-                    },
-                  ).catch(() => {});
-                  // #endregion
-                }}
-                onError={() => {
-                  // #region agent log
-                  fetch(
-                    "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-                    {
-                      method: "POST",
-                      headers: {
-                        "Content-Type": "application/json",
-                        "X-Debug-Session-Id": "f8c9f7",
-                      },
-                      body: JSON.stringify({
-                        sessionId: "f8c9f7",
-                        location: "ReactorEye.tsx:ring-outer",
-                        message: "ring image FAILED",
-                        data: { src: "/brand/hud_ring.png" },
-                        timestamp: Date.now(),
-                        hypothesisId: "H-D",
-                        runId: "post-fix-2",
-                      }),
-                    },
-                  ).catch(() => {});
-                  // #endregion
-                }}
               />
             </div>
             <div className="ring-parallax eye-inner" ref={innerRef}>

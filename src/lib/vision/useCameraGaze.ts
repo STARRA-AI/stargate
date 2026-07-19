@@ -152,7 +152,6 @@ export function useCameraGaze() {
 
     let nx = 0;
     let ny = 0;
-    let gotFace = false;
 
     if (detectorRef.current) {
       // Real detector present: throttle inference to ~150ms (~6-7fps) — the
@@ -183,7 +182,6 @@ export function useCameraGaze() {
       if (lastFaceRef.current) {
         nx = lastFaceRef.current.x;
         ny = lastFaceRef.current.y;
-        gotFace = true;
       }
       // Detector present but no face → nx/ny stay 0, gaze decays, eye idles.
     } else {
@@ -224,34 +222,6 @@ export function useCameraGaze() {
 
     tickCountRef.current += 1;
     if (now - lastTickLogRef.current > 2000) {
-      // #region agent log
-      fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "f8c9f7",
-        },
-        body: JSON.stringify({
-          sessionId: "f8c9f7",
-          location: "useCameraGaze.ts:tick",
-          message: "camera tick sample",
-          data: {
-            ticks: tickCountRef.current,
-            gotFace,
-            nx: Number(nx.toFixed(3)),
-            ny: Number(ny.toFixed(3)),
-            gazeX: Number(g.x.toFixed(3)),
-            gazeY: Number(g.y.toFixed(3)),
-            canvasW: canvas.width,
-            canvasH: canvas.height,
-            throttled: true,
-          },
-          timestamp: Date.now(),
-          hypothesisId: "H-E3",
-          runId: "pre",
-        }),
-      }).catch(() => {});
-      // #endregion
       lastTickLogRef.current = now;
     }
 

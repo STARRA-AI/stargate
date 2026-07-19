@@ -155,39 +155,6 @@ export function Bridge() {
   }, []);
 
   useEffect(() => {
-    const branch = isMobile ? "mobile-bridge" : "desktop-stage";
-    // #region agent log
-    fetch(
-      "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-      {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Debug-Session-Id": "f8c9f7",
-        },
-        body: JSON.stringify({
-          sessionId: "f8c9f7",
-          location: "Bridge.tsx:branch",
-          message: "bridge branch render",
-          data: {
-            isMobile,
-            viewportW: window.innerWidth,
-            viewportH: window.innerHeight,
-            branch,
-            eco,
-            reduced,
-            bootDone,
-          },
-          timestamp: Date.now(),
-          hypothesisId: "H-D",
-          runId: "post-fix-2",
-        }),
-      },
-    ).catch(() => {});
-    // #endregion
-  }, [isMobile, eco, reduced, bootDone]);
-
-  useEffect(() => {
     if (isMobile && !bootDone) {
       setBootDone(true);
     }
@@ -347,60 +314,6 @@ export function Bridge() {
                   src="/brand/hud_ring.png"
                   alt=""
                   aria-hidden
-                  onLoad={(e) => {
-                    const img = e.currentTarget;
-                    // #region agent log
-                    fetch(
-                      "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-                      {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/json",
-                          "X-Debug-Session-Id": "f8c9f7",
-                        },
-                        body: JSON.stringify({
-                          sessionId: "f8c9f7",
-                          location: "Bridge.tsx:mobile-ring-outer",
-                          message: "mobile ring loaded",
-                          data: {
-                            naturalW: img.naturalWidth,
-                            naturalH: img.naturalHeight,
-                            clientW: img.clientWidth,
-                            clientH: img.clientHeight,
-                            opacity: getComputedStyle(img).opacity,
-                            viewportW: window.innerWidth,
-                          },
-                          timestamp: Date.now(),
-                          hypothesisId: "H-D",
-                          runId: "post-fix-2",
-                        }),
-                      },
-                    ).catch(() => {});
-                    // #endregion
-                  }}
-                  onError={() => {
-                    // #region agent log
-                    fetch(
-                      "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-                      {
-                        method: "POST",
-                        headers: {
-                          "Content-Type": "application/json",
-                          "X-Debug-Session-Id": "f8c9f7",
-                        },
-                        body: JSON.stringify({
-                          sessionId: "f8c9f7",
-                          location: "Bridge.tsx:mobile-ring-outer",
-                          message: "mobile ring FAILED",
-                          data: { src: "/brand/hud_ring.png" },
-                          timestamp: Date.now(),
-                          hypothesisId: "H-D",
-                          runId: "post-fix-2",
-                        }),
-                      },
-                    ).catch(() => {});
-                    // #endregion
-                  }}
                 />
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img

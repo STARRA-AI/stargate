@@ -246,7 +246,6 @@ export async function POST(req: Request) {
     ? ""
     : formatThreatBrief(operatorScan);
 
-  const tPrompt = Date.now();
   // Phase 2: build once per request — stable canon reused from in-process cache;
   // volatile extras (memory/vault/pack) stay out of the Anthropic cache prefix.
   const volatileExtras = [
@@ -265,34 +264,6 @@ export async function POST(req: Request) {
   ];
   const systemBlocks = buildSystemPromptBlocks(volatileExtras);
   const system = systemBlocks.full;
-  // #region agent log
-  fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      "X-Debug-Session-Id": "f8c9f7",
-    },
-    body: JSON.stringify({
-      sessionId: "f8c9f7",
-      location: "chat/route.ts:POST",
-      message: "chat request context",
-      data: {
-        model: ollamaModel,
-        systemChars: system.length,
-        stableChars: systemBlocks.stable.length,
-        volatileChars: systemBlocks.volatile.length,
-        lastUserChars: lastUser.length,
-        promptBuildMs: Date.now() - tPrompt,
-        prefer: (process.env.LLM_PROVIDER || "auto").toLowerCase(),
-        ollamaPriority: process.env.OLLAMA_PRIORITY === "1",
-        maxAgentTurns: MAX_AGENT_TURNS,
-      },
-      timestamp: Date.now(),
-      hypothesisId: "H-C2",
-      runId: "post-fix-3",
-    }),
-  }).catch(() => {});
-  // #endregion
 
   if (lastUser) {
     await recordExchange("user", lastUser);
@@ -323,7 +294,6 @@ export async function POST(req: Request) {
   const stream = new ReadableStream({
     async start(controller) {
       let full = "";
-      const tStream = Date.now();
       const push = (t: string) => {
         full += t;
         controller.enqueue(encoder.encode(sse(t)));
@@ -343,35 +313,6 @@ export async function POST(req: Request) {
               hasModel &&
               process.env.OLLAMA_PRIORITY === "1");
 
-          // #region agent log
-          fetch(
-            "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-            {
-              method: "POST",
-              headers: {
-                "Content-Type": "application/json",
-                "X-Debug-Session-Id": "f8c9f7",
-              },
-              body: JSON.stringify({
-                sessionId: "f8c9f7",
-                location: "chat/route.ts:provider",
-                message: "provider branch",
-                data: {
-                  ollamaUp,
-                  hasModel,
-                  useOllama,
-                  hasAnthropic: Boolean(anthropicKey),
-                  prefer,
-                  model: ollamaModel,
-                  useAgentTools,
-                },
-                timestamp: Date.now(),
-                hypothesisId: "H-C4",
-                runId: "post-fix-3",
-              }),
-            },
-          ).catch(() => {});
-          // #endregion
 
           // Hosted-provider safety net: a Groq 429/413 or network drop should
           // fall to the local brain, not leave her mute. Only when nothing has
@@ -401,75 +342,12 @@ export async function POST(req: Request) {
           if (useOllama && ollamaUp && hasModel) {
             const localSystem = clipSystemForLocal(system);
             const localMessages = sanitizeMessagesForLocal(messages);
-            // #region agent log
-            fetch(
-              "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Debug-Session-Id": "f8c9f7",
-                },
-                body: JSON.stringify({
-                  sessionId: "f8c9f7",
-                  location: "chat/route.ts:localClip",
-                  message: "local system clip",
-                  data: {
-                    before: system.length,
-                    after: localSystem.length,
-                    clipped: localSystem.length < system.length,
-                    model: ollamaModel,
-                    msgIn: messages.length,
-                    msgOut: localMessages.length,
-                    hasVoiceTailNoSoloCopy: localSystem.includes(
-                      'Forbidden final reply: only the word "Copy."',
-                    ),
-                  },
-                  timestamp: Date.now(),
-                  hypothesisId: "H-B",
-                  runId: "post-fix-3",
-                }),
-              },
-            ).catch(() => {});
-            // #endregion
-            const guarded = await streamLocalWithCopyGuard({
+            await streamLocalWithCopyGuard({
               system: localSystem,
               messages: localMessages,
               lastUser,
               onText: (t) => push(t),
             });
-            // #region agent log
-            fetch(
-              "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-              {
-                method: "POST",
-                headers: {
-                  "Content-Type": "application/json",
-                  "X-Debug-Session-Id": "f8c9f7",
-                },
-                body: JSON.stringify({
-                  sessionId: "f8c9f7",
-                  location: "chat/route.ts:ollama",
-                  message: "ollama stream complete",
-                  data: {
-                    model: ollamaModel,
-                    afterStripChars: full.length,
-                    copyOnly: isCopyOnly(full),
-                    fewShotEcho: isFewShotEcho(full),
-                    emptyAfterStrip: full.length === 0,
-                    retried: guarded.retried,
-                    echoRetry: guarded.echoRetry,
-                    usedFallback: guarded.usedFallback,
-                    streamMs: Date.now() - tStream,
-                    preview: full.slice(0, 160),
-                  },
-                  timestamp: Date.now(),
-                  hypothesisId: "H-B",
-                  runId: "post-fix-3",
-                }),
-              },
-            ).catch(() => {});
-            // #endregion
           } else if (prefer === "kimi" && hostedAvailable("kimi")) {
             // Free Kimi (Groq) — tiered under the 8K free cap: always-on core
             // identity + on-demand doctrines/volatile budgeted to fit.

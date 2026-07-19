@@ -79,32 +79,6 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
         window.speechSynthesis.getVoices();
       }
 
-      // #region agent log
-      fetch(
-        "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-        {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "X-Debug-Session-Id": "f8c9f7",
-          },
-          body: JSON.stringify({
-            sessionId: "f8c9f7",
-            location: "DeckConsole.tsx:send-start",
-            message: "console send started",
-            data: {
-              chars: trimmed.length,
-              viewportW: window.innerWidth,
-              speechPaused: window.speechSynthesis?.paused ?? null,
-              voiceCount: window.speechSynthesis?.getVoices().length ?? 0,
-            },
-            timestamp: Date.now(),
-            hypothesisId: "H-A",
-            runId: "post-fix-3",
-          }),
-        },
-      ).catch(() => {});
-      // #endregion
 
       const nextHistory: Msg[] = [
         ...history,
@@ -163,40 +137,11 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
         setHudState("speaking");
         setLastReply(full);
         // Speak immediately — do not wait for typewriter reveal (was blocking TTS 8s+).
-        const { speakStarra, getLastSpeakEngine } = await import(
-          "@/lib/voice/speak"
-        );
+        const { speakStarra } = await import("@/lib/voice/speak");
         const speakPromise = speakStarra(full, ttsAc.signal);
         await revealText(full, setStreaming, revealAc.signal);
         setHistory((h) => [...h, { role: "assistant", content: full }]);
         const engine = await speakPromise;
-        // #region agent log
-        fetch(
-          "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",
-          {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "X-Debug-Session-Id": "f8c9f7",
-            },
-            body: JSON.stringify({
-              sessionId: "f8c9f7",
-              location: "DeckConsole.tsx:send",
-              message: "console reply + TTS",
-              data: {
-                replyChars: full.length,
-                copyOnly: /^copy\.?\s*$/i.test(full.trim()),
-                engine,
-                lastEngine: getLastSpeakEngine(),
-                preview: full.slice(0, 120),
-              },
-              timestamp: Date.now(),
-              hypothesisId: "H-A",
-              runId: "post-fix-3",
-            }),
-          },
-        ).catch(() => {});
-        // #endregion
         setStreaming("");
         setHudState("idle");
         pushLog(`[ORACLE] reply landed · voice ${engine}`);
