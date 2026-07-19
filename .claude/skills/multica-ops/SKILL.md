@@ -6,7 +6,7 @@ description: Operate STARGATE's Multica integration from the coding agent side. 
 # Multica Ops (STARGATE)
 
 Multica (multica.ai) is STARGATE's external agent board: issues assigned to AI
-agent teammates. This skill is for the **Cursor coding agent** — not STARRA
+agent teammates. This skill is for the **coding agent** — not STARRA
 runtime. STARRA's prompt-side counterpart is `docs/MULTICA_DOCTRINE.md`; keep
 the two in sync when the tool surface changes (see "Doctrine sync").
 

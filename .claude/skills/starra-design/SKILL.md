@@ -13,7 +13,7 @@ typography, or microcopy.
 Always ground decisions in:
 
 1. `STARRA_STARGATE_UNIFIED.md` Book 1
-2. `.cursorrules`
+2. `CLAUDE.md` (repo rules)
 3. `docs/STARRA_CONFERENCE.md` for known design drift and current priorities
 
 This skill exists so STARRA keeps her own design language inside the repo
