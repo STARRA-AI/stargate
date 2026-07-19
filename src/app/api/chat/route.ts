@@ -19,6 +19,7 @@ import {
   streamOllama,
   stripThinkTags,
 } from "@/lib/llm/ollama";
+import { streamHosted, hostedAvailable } from "@/lib/llm/hosted";
 import { addTokens } from "@/lib/metrics";
 import { pushFeed } from "@/lib/feed";
 import { fenceUntrusted } from "@/lib/security/fencing";
@@ -310,7 +311,9 @@ export async function POST(req: Request) {
     (process.env.LLM_PROVIDER || "auto").toLowerCase() as
       | "auto"
       | "ollama"
-      | "anthropic";
+      | "anthropic"
+      | "kimi"
+      | "grok";
 
   const toolReply = lastUser ? await maybeToolReply(lastUser) : null;
   const useAgentTools =
@@ -441,7 +444,30 @@ export async function POST(req: Request) {
               },
             ).catch(() => {});
             // #endregion
-          } else if (anthropicKey && prefer !== "ollama") {
+          } else if (prefer === "kimi" && hostedAvailable("kimi")) {
+            // Free Kimi (Groq) — same canon/personality assembly, streamed text.
+            const r = await streamHosted({
+              provider: "kimi",
+              system,
+              messages,
+              onText: (t) => push(t),
+            });
+            pushFeed("ORACLE", `Kimi brain — ${r.model}`);
+          } else if (prefer === "grok" && hostedAvailable("grok")) {
+            // xAI Grok — opt-in via LLM_PROVIDER=grok; identical assembly.
+            const r = await streamHosted({
+              provider: "grok",
+              system,
+              messages,
+              onText: (t) => push(t),
+            });
+            pushFeed("ORACLE", `Grok brain — ${r.model}`);
+          } else if (
+            anthropicKey &&
+            prefer !== "ollama" &&
+            prefer !== "kimi" &&
+            prefer !== "grok"
+          ) {
             if (useAgentTools) {
               // Phase 0: bounded tool loop (non-stream rounds → stub stream final).
               const result = await runAnthropicAgent({
