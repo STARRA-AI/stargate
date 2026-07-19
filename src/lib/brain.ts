@@ -169,6 +169,7 @@ let openmontageCache: string | null = null;
 let obsidianCache: string | null = null;
 let booksCache: string | null = null;
 let stablePromptCache: string | null = null;
+let corePromptCache: string | null = null;
 
 /** Stable (cacheable) vs volatile (per-request) system prompt parts — Phase 2. */
 export type SystemPromptBlocks = {
@@ -336,6 +337,7 @@ export function clearCanonCache() {
   obsidianCache = null;
   booksCache = null;
   stablePromptCache = null;
+  corePromptCache = null;
   clearObsidianDoctrineCache();
 }
 
@@ -435,4 +437,129 @@ export function buildSystemPromptBlocks(extras: string[] = []): SystemPromptBloc
 /** Back-compat: single joined string (Ollama / callers that ignore cache blocks). */
 export function buildSystemPrompt(extras: string[] = []): string {
   return buildSystemPromptBlocks(extras).full;
+}
+
+/* ─────────────────────────── Tiered prompt (capped free tiers) ───────────────
+ * Groq's free tier caps a request at 8K tokens, too small for full canon. So the
+ * daily-driver (kimi) path ships an always-on CORE identity and pulls doctrines /
+ * volatile context on-demand under a token budget. No canon file is edited or
+ * shortened — pieces are conditionally included, and any deferral is reported.
+ * Grok / Anthropic have no such cap and keep using the full prompt above.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** ~4 chars/token heuristic — good enough for budgeting, not billing. */
+function estTokens(s: string): number {
+  return Math.ceil(s.length / 4);
+}
+
+/**
+ * Always-on identity core: structure + reasoning scaffold + soul + brain +
+ * personality + the operator-authority safety gate. ~7.3K tokens. Cached.
+ */
+export function buildCoreSystemPrompt(): string {
+  if (corePromptCache) return corePromptCache;
+  corePromptCache = [
+    structureBlock(),
+    fableReasoningBlock(),
+    loadSoul(),
+    loadBrain(),
+    loadPersonality(),
+    OPERATOR_AUTHORITY,
+  ].join("\n\n---\n\n");
+  return corePromptCache;
+}
+
+/** Keyword gates — a doctrine loads only when the query is relevant to it. */
+const DOCTRINE_GATES: { name: string; rx: RegExp; load: () => string }[] = [
+  {
+    name: "books",
+    rx: /\b(faith|covenant|soul|purpose|scripture|creed|spirit|god|why (are|am)|here for)\b/i,
+    load: loadBooks,
+  },
+  {
+    name: "multica",
+    rx: /\b(agent|agents|teammate|teammates|delegat|parallel|subagent|fan.?out|multica|swarm|orchestrat)\b/i,
+    load: loadMulticaDoctrine,
+  },
+  {
+    name: "openalice",
+    rx: /\b(market|trade|trading|stock|stocks|crypto|intel|fund|funding|credit|invest|revenue|openalice)\b/i,
+    load: loadOpenAliceDoctrine,
+  },
+  {
+    name: "openmontage",
+    rx: /\b(video|short|shorts|montage|silent shadow|storm ink|render|reel|clip|openmontage)\b/i,
+    load: loadOpenMontageDoctrine,
+  },
+  {
+    name: "obsidian",
+    rx: /\b(vault|note|notes|obsidian|markdown|backlink|memory grammar)\b/i,
+    load: loadObsidianCanon,
+  },
+];
+
+/** Doctrines whose keyword gate matches the query. */
+export function selectOnDemandDoctrines(
+  query: string,
+): { name: string; text: string }[] {
+  const q = query || "";
+  return DOCTRINE_GATES.filter((g) => g.rx.test(q)).map((g) => ({
+    name: g.name,
+    text: g.load(),
+  }));
+}
+
+export type TieredPrompt = {
+  full: string;
+  tokens: number;
+  included: string[];
+  dropped: string[];
+};
+
+/**
+ * Budgeted tiered prompt for a capped provider. Core always ships; then, in
+ * priority order (safety rules → relevant doctrines → volatile context), each
+ * block is added only if it fits under maxTokens. Deferred blocks are named in
+ * `dropped` so the caller can log them — never silently cut.
+ */
+export function buildTieredSystemPrompt(opts: {
+  query: string;
+  volatile?: string[];
+  /** Untrusted-content rules — include when fenced/web/pack content is present. */
+  includeUntrusted?: boolean;
+  /** Security-team rules — include when input scan flagged. */
+  includeSecurityTeam?: boolean;
+  /** System-prompt token ceiling; leave room under the provider cap for the query. */
+  maxTokens?: number;
+}): TieredPrompt {
+  const maxTokens = opts.maxTokens ?? 7600;
+  const core = buildCoreSystemPrompt();
+  const parts: string[] = [core];
+  const included: string[] = ["core"];
+  const dropped: string[] = [];
+  let tokens = estTokens(core);
+
+  const candidates: { name: string; text: string }[] = [];
+  if (opts.includeUntrusted)
+    candidates.push({ name: "untrusted-rules", text: untrustedContentRules() });
+  if (opts.includeSecurityTeam)
+    candidates.push({ name: "security-team", text: securityTeamRules() });
+  candidates.push(...selectOnDemandDoctrines(opts.query));
+  (opts.volatile ?? [])
+    .filter(Boolean)
+    .forEach((t, i) => candidates.push({ name: `volatile:${i}`, text: t }));
+
+  for (const c of candidates) {
+    if (!c.text) continue;
+    const cost = estTokens(c.text) + 1; // +1 for the joining separator
+    if (tokens + cost <= maxTokens) {
+      parts.push(c.text);
+      included.push(c.name);
+      tokens += cost;
+    } else {
+      dropped.push(c.name);
+    }
+  }
+
+  return { full: parts.join("\n\n---\n\n"), tokens, included, dropped };
 }

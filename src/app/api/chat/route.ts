@@ -1,4 +1,4 @@
-import { buildSystemPromptBlocks } from "@/lib/brain";
+import { buildSystemPromptBlocks, buildTieredSystemPrompt } from "@/lib/brain";
 import { getTier1, serializeTier1 } from "@/lib/context/tier1";
 import {
   getMemory,
@@ -249,7 +249,7 @@ export async function POST(req: Request) {
   const tPrompt = Date.now();
   // Phase 2: build once per request — stable canon reused from in-process cache;
   // volatile extras (memory/vault/pack) stay out of the Anthropic cache prefix.
-  const systemBlocks = buildSystemPromptBlocks([
+  const volatileExtras = [
     threatVolatile,
     serializeTier1(tier1),
     memoryForPrompt(memory, lastUser),
@@ -262,7 +262,8 @@ export async function POST(req: Request) {
         )
       : 'RECENT REPOMIX PREVIEW: none — operator can say "pack the repo".',
     `RUNTIME: Prefer grounded STARRA canon. Local free model when Ollama is up (${ollamaModel}) with Fable-inspired reasoning scaffold. Agent tool rounds capped at ${MAX_AGENT_TURNS}.`,
-  ]);
+  ];
+  const systemBlocks = buildSystemPromptBlocks(volatileExtras);
   const system = systemBlocks.full;
   // #region agent log
   fetch("http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1", {
@@ -445,16 +446,26 @@ export async function POST(req: Request) {
             ).catch(() => {});
             // #endregion
           } else if (prefer === "kimi" && hostedAvailable("kimi")) {
-            // Free Kimi (Groq) — same canon/personality assembly, streamed text.
+            // Free Kimi (Groq) — tiered under the 8K free cap: always-on core
+            // identity + on-demand doctrines/volatile budgeted to fit.
+            const tiered = buildTieredSystemPrompt({
+              query: lastUser,
+              volatile: volatileExtras,
+              includeUntrusted: Boolean(packPreview),
+              includeSecurityTeam: !operatorScan.clean,
+            });
             const r = await streamHosted({
               provider: "kimi",
-              system,
+              system: tiered.full,
               messages,
               onText: (t) => push(t),
             });
-            pushFeed("ORACLE", `Kimi brain — ${r.model}`);
+            pushFeed(
+              "ORACLE",
+              `Kimi brain — ${r.model} (~${tiered.tokens} tok, +${tiered.included.length - 1} ctx${tiered.dropped.length ? `, deferred: ${tiered.dropped.join(",")}` : ""})`,
+            );
           } else if (prefer === "grok" && hostedAvailable("grok")) {
-            // xAI Grok — opt-in via LLM_PROVIDER=grok; identical assembly.
+            // xAI Grok — no TPM cap, send the full canon (identical assembly).
             const r = await streamHosted({
               provider: "grok",
               system,
