@@ -373,6 +373,31 @@ export async function POST(req: Request) {
           ).catch(() => {});
           // #endregion
 
+          // Hosted-provider safety net: a Groq 429/413 or network drop should
+          // fall to the local brain, not leave her mute. Only when nothing has
+          // streamed yet — a mid-reply drop can't be cleanly re-answered.
+          const localFallback = async (label: string, err: unknown) => {
+            const emsg = err instanceof Error ? err.message : String(err);
+            if (full.length > 0) {
+              push(`\n\n[${label} link dropped mid-reply: ${emsg.slice(0, 80)}]`);
+              return;
+            }
+            if (ollamaUp && hasModel) {
+              pushFeed(
+                "ALERT",
+                `${label} failed (${emsg.slice(0, 60)}) — dropping to local Ollama`,
+              );
+              await streamLocalWithCopyGuard({
+                system: clipSystemForLocal(system),
+                messages: sanitizeMessagesForLocal(messages),
+                lastUser,
+                onText: (t) => push(t),
+              });
+            } else {
+              throw err; // no local brain available — outer catch emits degraded
+            }
+          };
+
           if (useOllama && ollamaUp && hasModel) {
             const localSystem = clipSystemForLocal(system);
             const localMessages = sanitizeMessagesForLocal(messages);
@@ -454,25 +479,33 @@ export async function POST(req: Request) {
               includeUntrusted: Boolean(packPreview),
               includeSecurityTeam: !operatorScan.clean,
             });
-            const r = await streamHosted({
-              provider: "kimi",
-              system: tiered.full,
-              messages,
-              onText: (t) => push(t),
-            });
-            pushFeed(
-              "ORACLE",
-              `Kimi brain — ${r.model} (~${tiered.tokens} tok, +${tiered.included.length - 1} ctx${tiered.dropped.length ? `, deferred: ${tiered.dropped.join(",")}` : ""})`,
-            );
+            try {
+              const r = await streamHosted({
+                provider: "kimi",
+                system: tiered.full,
+                messages,
+                onText: (t) => push(t),
+              });
+              pushFeed(
+                "ORACLE",
+                `Kimi brain — ${r.model} (~${tiered.tokens} tok, +${tiered.included.length - 1} ctx${tiered.dropped.length ? `, deferred: ${tiered.dropped.join(",")}` : ""})`,
+              );
+            } catch (err) {
+              await localFallback("Kimi", err);
+            }
           } else if (prefer === "grok" && hostedAvailable("grok")) {
             // xAI Grok — no TPM cap, send the full canon (identical assembly).
-            const r = await streamHosted({
-              provider: "grok",
-              system,
-              messages,
-              onText: (t) => push(t),
-            });
-            pushFeed("ORACLE", `Grok brain — ${r.model}`);
+            try {
+              const r = await streamHosted({
+                provider: "grok",
+                system,
+                messages,
+                onText: (t) => push(t),
+              });
+              pushFeed("ORACLE", `Grok brain — ${r.model}`);
+            } catch (err) {
+              await localFallback("Grok", err);
+            }
           } else if (
             anthropicKey &&
             prefer !== "ollama" &&
