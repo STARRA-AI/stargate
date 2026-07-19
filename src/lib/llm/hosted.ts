@@ -36,9 +36,10 @@ const CONFIG: Record<HostedProvider, HostedConfig> = {
     keyEnv: "XAI_API_KEY",
     modelEnv: "XAI_MODEL",
     defaultModel: "grok-4.5",
-    // Chat Grok only — exclude vision/image/voice/tts variants from the list.
+    // General chat Grok only — exclude vision/image/voice/tts/build/code/fast.
     match: (id) =>
-      /^grok/i.test(id) && !/(vision|image|voice|tts|whisper|embedding)/i.test(id),
+      /^grok/i.test(id) &&
+      !/(vision|image|imagine|voice|tts|whisper|embedding|build|code|fast)/i.test(id),
   },
 };
 
@@ -72,12 +73,12 @@ export async function resolveHostedModel(
       });
       if (res.ok) {
         const data = (await res.json()) as { data?: { id: string }[] };
-        // Newest matching slug — dated variants sort last (…-0905 > …-0711).
-        const matches = (data.data ?? [])
-          .map((m) => m.id)
-          .filter(cfg.match)
-          .sort();
-        const picked = matches[matches.length - 1];
+        const matches = (data.data ?? []).map((m) => m.id).filter(cfg.match);
+        // Prefer the documented default when the provider still lists it;
+        // otherwise the newest by sort (dated variants sort last, …-0905 > …-0711).
+        const picked = matches.includes(cfg.defaultModel)
+          ? cfg.defaultModel
+          : matches.sort()[matches.length - 1];
         if (picked) {
           modelCache[provider] = picked;
           return picked;
