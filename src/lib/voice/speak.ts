@@ -3,7 +3,12 @@
  * Book 1 §7: one consistent voice; operator register unchanged.
  */
 
-import { applyStarraVoice, voicesReady } from "@/lib/voice/voice-select";
+import {
+  applyStarraVoice,
+  voicesReady,
+  isAraSelected,
+  isSpecificWebSpeechVoice,
+} from "@/lib/voice/voice-select";
 import {
   piperModelAvailable,
   stopPiperAudio,
@@ -117,8 +122,10 @@ export async function speakStarra(
     window.speechSynthesis.resume();
   }
 
-  // Ara (xAI) first when reachable; Piper remains the offline fallback below.
-  if (!signal?.aborted) {
+  // Ara (xAI) is the default/primary voice. It runs first UNLESS the operator
+  // explicitly picked a Web Speech voice or AUTO in Settings. Piper/Web Speech
+  // remain the fallback below (offline / Ara unreachable).
+  if (isAraSelected() && !signal?.aborted) {
     const araOk = await speakAra(text, signal);
     if (araOk && !signal?.aborted) {
       lastEngine = "ara";
@@ -126,7 +133,11 @@ export async function speakStarra(
     }
   }
 
-  const piperAvailable = await piperModelAvailable();
+  // When a specific Web Speech voice is chosen, honor it — skip Piper (which
+  // can't render a chosen voiceURI) and go straight to Web Speech below.
+  const piperAvailable = isSpecificWebSpeechVoice()
+    ? false
+    : await piperModelAvailable();
   // #region agent log
   fetch(
     "http://127.0.0.1:7335/ingest/492eaea3-719f-4f1b-a6a4-532369c1efe1",

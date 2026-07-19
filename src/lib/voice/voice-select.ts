@@ -13,6 +13,26 @@ export const STARRA_RATE = 0.95;
 
 const STORAGE_KEY = "starra_voice_uri";
 
+/**
+ * Sentinel value meaning "use Ara (xAI TTS)" — the primary voice, handled in
+ * speak.ts, not by Web Speech. "auto" means let Web Speech auto-pick. Anything
+ * else is a concrete Web Speech voiceURI.
+ */
+export const ARA_VOICE_ID = "ara";
+export const AUTO_VOICE_ID = "auto";
+
+/** Ara is the default: selected unless the operator explicitly picked otherwise. */
+export function isAraSelected(): boolean {
+  const s = getStoredVoiceUri();
+  return s === null || s === ARA_VOICE_ID;
+}
+
+/** A concrete Web Speech voice was chosen (not Ara, not auto) → skip Ara + Piper. */
+export function isSpecificWebSpeechVoice(): boolean {
+  const s = getStoredVoiceUri();
+  return s !== null && s !== ARA_VOICE_ID && s !== AUTO_VOICE_ID;
+}
+
 const GB_FEMALE = [
   /google uk english female/i,
   /\bkate\b/i,
@@ -78,7 +98,8 @@ export function pickStarraVoice(
   if (!voices.length) return null;
 
   const storedUri = getStoredVoiceUri();
-  if (storedUri) {
+  // "ara"/"auto" are engine sentinels, not Web Speech URIs — fall through to auto-pick.
+  if (storedUri && storedUri !== ARA_VOICE_ID && storedUri !== AUTO_VOICE_ID) {
     const stored = voices.find((v) => v.voiceURI === storedUri);
     if (stored) return stored;
   }
