@@ -328,6 +328,13 @@ input::placeholder { color: #7a63a8; }
   margin-left: -220px; margin-top: -220px; object-fit: contain;
   mix-blend-mode: screen; pointer-events: none; z-index: 2;
   transition: opacity 0.35s ease;
+  /* The motion clips are yuv420p (no alpha): opaque near-black rectangle.
+     screen blend hides the dark field; this feathered circular mask removes
+     the frame's corners/seam around the round eye. Static — zero per-frame cost. */
+  -webkit-mask: radial-gradient(circle at center, #000 0 64%, transparent 76%);
+  mask: radial-gradient(circle at center, #000 0 64%, transparent 76%);
+  -webkit-mask-repeat: no-repeat;
+  mask-repeat: no-repeat;
 }
 .reactor-core {
   position: absolute; top: 0; left: 0; width: 52px; height: 52px; border-radius: 50%;
