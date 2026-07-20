@@ -1,19 +1,12 @@
 "use client";
 
 import Image from "next/image";
+import { COPY } from "@/lib/copy";
 import { MOTION } from "@/lib/motion/assets";
 import { useEffect, useRef, useState } from "react";
 
-const BOOT_LINES = [
-  "INITIALIZING STARGATE KERNEL",
-  "LOADING MEMORY BANKS ... READY",
-  "LINKING STARRA BRAIN ... OK",
-  "LOADING STARRA SOUL ... OK",
-  "VOICE LOOP + OLLAMA ... ONLINE",
-  "DRAGON TRADAR MODULE ... DEMO MODE",
-  "THINK TANK ENSEMBLE ... DEMO MODE",
-  "ALL SYSTEMS NOMINAL",
-];
+/* Canonical boot sequence — single source of truth is COPY.boot. */
+const BOOT_LINES = COPY.boot;
 
 export function DeckBoot({ onDone }: { onDone: () => void }) {
   const [lines, setLines] = useState<string[]>([]);

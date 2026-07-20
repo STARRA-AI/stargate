@@ -284,7 +284,7 @@ export function Bridge() {
       ? ((totalExposure / (portfolio.balanceDollars + totalExposure)) * 100).toFixed(1)
       : null;
 
-  const mobileReply = lastReply || "Two items need you today.";
+  const mobileReply = lastReply || "Standing by, operator.";
 
   if (isMobile) {
     return (

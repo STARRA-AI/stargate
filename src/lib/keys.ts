@@ -4,7 +4,18 @@ import path from "path";
 /**
  * Operator API key vault — stored server-side in data/keys.json (gitignored).
  * Each slot powers a HUD panel; unlinked slots surface a LINK cue in the UI.
+ *
+ * `group` is a display-only organizer for the Settings KeyVault UI — it does
+ * not change storage, validation, or env fallback behavior.
  */
+
+export const KEY_GROUP_LABELS: Record<string, string> = {
+  brain: "Brain — Think Tank + daily driver",
+  dragontradar: "Dragon Tradar",
+  multica: "Multica",
+  openalice: "OpenAlice",
+  future: "Future links — dormant",
+};
 
 export const KEY_SLOTS = [
   {
@@ -12,102 +23,119 @@ export const KEY_SLOTS = [
     label: "Anthropic (Claude)",
     hint: "sk-ant-…",
     powers: "Think Tank vote · premium brain",
+    group: "brain",
   },
   {
     id: "openai",
     label: "OpenAI (GPT)",
     hint: "sk-…",
     powers: "Think Tank vote",
+    group: "brain",
   },
   {
     id: "gemini",
     label: "Google (Gemini)",
     hint: "AIza…",
     powers: "Think Tank vote",
+    group: "brain",
   },
   {
     id: "xai",
     label: "xAI (Grok)",
     hint: "xai-…",
     powers: "Think Tank vote",
+    group: "brain",
   },
   {
     id: "groq",
     label: "Groq (Kimi K2)",
     hint: "gsk_…",
     powers: "Kimi/Groq daily-driver brain chat",
+    group: "brain",
   },
   {
     id: "kalshi_key_id",
     label: "Kalshi API key ID",
     hint: "UUID from kalshi.com account settings",
     powers: "Dragon Tradar balance + real positions",
+    group: "dragontradar",
   },
   {
     id: "kalshi_private_key",
     label: "Kalshi RSA private key",
     hint: "-----BEGIN RSA PRIVATE KEY----- …",
     powers: "Dragon Tradar balance + real positions",
+    group: "dragontradar",
   },
   {
     id: "dragontradar_url",
     label: "Dragon Tradar stats URL",
     hint: "https://dragontradar.com/api/stats",
     powers: "Site Telemetry bots/users/trades",
+    group: "dragontradar",
   },
   {
     id: "dragontradar_token",
     label: "Dragon Tradar stats token",
     hint: "Bearer token if the stats endpoint needs one",
     powers: "Site Telemetry bots/users/trades",
+    group: "dragontradar",
   },
   {
     id: "multica_token",
     label: "Multica PAT",
     hint: "mul_… (Settings → Tokens on multica.ai)",
     powers: "Multica workspaces · issues · agent teammates",
+    group: "multica",
   },
   {
     id: "multica_base_url",
     label: "Multica API base URL",
     hint: "https://api.multica.ai (optional; self-host override)",
     powers: "Multica cloud or self-hosted server",
+    group: "multica",
   },
   {
     id: "github_token",
     label: "GitHub token",
     hint: "ghp_… or fine-grained GitHub PAT",
     powers: "Future repo-level funding lookup",
+    group: "future",
   },
   {
     id: "open_collective_api_key",
     label: "Open Collective API key",
     hint: "Open Collective API key",
     powers: "Future funder-finder enrichment",
+    group: "future",
   },
   {
     id: "aiassist_api_key",
     label: "AiAssist API key",
     hint: "aai_…",
     powers: "Future angel-agent investor scans",
+    group: "future",
   },
   {
     id: "openalice_base_url",
     label: "OpenAlice runtime URL",
     hint: "http://127.0.0.1:47331",
     powers: "Alice market intel · issues · inbox readout",
+    group: "openalice",
   },
   {
     id: "openalice_alpaca_key_id",
     label: "OpenAlice Alpaca key ID",
     hint: "Alpaca paper or live key ID",
     powers: "Broker gate unlock in OpenAlice bridge (dormant until linked)",
+    group: "openalice",
   },
   {
     id: "openalice_alpaca_secret_key",
     label: "OpenAlice Alpaca secret key",
     hint: "Alpaca secret — configure in OpenAlice directly preferred",
     powers: "Broker gate unlock in OpenAlice bridge (dormant until linked)",
+    group: "openalice",
   },
 ] as const;
 

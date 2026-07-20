@@ -2,6 +2,7 @@
 
 import { ScreenShell } from "@/components/hud/ScreenShell";
 import type { Tier1Data } from "@/lib/context/tier1";
+import { KEY_GROUP_LABELS, KEY_SLOTS } from "@/lib/keys";
 import { useEffect, useState } from "react";
 
 function LlmStatus() {
@@ -185,6 +186,17 @@ type KeySlot = {
   masked: string | null;
 };
 
+// Display-only grouping — KEY_SLOTS in lib/keys.ts is the single source of
+// truth for id → group; /api/keys doesn't forward `group`, so it's resolved
+// client-side from the same constant the API reads its slots from.
+const SLOT_GROUP = new Map<string, string>(
+  KEY_SLOTS.map((s) => [s.id, s.group]),
+);
+const GROUP_ORDER: string[] = [];
+for (const s of KEY_SLOTS) {
+  if (!GROUP_ORDER.includes(s.group)) GROUP_ORDER.push(s.group);
+}
+
 function KeyVault() {
   const [slots, setSlots] = useState<KeySlot[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -220,41 +232,52 @@ function KeyVault() {
         Link APIs
       </h2>
       <p className="font-[family-name:var(--font-body)] text-[11px] text-[var(--star)]">
-        Paste a key, hit STORE. Keys live in data/keys.json on this machine
-        only — never committed. Each key lights up the panel listed next to
-        it.
+        Paste a key, hit STORE KEYS. Keys live in data/keys.json on this
+        machine only — never committed. Each key lights up the panel listed
+        next to it.
       </p>
-      <div className="grid gap-3 md:grid-cols-2">
-        {slots.map((s) => (
-          <label
-            key={s.id}
-            className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
-          >
-            <span className="flex items-center gap-2">
-              {s.label}
-              <span
-                className={
-                  s.linked ? "text-[var(--ok)]" : "text-[var(--danger)]"
-                }
-              >
-                {s.linked ? `● linked ${s.masked}` : "○ not linked"}
-              </span>
-            </span>
-            <span className="block text-[10px] text-[var(--star)]">
-              powers: {s.powers}
-            </span>
-            <input
-              type="password"
-              placeholder={s.hint}
-              value={values[s.id] ?? ""}
-              onChange={(e) =>
-                setValues((v) => ({ ...v, [s.id]: e.target.value }))
-              }
-              className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-[var(--chrome)]"
-            />
-          </label>
-        ))}
-      </div>
+      {GROUP_ORDER.map((group) => {
+        const items = slots.filter((s) => SLOT_GROUP.get(s.id) === group);
+        if (!items.length) return null;
+        return (
+          <div key={group} className="space-y-3">
+            <h3 className="font-[family-name:var(--font-display)] text-[10px] tracking-[0.28em] text-[var(--star)] uppercase">
+              {KEY_GROUP_LABELS[group] ?? group}
+            </h3>
+            <div className="grid gap-3 md:grid-cols-2">
+              {items.map((s) => (
+                <label
+                  key={s.id}
+                  className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
+                >
+                  <span className="flex items-center gap-2">
+                    {s.label}
+                    <span
+                      className={
+                        s.linked ? "text-[var(--ok)]" : "text-[var(--danger)]"
+                      }
+                    >
+                      {s.linked ? `● linked ${s.masked}` : "○ not linked"}
+                    </span>
+                  </span>
+                  <span className="block text-[10px] text-[var(--star)]">
+                    powers: {s.powers}
+                  </span>
+                  <input
+                    type="password"
+                    placeholder={s.hint}
+                    value={values[s.id] ?? ""}
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [s.id]: e.target.value }))
+                    }
+                    className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-[var(--chrome)]"
+                  />
+                </label>
+              ))}
+            </div>
+          </div>
+        );
+      })}
       <button
         type="button"
         onClick={() => void save()}

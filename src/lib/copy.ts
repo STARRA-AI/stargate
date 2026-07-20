@@ -1,6 +1,15 @@
 /** Design Spec §10 — operator microcopy only */
 export const COPY = {
-  boot: ["MEMORY ONLINE", "GATEWAY LINK ESTABLISHED", "SYSTEMS NOMINAL"],
+  boot: [
+    "INITIALIZING STARGATE KERNEL",
+    "LOADING MEMORY BANKS ... READY",
+    "LINKING STARRA BRAIN ... OK",
+    "LOADING STARRA SOUL ... OK",
+    "VOICE LOOP + OLLAMA ... ONLINE",
+    "DRAGON TRADAR MODULE ... DEMO MODE",
+    "THINK TANK ENSEMBLE ... DEMO MODE",
+    "ALL SYSTEMS NOMINAL",
+  ],
   idle: "STANDING BY",
   listening: "LISTENING",
   transcribing: "TRANSCRIBING",
