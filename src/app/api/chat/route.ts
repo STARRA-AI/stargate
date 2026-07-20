@@ -20,6 +20,7 @@ import {
   stripThinkTags,
 } from "@/lib/llm/ollama";
 import { streamHosted, hostedAvailable } from "@/lib/llm/hosted";
+import { getKey } from "@/lib/keys";
 import { addTokens } from "@/lib/metrics";
 import { pushFeed } from "@/lib/feed";
 import { fenceUntrusted } from "@/lib/security/fencing";
@@ -191,7 +192,7 @@ async function maybeToolReply(lastUser: string): Promise<string | null> {
     if (!result.ok) {
       return `Repomix failed. ${result.error ?? "Unknown error"}. Retry from Tools.`;
     }
-    return `Copy. Repo packed — ${result.bytes} bytes at ${result.outputPath}. Open Tools for preview.`;
+    return `Repo packed, Classic — ${result.bytes} bytes at ${result.outputPath}. Open Tools for the preview.`;
   }
 
   if (
@@ -277,7 +278,7 @@ export async function POST(req: Request) {
   }
 
   const encoder = new TextEncoder();
-  const anthropicKey = process.env.ANTHROPIC_API_KEY;
+  const anthropicKey = await getKey("anthropic");
   const prefer =
     (process.env.LLM_PROVIDER || "auto").toLowerCase() as
       | "auto"
@@ -347,7 +348,7 @@ export async function POST(req: Request) {
               lastUser,
               onText: (t) => push(t),
             });
-          } else if (prefer === "kimi" && hostedAvailable("kimi")) {
+          } else if (prefer === "kimi" && (await hostedAvailable("kimi"))) {
             // Free Kimi (Groq) — tiered under the 8K free cap: always-on core
             // identity + on-demand doctrines/volatile budgeted to fit.
             const tiered = buildTieredSystemPrompt({
@@ -370,7 +371,7 @@ export async function POST(req: Request) {
             } catch (err) {
               await localFallback("Kimi", err);
             }
-          } else if (prefer === "grok" && hostedAvailable("grok")) {
+          } else if (prefer === "grok" && (await hostedAvailable("grok"))) {
             // xAI Grok — no TPM cap, send the full canon (identical assembly).
             try {
               const r = await streamHosted({

@@ -22,7 +22,12 @@ export async function GET() {
 }
 
 export async function PUT(req: Request) {
-  const body = await req.json();
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+  }
   const parsed = Tier1Schema.parse(body);
   const saved = await saveTier1(parsed);
   return Response.json(saved);

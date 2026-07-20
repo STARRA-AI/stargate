@@ -273,8 +273,6 @@ function KeyVault() {
 
 export default function SettingsPage() {
   const [tier1, setTier1] = useState<Tier1Data | null>(null);
-  const [intensity, setIntensity] = useState(70);
-  const [voiceGain, setVoiceGain] = useState(80);
   const [saved, setSaved] = useState("");
 
   useEffect(() => {
@@ -302,28 +300,6 @@ export default function SettingsPage() {
           <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
             Deck
           </h2>
-          <label className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
-            Theme intensity
-            <input
-              type="range"
-              min={30}
-              max={100}
-              value={intensity}
-              onChange={(e) => setIntensity(Number(e.target.value))}
-              className="mt-2 w-full accent-[var(--magenta)]"
-            />
-          </label>
-          <label className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
-            Voice level
-            <input
-              type="range"
-              min={0}
-              max={100}
-              value={voiceGain}
-              onChange={(e) => setVoiceGain(Number(e.target.value))}
-              className="mt-2 w-full accent-[var(--purple)]"
-            />
-          </label>
           <WakeWordToggle />
           <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
             Wake: say &quot;starra&quot; or ⌥ + Space · Launch:{" "}

@@ -10,6 +10,7 @@
  */
 
 import type { ChatMessage } from "@/lib/llm/ollama";
+import { getKey } from "@/lib/keys";
 
 export type HostedProvider = "kimi" | "grok";
 
@@ -43,12 +44,22 @@ const CONFIG: Record<HostedProvider, HostedConfig> = {
   },
 };
 
-export function hostedKey(provider: HostedProvider): string | undefined {
-  return process.env[CONFIG[provider].keyEnv] || undefined;
+/** Vault slot backing each hosted provider — getKey() falls back to process.env. */
+const KEY_SLOT: Record<HostedProvider, "groq" | "xai"> = {
+  kimi: "groq",
+  grok: "xai",
+};
+
+export async function hostedKey(
+  provider: HostedProvider,
+): Promise<string | undefined> {
+  return getKey(KEY_SLOT[provider]);
 }
 
-export function hostedAvailable(provider: HostedProvider): boolean {
-  return Boolean(hostedKey(provider));
+export async function hostedAvailable(
+  provider: HostedProvider,
+): Promise<boolean> {
+  return Boolean(await hostedKey(provider));
 }
 
 /** Cache resolved slugs so we hit /models at most once per provider per process. */
@@ -64,7 +75,7 @@ export async function resolveHostedModel(
   const cached = modelCache[provider];
   if (cached) return cached;
 
-  const key = hostedKey(provider);
+  const key = await hostedKey(provider);
   if (key) {
     try {
       const res = await fetch(`${cfg.base}/models`, {
@@ -100,7 +111,7 @@ export async function streamHosted(opts: {
   onText: (chunk: string) => void;
 }): Promise<{ provider: string; model: string }> {
   const cfg = CONFIG[opts.provider];
-  const key = hostedKey(opts.provider);
+  const key = await hostedKey(opts.provider);
   if (!key) throw new Error(`${cfg.keyEnv} not set`);
   const model = await resolveHostedModel(opts.provider);
 

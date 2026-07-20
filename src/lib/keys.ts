@@ -32,6 +32,12 @@ export const KEY_SLOTS = [
     powers: "Think Tank vote",
   },
   {
+    id: "groq",
+    label: "Groq (Kimi K2)",
+    hint: "gsk_…",
+    powers: "Kimi/Groq daily-driver brain chat",
+  },
+  {
     id: "kalshi_key_id",
     label: "Kalshi API key ID",
     hint: "UUID from kalshi.com account settings",
@@ -130,6 +136,7 @@ export async function getKey(id: KeySlotId): Promise<string | undefined> {
     openai: process.env.OPENAI_API_KEY,
     gemini: process.env.GEMINI_API_KEY,
     xai: process.env.XAI_API_KEY,
+    groq: process.env.GROQ_API_KEY,
     multica_token: process.env.MULTICA_TOKEN,
     multica_base_url: process.env.MULTICA_SERVER_URL ?? process.env.MULTICA_BASE_URL,
     github_token: process.env.GITHUB_TOKEN,

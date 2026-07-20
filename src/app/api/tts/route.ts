@@ -1,7 +1,9 @@
+import { getKey } from "@/lib/keys";
+
 export const runtime = "nodejs";
 
 /**
- * xAI TTS proxy — voice "ara". Keeps XAI_API_KEY server-side (never in the
+ * xAI TTS proxy — voice "ara". Keeps the xAI key server-side (never in the
  * browser bundle). Returns audio bytes when keyed and successful; otherwise a
  * bodyless non-2xx so the client falls back to Piper → Web Speech.
  *
@@ -9,7 +11,7 @@ export const runtime = "nodejs";
  * { text, language, voice_id }, returns raw audio bytes (no `model` field).
  */
 export async function POST(req: Request) {
-  const key = process.env.XAI_API_KEY;
+  const key = await getKey("xai");
   if (!key) return new Response(null, { status: 204 }); // no key → Piper fallback
 
   let text = "";
