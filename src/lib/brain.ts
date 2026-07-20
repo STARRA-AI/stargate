@@ -408,11 +408,6 @@ export function buildSystemPromptBlocks(extras: string[] = []): SystemPromptBloc
   return { stable, volatile, full };
 }
 
-/** Back-compat: single joined string (Ollama / callers that ignore cache blocks). */
-export function buildSystemPrompt(extras: string[] = []): string {
-  return buildSystemPromptBlocks(extras).full;
-}
-
 /* ─────────────────────────── Tiered prompt (capped free tiers) ───────────────
  * Groq's free tier caps a request at 8K tokens, too small for full canon. So the
  * daily-driver (kimi) path ships an always-on CORE identity and pulls doctrines /

@@ -19,12 +19,6 @@ export { PIPER_VOICE_ID };
 
 export type SpeakEngine = "ara" | "piper" | "webspeech" | "none";
 
-let lastEngine: SpeakEngine = "none";
-
-export function getLastSpeakEngine(): SpeakEngine {
-  return lastEngine;
-}
-
 /** Active Ara audio element, tracked so stopAllSpeech()/barge-in can cancel it. */
 let araAudio: HTMLAudioElement | null = null;
 
@@ -110,7 +104,6 @@ export async function speakStarra(
   signal?: AbortSignal,
 ): Promise<SpeakEngine> {
   if (typeof window === "undefined" || !text.trim()) {
-    lastEngine = "none";
     return "none";
   }
 
@@ -126,7 +119,6 @@ export async function speakStarra(
   if (isAraSelected() && !signal?.aborted) {
     const araOk = await speakAra(text, signal);
     if (araOk && !signal?.aborted) {
-      lastEngine = "ara";
       return "ara";
     }
   }
@@ -144,19 +136,16 @@ export async function speakStarra(
       new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000)),
     ]);
     if (piperOk && !signal?.aborted) {
-      lastEngine = "piper";
       return "piper";
     }
   }
 
   if (!window.speechSynthesis) {
-    lastEngine = "none";
     return "none";
   }
 
   await voicesReady();
   if (signal?.aborted) {
-    lastEngine = "none";
     return "none";
   }
 
@@ -166,7 +155,6 @@ export async function speakStarra(
 
     const onAbort = () => {
       window.speechSynthesis.cancel();
-      lastEngine = "none";
       resolve("none");
     };
 
@@ -174,12 +162,10 @@ export async function speakStarra(
 
     u.onend = () => {
       signal?.removeEventListener("abort", onAbort);
-      lastEngine = "webspeech";
       resolve("webspeech");
     };
     u.onerror = () => {
       signal?.removeEventListener("abort", onAbort);
-      lastEngine = "none";
       resolve("none");
     };
     window.speechSynthesis.speak(u);

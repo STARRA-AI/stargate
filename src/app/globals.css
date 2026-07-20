@@ -170,13 +170,6 @@ a:hover {
   backdrop-filter: blur(8px);
 }
 
-.chrome-frame {
-  background-image: url("/brand/hud_panel.png");
-  background-size: 100% 100%;
-  background-repeat: no-repeat;
-  background-position: center;
-}
-
 .focus-magenta:focus-visible {
   outline: 2px solid var(--magenta);
   outline-offset: 3px;

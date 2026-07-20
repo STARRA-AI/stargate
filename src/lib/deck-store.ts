@@ -103,14 +103,3 @@ export async function decideProposal(
   }
   return state;
 }
-
-export async function addProposal(
-  tag: string,
-  text: string,
-  impact: string,
-): Promise<DeckState> {
-  const state = await load();
-  state.proposals.push({ id: state.nextId++, tag, text, impact });
-  await save(state);
-  return state;
-}
