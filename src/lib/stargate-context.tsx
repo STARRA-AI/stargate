@@ -5,17 +5,23 @@ import {
   useCallback,
   useContext,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
 import type { HudState } from "@/lib/tokens";
-import { statusForState } from "@/lib/copy";
+import { COPY, statusForState } from "@/lib/copy";
 
 export type ActionLogEntry = {
   id: string;
   time: string;
   text: string;
 };
+
+/** One chat turn. Structurally identical to MessageColumn's `Msg` — shared
+ * conversation state lives here so both typed chat (DeckConsole) and voice
+ * (useVoiceLoop) read/write the same transcript. */
+export type Msg = { role: "user" | "assistant"; content: string };
 
 export type ConnectorStatus = "connected" | "available" | "error";
 
@@ -49,6 +55,25 @@ type StargateContextValue = {
   setToolName: (n?: string) => void;
   bootDone: boolean;
   setBootDone: (v: boolean) => void;
+  /** Shared conversation transcript — committed turns (typed chat + voice). */
+  history: Msg[];
+  /** In-progress assistant text for the currently streaming turn, if any. */
+  streaming: string;
+  /**
+   * Single entry point for a chat turn: streams /api/chat with prior
+   * `history` as context, commits user+assistant turns to `history`, and
+   * speaks the reply via speakStarra. Used by both DeckConsole (typed) and
+   * useVoiceLoop (voice) so there is exactly one conversation + HUD state
+   * machine.
+   */
+  sendMessage: (text: string) => Promise<void>;
+  /**
+   * Barge-in primitive: aborts any in-flight sendMessage turn (fetch + TTS)
+   * and kills any currently playing audio. Does NOT touch HUD state — the
+   * caller (e.g. useVoiceLoop's wake()) owns the coherent state transition
+   * that follows, so a stale turn resolving later can never clobber it.
+   */
+  stopSpeaking: () => void;
 };
 
 const StargateContext = createContext<StargateContextValue | null>(null);
@@ -94,6 +119,10 @@ export function StargateProvider({ children }: { children: ReactNode }) {
   const [snap, setSnap] = useState<SnapStats>(DEFAULT_SNAP);
   const [toolName, setToolName] = useState<string | undefined>();
   const [bootDone, setBootDone] = useState(false);
+  const [history, setHistory] = useState<Msg[]>([]);
+  const [streaming, setStreaming] = useState("");
+  const fetchAbortRef = useRef<AbortController | null>(null);
+  const ttsAbortRef = useRef<AbortController | null>(null);
 
   const pushLog = useCallback((text: string) => {
     setActionLog((prev) => [
@@ -105,6 +134,120 @@ export function StargateProvider({ children }: { children: ReactNode }) {
   const statusLine = useMemo(
     () => statusForState(hudState, toolName),
     [hudState, toolName],
+  );
+
+  /** Abort whatever turn (fetch and/or TTS) is currently in flight. */
+  const abortTurn = useCallback(() => {
+    fetchAbortRef.current?.abort();
+    ttsAbortRef.current?.abort();
+    fetchAbortRef.current = null;
+    ttsAbortRef.current = null;
+  }, []);
+
+  const stopSpeaking = useCallback(() => {
+    abortTurn();
+    void import("@/lib/voice/speak").then(({ stopAllSpeech }) => stopAllSpeech());
+  }, [abortTurn]);
+
+  const sendMessage = useCallback(
+    async (text: string) => {
+      const trimmed = text.trim();
+      if (!trimmed) return;
+
+      abortTurn();
+      const fetchAc = new AbortController();
+      const ttsAc = new AbortController();
+      fetchAbortRef.current = fetchAc;
+      ttsAbortRef.current = ttsAc;
+
+      // Prime Web Speech during the triggering gesture — async fetch loses
+      // activation otherwise.
+      if (typeof window !== "undefined" && window.speechSynthesis) {
+        window.speechSynthesis.resume();
+        window.speechSynthesis.getVoices();
+      }
+
+      let nextHistory: Msg[] = [];
+      setHistory((h) => {
+        nextHistory = [...h, { role: "user", content: trimmed }];
+        return nextHistory;
+      });
+      setStreaming("");
+      setHudState("thinking");
+      pushLog(`[EXEC] ${trimmed.slice(0, 48)}`);
+
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages: nextHistory }),
+          signal: fetchAc.signal,
+        });
+
+        if (!res.ok || !res.body) {
+          setHudState("error");
+          setLastReply(COPY.error);
+          pushLog("[SYS] link degraded");
+          return;
+        }
+
+        setHudState("streaming");
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        let full = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith("data:")) continue;
+            const payload = line.slice(5).trim();
+            if (payload === "[DONE]") continue;
+            try {
+              const json = JSON.parse(payload) as { text?: string };
+              if (json.text) {
+                full += json.text;
+                setStreaming(full);
+              }
+            } catch {
+              /* ignore */
+            }
+          }
+        }
+
+        setHudState("speaking");
+        setLastReply(full);
+        // Speak immediately. `full` already rendered live via setStreaming()
+        // above during the read loop, so commit straight to history instead
+        // of re-typing it character-by-character.
+        const { speakStarra } = await import("@/lib/voice/speak");
+        const speakPromise = speakStarra(full, ttsAc.signal);
+        setHistory((h) => [...h, { role: "assistant", content: full }]);
+        const engine = await speakPromise;
+        if (ttsAc.signal.aborted) {
+          // Barge-in (or a newer turn) already interrupted this one and owns
+          // whatever HUD state comes next — don't clobber it.
+          return;
+        }
+        setStreaming("");
+        setHudState("idle");
+        pushLog(`[ORACLE] reply landed · voice ${engine}`);
+      } catch (err) {
+        if ((err as Error).name === "AbortError") return;
+        setHudState("error");
+        setLastReply(COPY.error);
+        pushLog("[SYS] link degraded");
+      } finally {
+        if (fetchAbortRef.current === fetchAc) fetchAbortRef.current = null;
+        if (ttsAbortRef.current === ttsAc) ttsAbortRef.current = null;
+      }
+    },
+    [abortTurn, pushLog, setHudState],
   );
 
   const value = useMemo(
@@ -123,6 +266,10 @@ export function StargateProvider({ children }: { children: ReactNode }) {
       setToolName,
       bootDone,
       setBootDone,
+      history,
+      streaming,
+      sendMessage,
+      stopSpeaking,
     }),
     [
       hudState,
@@ -134,6 +281,10 @@ export function StargateProvider({ children }: { children: ReactNode }) {
       snap,
       toolName,
       bootDone,
+      history,
+      streaming,
+      sendMessage,
+      stopSpeaking,
     ],
   );
 

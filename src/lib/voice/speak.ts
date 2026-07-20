@@ -21,6 +21,14 @@ export type SpeakEngine = "ara" | "piper" | "webspeech" | "none";
 
 /** Active Ara audio element, tracked so stopAllSpeech()/barge-in can cancel it. */
 let araAudio: HTMLAudioElement | null = null;
+/**
+ * Resolver for whatever speakAra() promise is currently pending. Pausing the
+ * audio element alone does not fire `ended`/`error`, so without this a
+ * barge-in (stopAraAudio called from outside speakAra's own signal/listener
+ * plumbing) would leave that promise hanging forever — and, upstream, the
+ * awaiting speakStarra()/sendMessage() turn stuck too.
+ */
+let araSettle: (() => void) | null = null;
 
 function stopAraAudio() {
   if (araAudio) {
@@ -31,6 +39,11 @@ function stopAraAudio() {
       /* ignore */
     }
     araAudio = null;
+  }
+  if (araSettle) {
+    const settle = araSettle;
+    araSettle = null;
+    settle();
   }
 }
 
@@ -65,32 +78,40 @@ async function speakAra(text: string, signal?: AbortSignal): Promise<boolean> {
     araAudio = audio;
 
     return await new Promise<boolean>((resolve) => {
+      let settled = false;
       const cleanup = () => URL.revokeObjectURL(url);
+      // Settles this promise exactly once, from any path (ended/error/abort/
+      // play-failure/external stopAraAudio), and clears the shared resolver
+      // so a later, unrelated stopAraAudio() call is a no-op.
+      const settle = (ok: boolean) => {
+        if (settled) return;
+        settled = true;
+        signal?.removeEventListener("abort", onAbort);
+        if (araSettle === settleFalse) araSettle = null;
+        cleanup();
+        resolve(ok);
+      };
+      const settleFalse = () => settle(false);
+      araSettle = settleFalse;
       const onAbort = () => {
         try {
           audio.pause();
         } catch {
           /* ignore */
         }
-        cleanup();
-        resolve(false);
+        settle(false);
       };
       signal?.addEventListener("abort", onAbort, { once: true });
       audio.onended = () => {
-        signal?.removeEventListener("abort", onAbort);
-        cleanup();
         if (araAudio === audio) araAudio = null;
-        resolve(true);
+        settle(true);
       };
       audio.onerror = () => {
-        signal?.removeEventListener("abort", onAbort);
-        cleanup();
         if (araAudio === audio) araAudio = null;
-        resolve(false);
+        settle(false);
       };
       audio.play().catch(() => {
-        cleanup();
-        resolve(false);
+        settle(false);
       });
     });
   } catch {
@@ -125,18 +146,57 @@ export async function speakStarra(
 
   // When a specific Web Speech voice is chosen, honor it — skip Piper (which
   // can't render a chosen voiceURI) and go straight to Web Speech below.
+  //
+  // KNOWN GAP (audit item, not fixed here — out of ownership scope): once
+  // piperModelAvailable() (lib/voice/piper-speak.ts) records a failed HEAD
+  // check it caches `false` for the rest of the session with no retry/TTL,
+  // so a transient miss disables Piper until reload. Fixing it means
+  // touching piper-speak.ts's module-level `localAvailable` cache, which is
+  // outside this file's ownership for this change — flagged for follow-up.
   const piperAvailable = isSpecificWebSpeechVoice()
     ? false
     : await piperModelAvailable();
 
   if (piperAvailable) {
     const { speakPiper } = await import("@/lib/voice/piper-runtime");
+    // Piper gets its own AbortController, chained off the caller's `signal`,
+    // so the 4s timeout below can cancel the LOSING synthesis instead of
+    // just walking away from it. Without this, a slow Piper call that wins
+    // the race after the timeout would still play — overlapping whatever
+    // WebSpeech fallback already started (dual-voice playback).
+    const piperAc = new AbortController();
+    const forwardAbort = () => piperAc.abort();
+    if (signal?.aborted) {
+      // Already aborted before we got here — `addEventListener("abort", …)`
+      // below would never fire for an event that already happened, so seed
+      // piperAc's state directly instead of relying on it.
+      piperAc.abort();
+    } else {
+      signal?.addEventListener("abort", forwardAbort, { once: true });
+    }
+
+    let timedOut = false;
     const piperOk = await Promise.race<boolean>([
-      speakPiper(text, signal),
-      new Promise<boolean>((resolve) => setTimeout(() => resolve(false), 4_000)),
+      speakPiper(text, piperAc.signal),
+      new Promise<boolean>((resolve) =>
+        setTimeout(() => {
+          timedOut = true;
+          piperAc.abort();
+          resolve(false);
+        }, 4_000),
+      ),
     ]);
+
+    signal?.removeEventListener("abort", forwardAbort);
+
     if (piperOk && !signal?.aborted) {
       return "piper";
+    }
+    if (timedOut) {
+      // Belt-and-suspenders: speakPiper's own abort listener already stops
+      // playback if it had started, but make sure nothing lingers before
+      // falling through to Web Speech.
+      stopPiperAudio();
     }
   }
 

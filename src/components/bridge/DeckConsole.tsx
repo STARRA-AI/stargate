@@ -1,127 +1,26 @@
 "use client";
 
-import { COPY } from "@/lib/copy";
 import { CHIPS } from "@/lib/deck-demo";
 import { useStargate } from "@/lib/stargate-context";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
-import { MessageColumn, type Msg } from "./MessageColumn";
+import { MessageColumn } from "./MessageColumn";
 
 export function DeckConsole({ onMic }: { onMic?: () => void }) {
-  const { setHudState, setLastReply, pushLog, hudState, lastReply } =
+  const { hudState, lastReply, history, streaming, sendMessage } =
     useStargate();
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState<Msg[]>([]);
-  const [streaming, setStreaming] = useState("");
-  const fetchAbortRef = useRef<AbortController | null>(null);
-  const ttsAbortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
-
-  function abortInFlight() {
-    fetchAbortRef.current?.abort();
-    ttsAbortRef.current?.abort();
-    fetchAbortRef.current = null;
-    ttsAbortRef.current = null;
-  }
 
   useEffect(() => {
     logRef.current?.scrollTo({ top: logRef.current.scrollHeight });
   }, [history, streaming]);
 
-  const send = useCallback(
-    async (text: string) => {
-      const trimmed = text.trim();
-      if (!trimmed) return;
-
-      abortInFlight();
-      const fetchAc = new AbortController();
-      const ttsAc = new AbortController();
-      fetchAbortRef.current = fetchAc;
-      ttsAbortRef.current = ttsAc;
-
-      // Prime Web Speech during user gesture — async fetch loses activation otherwise.
-      if (typeof window !== "undefined" && window.speechSynthesis) {
-        window.speechSynthesis.resume();
-        window.speechSynthesis.getVoices();
-      }
-
-
-      const nextHistory: Msg[] = [
-        ...history,
-        { role: "user", content: trimmed },
-      ];
-      setHistory(nextHistory);
-      setInput("");
-      setStreaming("");
-      setHudState("thinking");
-      pushLog(`[EXEC] ${trimmed.slice(0, 48)}`);
-
-      try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: nextHistory }),
-          signal: fetchAc.signal,
-        });
-
-        if (!res.ok || !res.body) {
-          setHudState("error");
-          setLastReply(COPY.error);
-          pushLog("[SYS] link degraded");
-          return;
-        }
-
-        setHudState("streaming");
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let full = "";
-
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop() ?? "";
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (payload === "[DONE]") continue;
-            try {
-              const json = JSON.parse(payload) as { text?: string };
-              if (json.text) {
-                full += json.text;
-                setStreaming(full);
-              }
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-
-        setHudState("speaking");
-        setLastReply(full);
-        // Speak immediately. `full` already rendered live via setStreaming()
-        // above during the read loop, so commit straight to history instead
-        // of re-typing it character-by-character (was re-parsing markdown
-        // on every char after the text had already appeared).
-        const { speakStarra } = await import("@/lib/voice/speak");
-        const speakPromise = speakStarra(full, ttsAc.signal);
-        setHistory((h) => [...h, { role: "assistant", content: full }]);
-        const engine = await speakPromise;
-        setStreaming("");
-        setHudState("idle");
-        pushLog(`[ORACLE] reply landed · voice ${engine}`);
-      } catch (err) {
-        if ((err as Error).name === "AbortError") return;
-        setHudState("error");
-        setLastReply(COPY.error);
-        pushLog("[SYS] link degraded");
-      }
-    },
-    [history, pushLog, setHudState, setLastReply],
-  );
+  function submit(text: string) {
+    if (!text.trim()) return;
+    setInput("");
+    void sendMessage(text);
+  }
 
   const waveLive =
     hudState === "listening" ||
@@ -167,7 +66,7 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
               key={label}
               type="button"
               className="chip"
-              onClick={() => void send(label)}
+              onClick={() => submit(label)}
             >
               {label}
             </button>
@@ -177,7 +76,7 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
         <Composer
           value={input}
           onChange={setInput}
-          onSubmit={() => void send(input)}
+          onSubmit={() => submit(input)}
           onMic={onMic}
           placeholder='> "GIVE ME THE BRIEF."'
         />

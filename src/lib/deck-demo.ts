@@ -43,7 +43,16 @@ export type DeckDemo = {
   ventures: Venture[];
 };
 
-export const CHIPS = ["BUILD", "SCAN", "DEPLOY", "REPORT", "SITE"] as const;
+/** Chips map to real capability — same route as typed chat (chat/route.ts
+ * maybeToolReply for "pack the repo" / "queue a short"; the rest land on
+ * grounded canon replies). No separate wiring needed. */
+export const CHIPS = [
+  "Give me the brief",
+  "Pack the repo",
+  "Queue a Silent Shadow short",
+  "Status check",
+  "What's the next money move?",
+] as const;
 
 export function fmtMoney(n: number) {
   return (

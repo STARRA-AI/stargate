@@ -40,15 +40,33 @@ function getSR(): (new () => Recog) | null {
 /**
  * Voice loop: say "starra" (wake word) or ⌥+Space / badge tap.
  * Realtime session when keyed; Web Speech STT + Piper/Web Speech TTS otherwise.
+ *
+ * Chat turns (fetch + history commit + TTS) are NOT owned here — they run
+ * through the shared `sendMessage` in stargate-context.tsx, the same entry
+ * point DeckConsole's typed chat uses. That keeps one transcript and one HUD
+ * state machine for both input modes, and means barge-in only has to
+ * interrupt a single in-flight turn (see `stopSpeaking` below) instead of
+ * juggling two independent abort paths.
  */
 export function useVoiceLoop() {
-  const { setHudState, setLastReply, pushLog, hudState } = useStargate();
-  const speakingRef = useRef(false);
-  const abortSpeak = useRef<AbortController | null>(null);
+  const { setHudState, setLastReply, pushLog, hudState, sendMessage, stopSpeaking } =
+    useStargate();
   const sessionActive = useRef(false);
   const wakeRecogRef = useRef<Recog | null>(null);
   const commandRecogRef = useRef<Recog | null>(null);
   const [wakeWordOn, setWakeWordOn] = useState(true);
+
+  // Always-fresh read of hudState inside recognition event handlers, which
+  // are set once per recog instance and would otherwise close over a stale
+  // value.
+  const hudStateRef = useRef(hudState);
+  useEffect(() => {
+    hudStateRef.current = hudState;
+  }, [hudState]);
+
+  // Guards sendToChat's `finally` against resetting sessionActive after a
+  // newer barge-in has already claimed it (see wake()).
+  const turnIdRef = useRef(0);
 
   useEffect(() => {
     setWakeWordOn(getWakeWordEnabled());
@@ -61,89 +79,22 @@ export function useVoiceLoop() {
     return () => window.removeEventListener("stargate-wake-word", onPref);
   }, []);
 
-  const stopSpeaking = useCallback(() => {
-    abortSpeak.current?.abort();
-    void import("@/lib/voice/speak").then(({ stopAllSpeech }) => stopAllSpeech());
-    speakingRef.current = false;
-  }, []);
-
-  const speak = useCallback(
-    (text: string) => {
-      if (typeof window === "undefined") return;
-      stopSpeaking();
-      const ac = new AbortController();
-      abortSpeak.current = ac;
-      speakingRef.current = true;
-      setHudState("speaking");
-      void import("@/lib/voice/speak").then(({ speakStarra }) =>
-        speakStarra(text, ac.signal).then((engine) => {
-          if (ac.signal.aborted || engine === "none") {
-            if (!ac.signal.aborted && engine === "none") {
-              speakingRef.current = false;
-              setHudState("idle");
-            }
-            return;
-          }
-          speakingRef.current = false;
-          setHudState("idle");
-        }),
-      );
-    },
-    [setHudState, stopSpeaking],
-  );
-
   const sendToChat = useCallback(
     async (text: string) => {
+      const myTurn = ++turnIdRef.current;
       sessionActive.current = true;
-      setHudState("thinking");
-      pushLog(`voice: ${text.slice(0, 40)}`);
       try {
-        const res = await fetch("/api/chat", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({
-            messages: [{ role: "user", content: text }],
-          }),
-        });
-        if (!res.body) {
-          setHudState("error");
-          sessionActive.current = false;
-          return;
-        }
-        const reader = res.body.getReader();
-        const decoder = new TextDecoder();
-        let buffer = "";
-        let full = "";
-        setHudState("streaming");
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          buffer += decoder.decode(value, { stream: true });
-          const parts = buffer.split("\n\n");
-          buffer = parts.pop() ?? "";
-          for (const part of parts) {
-            const line = part.trim();
-            if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (payload === "[DONE]") continue;
-            try {
-              const json = JSON.parse(payload) as { text?: string };
-              if (json.text) full += json.text;
-            } catch {
-              /* ignore */
-            }
-          }
-        }
-        setLastReply(full);
-        speak(full);
-      } catch {
-        setHudState("error");
-        setLastReply(COPY.error);
+        await sendMessage(text);
       } finally {
-        sessionActive.current = false;
+        // Only clear session state for the turn we started — a barge-in
+        // (wake()) that interrupted us already bumped turnIdRef and owns
+        // sessionActive from here.
+        if (turnIdRef.current === myTurn) {
+          sessionActive.current = false;
+        }
       }
     },
-    [pushLog, setHudState, setLastReply, speak],
+    [sendMessage],
   );
 
   const stopWakeListener = useCallback(() => {
@@ -157,9 +108,12 @@ export function useVoiceLoop() {
   }, []);
 
   const wake = useCallback(async () => {
-    if (speakingRef.current || hudState === "speaking") {
-      stopSpeaking();
-    }
+    // Barge-in: cleanly interrupt any in-flight turn (thinking / streaming /
+    // speaking) before taking the mic. Invalidate the turn token first so a
+    // stale sendToChat's `finally` can't clobber sessionActive/HUD once we
+    // start listening again.
+    turnIdRef.current++;
+    stopSpeaking();
 
     stopWakeListener();
     sessionActive.current = true;
@@ -192,15 +146,27 @@ export function useVoiceLoop() {
     recog.interimResults = false;
     recog.lang = "en-US";
 
+    // Set once a real result kicks off a chat turn — tells onend whether it
+    // needs to reset state itself (no result / silence / timeout) or leave
+    // it to sendToChat's own lifecycle.
+    let turnStarted = false;
+
     recog.onstart = () => setHudState("listening");
     recog.onspeechstart = () => {
-      if (speakingRef.current) stopSpeaking();
+      // Defensive: cut off stale speech if it's somehow still playing once
+      // the command recognizer picks up the operator talking.
+      if (hudStateRef.current === "speaking") stopSpeaking();
     };
     recog.onresult = (ev) => {
       const text = ev.results[0]?.[0]?.transcript ?? "";
-      setHudState("transcribing");
-      if (text) void sendToChat(text);
-      else sessionActive.current = false;
+      if (text) {
+        turnStarted = true;
+        setHudState("transcribing");
+        void sendToChat(text);
+      } else {
+        sessionActive.current = false;
+        setHudState("idle");
+      }
     };
     recog.onerror = () => {
       setHudState("error");
@@ -208,10 +174,15 @@ export function useVoiceLoop() {
       setTimeout(() => setHudState("idle"), 800);
     };
     recog.onend = () => {
-      if (!speakingRef.current && hudState !== "thinking" && hudState !== "streaming") {
-        /* leave state machine to sendToChat / speak */
-      }
       commandRecogRef.current = null;
+      // A recognition can end with no onresult and no onerror (silence,
+      // platform timeout, etc.) — without this the loop freezes forever at
+      // "listening"/"wake" since nothing else would ever move HUD state or
+      // sessionActive forward.
+      if (!turnStarted && sessionActive.current) {
+        sessionActive.current = false;
+        setHudState("idle");
+      }
     };
 
     try {
@@ -220,20 +191,12 @@ export function useVoiceLoop() {
       setHudState("idle");
       sessionActive.current = false;
     }
-  }, [
-    hudState,
-    pushLog,
-    sendToChat,
-    setHudState,
-    setLastReply,
-    stopSpeaking,
-    stopWakeListener,
-  ]);
+  }, [pushLog, sendToChat, setHudState, setLastReply, stopSpeaking, stopWakeListener]);
 
   const startWakeListener = useCallback(() => {
     if (!getWakeWordEnabled()) return;
     if (sessionActive.current) return;
-    if (speakingRef.current) return;
+    if (hudStateRef.current === "speaking") return;
     if (wakeRecogRef.current) return;
 
     const SR = getSR();
@@ -270,11 +233,7 @@ export function useVoiceLoop() {
     recog.onend = () => {
       wakeRecogRef.current = null;
       // Restart if still idle + enabled
-      if (
-        getWakeWordEnabled() &&
-        !sessionActive.current &&
-        !speakingRef.current
-      ) {
+      if (getWakeWordEnabled() && !sessionActive.current) {
         window.setTimeout(() => startWakeListener(), 400);
       }
     };
