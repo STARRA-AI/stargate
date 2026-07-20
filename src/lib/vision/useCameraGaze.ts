@@ -46,12 +46,20 @@ async function loadMediaPipeDetector(): Promise<FaceDetectorLike | null> {
           modelAssetPath: "/vendor/mediapipe/blaze_face_short_range.tflite",
           delegate: "CPU",
         },
-        runningMode: "IMAGE",
+        // VIDEO mode is the correct running mode for a live camera feed —
+        // IMAGE mode re-initialises the graph on every frame (wasteful, and it
+        // re-logs the XNNPACK delegate line that surfaces as a console error).
+        runningMode: "VIDEO",
         minDetectionConfidence: 0.4,
       });
+      // detectForVideo needs a strictly-increasing timestamp; performance.now()
+      // is monotonic and the tick is throttled to ~150ms, so it always advances.
+      let lastTs = 0;
       return {
         detect: async (source) => {
-          const res = detector.detect(source as HTMLCanvasElement);
+          const ts = Math.max(performance.now(), lastTs + 1);
+          lastTs = ts;
+          const res = detector.detectForVideo(source as HTMLCanvasElement, ts);
           return (res.detections ?? [])
             .filter((d) => d.boundingBox)
             .map((d) => ({
