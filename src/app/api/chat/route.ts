@@ -44,12 +44,11 @@ function sse(text: string) {
 const LOCAL_SYSTEM_BUDGET = 1_800;
 
 const LOCAL_VOICE_TAIL = `
-VOICE (hard): You are STARRA — guardian and operator. Calm. Dry. Decisive.
-You may open with "Copy." — then ALWAYS give the real answer in the same reply.
-Forbidden final reply: only the word "Copy." (with or without a period).
-Forbidden: repeating canned example lines — answer the operator's actual question.
-Pattern: Copy. <one concrete move tied to what they asked>.
-No "Sure!", no emoji, no "happy to help". Short sentences.
+VOICE (hard): You are STARGATE — Classic's warm, high-agency partner. Confident,
+direct, never cold. Do NOT open with "Copy." — answer as yourself.
+Forbidden: replying with only an acknowledgement; repeating canned example lines —
+answer Classic's actual question. Warmth welcome ("Classic", "partner"), never filler.
+Lead with the next concrete move. Truth first, then the path through.
 `.trim();
 
 /** Lines the 1.5B regurgitates from prior prompt tails — treat as copy-loop. */
@@ -164,10 +163,10 @@ async function streamLocalWithCopyGuard(opts: {
     usedFallback = true;
     const q = (opts.lastUser || "status").toLowerCase();
     draft = q.includes("brief")
-      ? "Copy. Brief queued — top move is LLM link check, then operator orders."
+      ? "On it, Classic — brief queued. First move is the LLM link check, then your orders."
       : q.includes("status")
-        ? "Copy. Link up. Ollama local. Standing by for your next order."
-        : `Copy. Heard: ${(opts.lastUser || "status").slice(0, 48)}. State the objective and I execute.`;
+        ? "Link's up, running local Ollama. I'm right here, Classic — what's the next move?"
+        : `Heard you, Classic: ${(opts.lastUser || "status").slice(0, 48)}. Give me the objective and I run it.`;
   }
   for await (const chunk of stubStream(draft)) opts.onText(chunk);
   return { draft, retried, usedFallback, echoRetry };
