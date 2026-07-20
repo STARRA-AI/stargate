@@ -10,7 +10,11 @@ prompt = Book 3.
 - Dark-only. Colors are CSS vars `--void`, `--chrome`, `--purple`, `--magenta`. No shadcn defaults.
 - Operator voice: "Copy." not "Sure!". No emojis in UI copy.
 - Mobile is voice-first, badge is hero. Desktop is command deck.
-- No chatbot bubbles. Responses stream into the console readout.
+- Chat is a Grok-style message column: user turns sit in rounded `--void-2`
+  containers with a thin `--border`; STARRA replies render as clean markdown
+  (no bubble, `--chrome` text) and stream with a blinking `--magenta` caret.
+  Same tokens/fonts — the galaxy/purple aesthetic is unchanged. (Supersedes the
+  retired "no chatbot bubbles / stream into the console readout" rule.)
 - Every feature must trace to a section in the unified doc. If it doesn't, ask.
 
 ## Stack (current)

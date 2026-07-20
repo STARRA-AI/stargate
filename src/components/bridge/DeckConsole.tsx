@@ -3,15 +3,9 @@
 import { COPY } from "@/lib/copy";
 import { CHIPS } from "@/lib/deck-demo";
 import { useStargate } from "@/lib/stargate-context";
-import {
-  useCallback,
-  useEffect,
-  useRef,
-  useState,
-  type FormEvent,
-} from "react";
-
-type Msg = { role: "user" | "assistant"; content: string };
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Composer } from "./Composer";
+import { MessageColumn, type Msg } from "./MessageColumn";
 
 function prefersReducedMotion() {
   if (typeof window === "undefined") return false;
@@ -155,11 +149,6 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
     [history, pushLog, setHudState, setLastReply],
   );
 
-  function onSubmit(e: FormEvent) {
-    e.preventDefault();
-    void send(input);
-  }
-
   const waveLive =
     hudState === "listening" ||
     hudState === "wake" ||
@@ -190,63 +179,35 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
         </div>
       </div>
 
-      <div className="chat-log" ref={logRef}>
-        {history.length === 0 && !streaming ? (
-          <div className="chat-line">
-            <span className="chat-who starra">STARRA</span>{" "}
-            <span className="chat-text">{lastReply || standingBy}</span>
-          </div>
-        ) : null}
-        {history.map((m, i) => (
-          <div className="chat-line" key={`${m.role}-${i}`}>
-            <span className={`chat-who ${m.role === "user" ? "you" : "starra"}`}>
-              {m.role === "user" ? "YOU" : "STARRA"}
-            </span>{" "}
-            <span className="chat-text">{m.content}</span>
-          </div>
-        ))}
-        {streaming ? (
-          <div className="chat-line pending">
-            <span className="chat-who starra">STARRA</span>{" "}
-            <span className="chat-text">{streaming}</span>
-          </div>
-        ) : null}
-      </div>
+      <MessageColumn
+        ref={logRef}
+        history={history}
+        streaming={streaming}
+        resting={lastReply || standingBy}
+      />
 
-      <div className="chip-row">
-        {CHIPS.map((label) => (
-          <button
-            key={label}
-            type="button"
-            className="chip"
-            onClick={() => void send(label)}
-          >
-            {label}
-          </button>
-        ))}
-      </div>
+      <div className="composer-dock">
+        <div className="chip-row">
+          {CHIPS.map((label) => (
+            <button
+              key={label}
+              type="button"
+              className="chip"
+              onClick={() => void send(label)}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
 
-      <form className="chat-input-row" onSubmit={onSubmit}>
-        <button
-          type="button"
-          className="mic-btn"
-          title="Voice input"
-          onClick={onMic}
-          aria-label="Microphone"
-        >
-          MIC
-        </button>
-        <input
+        <Composer
           value={input}
-          onChange={(e) => setInput(e.target.value)}
+          onChange={setInput}
+          onSubmit={() => void send(input)}
+          onMic={onMic}
           placeholder='> "GIVE ME THE BRIEF."'
-          autoComplete="off"
-          aria-label="Console input"
         />
-        <button type="submit" className="send-btn">
-          SEND
-        </button>
-      </form>
+      </div>
     </div>
   );
 }

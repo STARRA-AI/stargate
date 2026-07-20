@@ -1,0 +1,297 @@
+import type { ReactNode } from "react";
+
+/**
+ * Tiny, dependency-free markdown renderer that emits React elements.
+ *
+ * Deliberately NOT string-based: we never touch `dangerouslySetInnerHTML`, so
+ * there is no HTML-injection surface. The only attribute we forward is link
+ * `href`, which is passed through `safeUrl` (http/https/mailto/relative only —
+ * `javascript:` and friends fall back to plain text).
+ *
+ * Supported: ATX headings, **bold** / *italic* (and `_` variants), `inline code`,
+ * fenced ``` code blocks ```, unordered/ordered lists, blockquotes, `---` rules,
+ * links, and paragraphs. Intentionally flat (no nested lists) — enough for
+ * STARRA's replies, nothing more.
+ */
+
+function safeUrl(raw: string): string | null {
+  const u = raw.trim();
+  if (/^(https?:|mailto:)/i.test(u)) return u;
+  if (u.startsWith("/") || u.startsWith("#")) return u;
+  return null;
+}
+
+const INLINE_PATTERNS: { name: string; re: RegExp }[] = [
+  { name: "code", re: /`([^`]+)`/ },
+  { name: "bold", re: /\*\*([\s\S]+?)\*\*/ },
+  { name: "boldu", re: /__([\s\S]+?)__/ },
+  { name: "link", re: /\[([^\]]+)\]\(([^)\s]+)\)/ },
+  { name: "italic", re: /\*([^*\n]+?)\*/ },
+  { name: "italicu", re: /(?<![A-Za-z0-9])_([^_\n]+?)_(?![A-Za-z0-9])/ },
+];
+
+function parseInline(text: string, keyPrefix: string): ReactNode[] {
+  const out: ReactNode[] = [];
+  let rest = text;
+  let i = 0;
+
+  while (rest.length > 0) {
+    let bestIdx = Infinity;
+    let bestName = "";
+    let bestMatch: RegExpExecArray | null = null;
+
+    for (const p of INLINE_PATTERNS) {
+      const m = p.re.exec(rest);
+      if (m && m.index < bestIdx) {
+        bestIdx = m.index;
+        bestName = p.name;
+        bestMatch = m;
+      }
+    }
+
+    if (!bestMatch) {
+      out.push(rest);
+      break;
+    }
+
+    if (bestIdx > 0) out.push(rest.slice(0, bestIdx));
+    const key = `${keyPrefix}-${i++}`;
+
+    switch (bestName) {
+      case "code":
+        out.push(
+          <code key={key} className="md-code">
+            {bestMatch[1]}
+          </code>,
+        );
+        break;
+      case "bold":
+      case "boldu":
+        out.push(<strong key={key}>{parseInline(bestMatch[1], key)}</strong>);
+        break;
+      case "italic":
+      case "italicu":
+        out.push(<em key={key}>{parseInline(bestMatch[1], key)}</em>);
+        break;
+      case "link": {
+        const href = safeUrl(bestMatch[2]);
+        if (href) {
+          out.push(
+            <a key={key} href={href} target="_blank" rel="noopener noreferrer">
+              {parseInline(bestMatch[1], key)}
+            </a>,
+          );
+        } else {
+          out.push(...parseInline(bestMatch[1], key));
+        }
+        break;
+      }
+      default:
+        out.push(bestMatch[0]);
+    }
+
+    rest = rest.slice(bestIdx + bestMatch[0].length);
+  }
+
+  return out;
+}
+
+type Block =
+  | { type: "p"; text: string }
+  | { type: "h"; level: number; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "code"; code: string }
+  | { type: "quote"; text: string }
+  | { type: "hr" };
+
+function toBlocks(src: string): Block[] {
+  const lines = src.replace(/\r\n/g, "\n").split("\n");
+  const blocks: Block[] = [];
+  let i = 0;
+
+  while (i < lines.length) {
+    const line = lines[i];
+
+    // fenced code block
+    if (/^```/.test(line)) {
+      const code: string[] = [];
+      i++;
+      while (i < lines.length && !/^```/.test(lines[i])) {
+        code.push(lines[i]);
+        i++;
+      }
+      i++; // consume closing fence (or fall off EOF)
+      blocks.push({ type: "code", code: code.join("\n") });
+      continue;
+    }
+
+    // blank line
+    if (/^\s*$/.test(line)) {
+      i++;
+      continue;
+    }
+
+    // horizontal rule
+    if (/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(line)) {
+      blocks.push({ type: "hr" });
+      i++;
+      continue;
+    }
+
+    // heading
+    const h = /^(#{1,6})\s+(.*)$/.exec(line);
+    if (h) {
+      blocks.push({ type: "h", level: h[1].length, text: h[2].trim() });
+      i++;
+      continue;
+    }
+
+    // blockquote (collapse consecutive lines)
+    if (/^\s*>\s?/.test(line)) {
+      const quote: string[] = [];
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        quote.push(lines[i].replace(/^\s*>\s?/, ""));
+        i++;
+      }
+      blocks.push({ type: "quote", text: quote.join(" ") });
+      continue;
+    }
+
+    // ordered list
+    if (/^\s*\d+\.\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*\d+\.\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+\.\s+/, ""));
+        i++;
+      }
+      blocks.push({ type: "list", ordered: true, items });
+      continue;
+    }
+
+    // unordered list
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items: string[] = [];
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-*+]\s+/, ""));
+        i++;
+      }
+      blocks.push({ type: "list", ordered: false, items });
+      continue;
+    }
+
+    // paragraph (collapse consecutive plain lines)
+    const para: string[] = [];
+    while (
+      i < lines.length &&
+      !/^\s*$/.test(lines[i]) &&
+      !/^```/.test(lines[i]) &&
+      !/^(#{1,6})\s+/.test(lines[i]) &&
+      !/^\s*>\s?/.test(lines[i]) &&
+      !/^\s*\d+\.\s+/.test(lines[i]) &&
+      !/^\s*[-*+]\s+/.test(lines[i]) &&
+      !/^\s*(-{3,}|\*{3,}|_{3,})\s*$/.test(lines[i])
+    ) {
+      para.push(lines[i]);
+      i++;
+    }
+    blocks.push({ type: "p", text: para.join(" ") });
+  }
+
+  return blocks;
+}
+
+function Heading({ level, children }: { level: number; children: ReactNode }) {
+  const cls = `md-h md-h${level}`;
+  switch (level) {
+    case 1:
+      return <h1 className={cls}>{children}</h1>;
+    case 2:
+      return <h2 className={cls}>{children}</h2>;
+    case 3:
+      return <h3 className={cls}>{children}</h3>;
+    case 4:
+      return <h4 className={cls}>{children}</h4>;
+    case 5:
+      return <h5 className={cls}>{children}</h5>;
+    default:
+      return <h6 className={cls}>{children}</h6>;
+  }
+}
+
+/**
+ * Render markdown source to React nodes.
+ * `trailing` (e.g. a streaming caret) is appended inline to the last block when
+ * that block is a paragraph/heading/quote, otherwise as a trailing sibling.
+ */
+export function renderMarkdown(src: string, trailing?: ReactNode): ReactNode {
+  const blocks = toBlocks(src);
+
+  if (blocks.length === 0) {
+    return trailing ? <p className="md-p">{trailing}</p> : null;
+  }
+
+  return (
+    <>
+      {blocks.map((b, idx) => {
+        const key = `b-${idx}`;
+        const isLast = idx === blocks.length - 1;
+        const tail = isLast ? trailing : undefined;
+
+        switch (b.type) {
+          case "h":
+            return (
+              <Heading key={key} level={b.level}>
+                {parseInline(b.text, key)}
+                {tail}
+              </Heading>
+            );
+          case "code":
+            return (
+              <pre key={key} className="md-pre">
+                <code>{b.code}</code>
+                {tail}
+              </pre>
+            );
+          case "quote":
+            return (
+              <blockquote key={key} className="md-quote">
+                {parseInline(b.text, key)}
+                {tail}
+              </blockquote>
+            );
+          case "hr":
+            return (
+              <span key={key}>
+                <hr className="md-hr" />
+                {tail}
+              </span>
+            );
+          case "list":
+            return b.ordered ? (
+              <ol key={key} className="md-list">
+                {b.items.map((it, j) => (
+                  <li key={`${key}-${j}`}>{parseInline(it, `${key}-${j}`)}</li>
+                ))}
+                {tail}
+              </ol>
+            ) : (
+              <ul key={key} className="md-list">
+                {b.items.map((it, j) => (
+                  <li key={`${key}-${j}`}>{parseInline(it, `${key}-${j}`)}</li>
+                ))}
+                {tail}
+              </ul>
+            );
+          case "p":
+          default:
+            return (
+              <p key={key} className="md-p">
+                {parseInline(b.text, key)}
+                {tail}
+              </p>
+            );
+        }
+      })}
+    </>
+  );
+}
