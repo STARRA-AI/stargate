@@ -7,29 +7,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 import { MessageColumn, type Msg } from "./MessageColumn";
 
-function prefersReducedMotion() {
-  if (typeof window === "undefined") return false;
-  return window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-}
-
-async function revealText(
-  full: string,
-  onTick: (partial: string) => void,
-  signal: AbortSignal,
-) {
-  if (prefersReducedMotion()) {
-    onTick(full);
-    return;
-  }
-  let out = "";
-  for (const ch of full) {
-    if (signal.aborted) return;
-    out += ch;
-    onTick(out);
-    await new Promise((r) => setTimeout(r, 30));
-  }
-}
-
 export function DeckConsole({ onMic }: { onMic?: () => void }) {
   const { setHudState, setLastReply, pushLog, hudState, lastReply } =
     useStargate();
@@ -37,16 +14,13 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
   const [history, setHistory] = useState<Msg[]>([]);
   const [streaming, setStreaming] = useState("");
   const fetchAbortRef = useRef<AbortController | null>(null);
-  const revealAbortRef = useRef<AbortController | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
   const logRef = useRef<HTMLDivElement>(null);
 
   function abortInFlight() {
     fetchAbortRef.current?.abort();
-    revealAbortRef.current?.abort();
     ttsAbortRef.current?.abort();
     fetchAbortRef.current = null;
-    revealAbortRef.current = null;
     ttsAbortRef.current = null;
   }
 
@@ -61,10 +35,8 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
 
       abortInFlight();
       const fetchAc = new AbortController();
-      const revealAc = new AbortController();
       const ttsAc = new AbortController();
       fetchAbortRef.current = fetchAc;
-      revealAbortRef.current = revealAc;
       ttsAbortRef.current = ttsAc;
 
       // Prime Web Speech during user gesture — async fetch loses activation otherwise.
@@ -130,10 +102,12 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
 
         setHudState("speaking");
         setLastReply(full);
-        // Speak immediately — do not wait for typewriter reveal (was blocking TTS 8s+).
+        // Speak immediately. `full` already rendered live via setStreaming()
+        // above during the read loop, so commit straight to history instead
+        // of re-typing it character-by-character (was re-parsing markdown
+        // on every char after the text had already appeared).
         const { speakStarra } = await import("@/lib/voice/speak");
         const speakPromise = speakStarra(full, ttsAc.signal);
-        await revealText(full, setStreaming, revealAc.signal);
         setHistory((h) => [...h, { role: "assistant", content: full }]);
         const engine = await speakPromise;
         setStreaming("");

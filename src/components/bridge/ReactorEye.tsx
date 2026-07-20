@@ -7,7 +7,7 @@ import {
 } from "@/lib/motion/assets";
 import { useCineVideo } from "@/lib/motion/useCineVideo";
 import type { HudState } from "@/lib/tokens";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 
 /**
  * STARRA's living eye — 4-layer gimbal + cinematic weather.
@@ -38,7 +38,7 @@ function reactionDelay() {
   return REACTION_MIN + Math.random() * (REACTION_MAX - REACTION_MIN);
 }
 
-export function ReactorEye({
+export const ReactorEye = memo(function ReactorEye({
   hudState,
   label,
   onMic,
@@ -57,6 +57,9 @@ export function ReactorEye({
   const cineRef = useRef<HTMLVideoElement>(null);
   const hudRef = useRef(hudState);
   hudRef.current = hudState;
+  // Tracked mirror of the reduced-motion media query for the 60fps rAF loop
+  // below — that loop must not call matchMedia() itself every frame.
+  const reducedMotionRef = useRef(false);
 
   const signalRef = useRef<{
     doubleBlink: boolean;
@@ -90,7 +93,10 @@ export function ReactorEye({
     const mo = new MutationObserver(syncEco);
     mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
     const mq = window.matchMedia("(prefers-reduced-motion: reduce)");
-    const onMq = () => setReduced(mq.matches);
+    const onMq = () => {
+      setReduced(mq.matches);
+      reducedMotionRef.current = mq.matches;
+    };
     onMq();
     mq.addEventListener("change", onMq);
     return () => {
@@ -233,8 +239,7 @@ export function ReactorEye({
 
     const frame = (now: number) => {
       const ecoPaused = document.body.classList.contains("low-power");
-      const reduce = window.matchMedia("(prefers-reduced-motion: reduce)")
-        .matches;
+      const reduce = reducedMotionRef.current;
 
       if (ecoPaused || reduce) {
         gimbal.style.transform = "translate(0px, 0px) scaleY(1)";
@@ -480,4 +485,4 @@ export function ReactorEye({
       </div>
     </div>
   );
-}
+});

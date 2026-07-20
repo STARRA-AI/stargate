@@ -66,11 +66,19 @@ function voteColor(vote: string) {
 }
 
 function useInterval(fn: () => void, ms: number) {
+  // Ref-latch: keep the latest callback available to the tick without
+  // forcing the interval to be torn down/recreated on every render (which
+  // would also reset the ms-based cadence). Updated after every render so
+  // the tick always reads current state (fixes stale `bootDone` closure).
+  const fnRef = useRef(fn);
   useEffect(() => {
-    fn();
-    const id = setInterval(fn, ms);
+    fnRef.current = fn;
+  });
+
+  useEffect(() => {
+    fnRef.current();
+    const id = setInterval(() => fnRef.current(), ms);
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [ms]);
 }
 
