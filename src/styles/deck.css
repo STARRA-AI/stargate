@@ -933,14 +933,31 @@ input::placeholder { color: #7a63a8; }
 }
 .mobile-console .chat-log {
   min-height: 120px;
-  max-height: 180px;
+  max-height: 240px;
+  padding: 14px 14px 6px;
 }
-.mobile-console .chat-input-row {
-  min-height: 44px;
+.mobile-console .msg-col {
+  gap: 14px;
+}
+.mobile-console .composer-dock {
+  padding: 8px 10px 10px;
+}
+.mobile-console .chip {
+  padding: 7px 12px;
+}
+.mobile-console .composer {
+  padding: 6px 6px 6px 10px;
 }
 .mobile-console .mic-btn,
 .mobile-console .send-btn {
-  min-height: 44px;
+  width: 44px;
+  height: 44px;
+  border-radius: 12px;
+}
+.mobile-console .mic-btn svg,
+.mobile-console .send-btn svg {
+  width: 18px;
+  height: 18px;
 }
 
 /* ── ECO / low-power mode ── */
