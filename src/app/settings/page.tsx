@@ -76,7 +76,7 @@ function WakeWordToggle() {
   }
 
   return (
-    <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
+    <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-body)] text-xs text-[var(--chrome)]">
       <span>
         Wake word — say &quot;starra&quot; (mic stays listening while deck is open)
       </span>
@@ -219,7 +219,7 @@ function KeyVault() {
       <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
         Link APIs
       </h2>
-      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+      <p className="font-[family-name:var(--font-body)] text-[11px] text-[var(--star)]">
         Paste a key, hit STORE. Keys live in data/keys.json on this machine
         only — never committed. Each key lights up the panel listed next to
         it.

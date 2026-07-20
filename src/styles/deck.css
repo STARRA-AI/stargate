@@ -93,7 +93,7 @@ input::placeholder { color: #7a63a8; }
   display: flex; align-items: center; gap: 18px; padding: 14px 30px;
   background:
     linear-gradient(180deg, rgba(5,2,10,0.92), rgba(5,2,10,0.18) 70%, rgba(5,2,10,0)),
-    linear-gradient(90deg, rgba(169,85,247,0.08), transparent 32%, transparent 68%, rgba(217,70,239,0.06));
+    linear-gradient(90deg, rgba(169,85,247,0.08), transparent 32%, transparent 68%, color-mix(in oklab, var(--magenta) 6%, transparent));
 }
 .badge-wrap, .wordmark-wrap { position: relative; display: flex; align-items: center; justify-content: center; }
 .badge-wrap { width: 50px; height: 50px; flex-shrink: 0; }
@@ -142,15 +142,15 @@ input::placeholder { color: #7a63a8; }
 .panel {
   position: relative;
   background:
-    linear-gradient(180deg, rgba(233,213,255,0.03), transparent 22%),
+    linear-gradient(180deg, color-mix(in oklab, var(--chrome) 3%, transparent), transparent 22%),
     linear-gradient(180deg, rgba(11,5,23,0.82), rgba(17,8,34,0.92)),
     var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
   backdrop-filter: blur(10px);
   box-shadow:
-    inset 0 0 0 1px rgba(233,213,255,0.04),
-    inset 0 0 36px rgba(168,85,247,0.08),
+    inset 0 0 0 1px color-mix(in oklab, var(--chrome) 4%, transparent),
+    inset 0 0 36px color-mix(in oklab, var(--purple) 8%, transparent),
     0 0 0 1px rgba(8,3,16,0.6);
   padding: 16px 18px;
   display: flex;
@@ -164,8 +164,8 @@ input::placeholder { color: #7a63a8; }
   inset: 0;
   pointer-events: none;
   background:
-    linear-gradient(90deg, rgba(168,85,247,0.08), transparent 20%, transparent 80%, rgba(217,70,239,0.06)),
-    radial-gradient(circle at top left, rgba(217,70,239,0.08), transparent 32%);
+    linear-gradient(90deg, color-mix(in oklab, var(--purple) 8%, transparent), transparent 20%, transparent 80%, color-mix(in oklab, var(--magenta) 6%, transparent)),
+    radial-gradient(circle at top left, color-mix(in oklab, var(--magenta) 8%, transparent), transparent 32%);
   opacity: 0.95;
 }
 .panel-grow { flex: 1; min-height: 0; }
@@ -190,9 +190,9 @@ input::placeholder { color: #7a63a8; }
   flex-direction: column;
   gap: 5px;
   padding: 10px 12px;
-  background: linear-gradient(180deg, rgba(233,213,255,0.02), rgba(168,85,247,0.07));
+  background: linear-gradient(180deg, color-mix(in oklab, var(--chrome) 2%, transparent), color-mix(in oklab, var(--purple) 7%, transparent));
   border: 1px solid var(--border-soft);
-  border-radius: 8px;
+  border-radius: 6px;
 }
 .snap-label,
 .memory-label {
@@ -205,7 +205,7 @@ input::placeholder { color: #7a63a8; }
   font-family: var(--mono);
   font-size: 18px;
   color: var(--text);
-  text-shadow: 0 0 10px rgba(217,70,239,0.18);
+  text-shadow: 0 0 10px color-mix(in oklab, var(--magenta) 18%, transparent);
 }
 .memory-strip {
   display: grid;
@@ -518,7 +518,7 @@ input::placeholder { color: #7a63a8; }
 
 /* ── Proposals ── */
 .proposals-list { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 7px; min-height: 0; }
-.proposal-card { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; background: var(--panel-inner); border: 1px solid rgba(255,209,102,0.22); border-radius: 6px; }
+.proposal-card { display: flex; flex-direction: column; gap: 5px; padding: 8px 10px; background: var(--panel-inner); border: 1px solid color-mix(in oklab, var(--warn) 22%, transparent); border-radius: 6px; }
 .proposal-top { display: flex; gap: 8px; align-items: baseline; }
 .proposal-tag { font-family: var(--mono); font-size: 10px; color: var(--warn); flex-shrink: 0; }
 .proposal-text { font-size: 13px; font-weight: 600; color: var(--text); line-height: 1.35; }
@@ -543,8 +543,8 @@ input::placeholder { color: #7a63a8; }
 .mobile-bridge {
   min-height: 100dvh;
   background:
-    radial-gradient(circle at top center, rgba(168,85,247,0.16), transparent 34%),
-    linear-gradient(180deg, rgba(10,4,20,0.98), rgba(6,2,13,1));
+    radial-gradient(circle at top center, color-mix(in oklab, var(--purple) 16%, transparent), transparent 34%),
+    linear-gradient(180deg, color-mix(in oklab, var(--void) 98%, transparent), rgba(6,2,13,1));
   color: var(--text);
 }
 .mobile-shell {
@@ -567,14 +567,14 @@ input::placeholder { color: #7a63a8; }
 }
 .mobile-ambient-a {
   background-image:
-    radial-gradient(1px 1px at 12% 22%, rgba(233,213,255,0.9) 100%, transparent),
-    radial-gradient(1px 1px at 82% 14%, rgba(233,213,255,0.8) 100%, transparent),
-    radial-gradient(1px 1px at 68% 62%, rgba(196,181,253,0.75) 100%, transparent),
-    radial-gradient(1px 1px at 20% 78%, rgba(233,213,255,0.85) 100%, transparent);
+    radial-gradient(1px 1px at 12% 22%, color-mix(in oklab, var(--chrome) 90%, transparent) 100%, transparent),
+    radial-gradient(1px 1px at 82% 14%, color-mix(in oklab, var(--chrome) 80%, transparent) 100%, transparent),
+    radial-gradient(1px 1px at 68% 62%, color-mix(in oklab, var(--star) 75%, transparent) 100%, transparent),
+    radial-gradient(1px 1px at 20% 78%, color-mix(in oklab, var(--chrome) 85%, transparent) 100%, transparent);
   opacity: 0.18;
 }
 .mobile-ambient-b {
-  background: repeating-linear-gradient(180deg, rgba(168,85,247,0.03) 0, rgba(168,85,247,0.03) 1px, transparent 1px, transparent 4px);
+  background: repeating-linear-gradient(180deg, color-mix(in oklab, var(--purple) 3%, transparent) 0, color-mix(in oklab, var(--purple) 3%, transparent) 1px, transparent 1px, transparent 4px);
 }
 .mobile-topbar,
 .mobile-hero,
@@ -592,7 +592,7 @@ input::placeholder { color: #7a63a8; }
   padding: 10px 12px;
   border: 1px solid var(--border);
   border-radius: 12px;
-  background: linear-gradient(180deg, rgba(18,8,34,0.92), rgba(10,4,20,0.84));
+  background: linear-gradient(180deg, rgba(18,8,34,0.92), color-mix(in oklab, var(--void) 84%, transparent));
 }
 .mobile-topbar-left {
   display: flex;
@@ -650,7 +650,7 @@ input::placeholder { color: #7a63a8; }
   border: 1px solid var(--border);
   border-radius: 18px;
   background:
-    radial-gradient(circle at center, rgba(168,85,247,0.16), transparent 45%),
+    radial-gradient(circle at center, color-mix(in oklab, var(--purple) 16%, transparent), transparent 45%),
     linear-gradient(180deg, rgba(17,8,34,0.92), rgba(9,4,18,0.98));
   padding: 22px 16px 18px;
   display: flex;
@@ -669,7 +669,7 @@ input::placeholder { color: #7a63a8; }
   position: absolute;
   inset: 18px 18% 22px;
   border-radius: 999px;
-  background: radial-gradient(circle, rgba(217,70,239,0.18), transparent 68%);
+  background: radial-gradient(circle, color-mix(in oklab, var(--magenta) 18%, transparent), transparent 68%);
   filter: blur(14px);
 }
 .mobile-reactor {
@@ -695,7 +695,7 @@ input::placeholder { color: #7a63a8; }
   width: 100%;
   height: 100%;
   animation: spinCW 40s linear infinite;
-  filter: drop-shadow(0 0 20px rgba(168,85,247,0.65)) brightness(1.15);
+  filter: drop-shadow(0 0 20px color-mix(in oklab, var(--purple) 65%, transparent)) brightness(1.15);
   opacity: 1;
 }
 .mobile-ring-inner {
@@ -734,7 +734,7 @@ input::placeholder { color: #7a63a8; }
   height: 100%;
   object-fit: contain;
   animation: badgeBreath 3s ease-in-out infinite;
-  filter: drop-shadow(0 0 14px rgba(168,85,247,0.55));
+  filter: drop-shadow(0 0 14px color-mix(in oklab, var(--purple) 55%, transparent));
 }
 .mobile-hud-listening .mobile-hero-badge img,
 .mobile-hud-wake .mobile-hero-badge img {
@@ -828,8 +828,8 @@ input::placeholder { color: #7a63a8; }
 .mobile-tab.active {
   border-color: var(--border);
   color: var(--text);
-  background: linear-gradient(180deg, rgba(168,85,247,0.22), rgba(217,70,239,0.08));
-  box-shadow: inset 0 0 18px rgba(168,85,247,0.14);
+  background: linear-gradient(180deg, color-mix(in oklab, var(--purple) 22%, transparent), color-mix(in oklab, var(--magenta) 8%, transparent));
+  box-shadow: inset 0 0 18px color-mix(in oklab, var(--purple) 14%, transparent);
 }
 .mobile-panel {
   padding: 14px;
@@ -888,10 +888,10 @@ input::placeholder { color: #7a63a8; }
   letter-spacing: 0.08em;
 }
 .mobile-list-card {
-  border: 1px solid rgba(255,209,102,0.18);
+  border: 1px solid color-mix(in oklab, var(--warn) 18%, transparent);
   border-radius: 10px;
   padding: 10px;
-  background: rgba(255,209,102,0.05);
+  background: color-mix(in oklab, var(--warn) 5%, transparent);
 }
 .mobile-list-card p,
 .mobile-feed-line p {
@@ -913,7 +913,7 @@ input::placeholder { color: #7a63a8; }
   gap: 8px;
   align-items: start;
   padding-bottom: 8px;
-  border-bottom: 1px solid rgba(168,85,247,0.08);
+  border-bottom: 1px solid color-mix(in oklab, var(--purple) 8%, transparent);
   animation: feedIn 0.22s ease-out;
 }
 .mobile-feed-line p {
@@ -995,7 +995,7 @@ body.low-power .mobile-feed-line { animation: none; }
 body.low-power .stream-caret { animation: none; opacity: 1; }
 body.low-power .mobile-ring-outer,
 body.low-power .mobile-ring-inner { animation: none; }
-body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0 8px rgba(168,85,247,0.45)); }
+body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0 8px color-mix(in oklab, var(--purple) 45%, transparent)); }
 
 @media (prefers-reduced-motion: reduce) {
   .badge,
