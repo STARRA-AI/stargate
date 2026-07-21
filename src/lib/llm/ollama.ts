@@ -18,36 +18,55 @@ export function ollamaConfig() {
   };
 }
 
-export async function ollamaAvailable(): Promise<boolean> {
+async function fetchTags(
+  timeoutMs: number,
+): Promise<{ ok: boolean; models: { name: string }[] }> {
   const { base } = ollamaConfig();
   try {
     const res = await fetch(`${base}/api/tags`, {
-      signal: AbortSignal.timeout(2000),
+      signal: AbortSignal.timeout(timeoutMs),
     });
-    return res.ok;
+    if (!res.ok) return { ok: false, models: [] };
+    const data = (await res.json()) as { models?: { name: string }[] };
+    return { ok: true, models: data.models ?? [] };
   } catch {
-    return false;
+    return { ok: false, models: [] };
   }
 }
 
+function matchesModel(models: { name: string }[], target: string): boolean {
+  return models.some(
+    (m) =>
+      m.name === target ||
+      m.name.startsWith(`${target}`) ||
+      m.name.startsWith(target.split(":")[0]!),
+  );
+}
+
+export async function ollamaAvailable(): Promise<boolean> {
+  const { ok } = await fetchTags(2000);
+  return ok;
+}
+
 export async function ollamaHasModel(name?: string): Promise<boolean> {
-  const { base, model } = ollamaConfig();
+  const { model } = ollamaConfig();
   const target = name || model;
-  try {
-    const res = await fetch(`${base}/api/tags`, {
-      signal: AbortSignal.timeout(3000),
-    });
-    if (!res.ok) return false;
-    const data = (await res.json()) as { models?: { name: string }[] };
-    return (data.models ?? []).some(
-      (m) =>
-        m.name === target ||
-        m.name.startsWith(`${target}`) ||
-        m.name.startsWith(target.split(":")[0]!),
-    );
-  } catch {
-    return false;
-  }
+  const { ok, models } = await fetchTags(3000);
+  return ok ? matchesModel(models, target) : false;
+}
+
+/**
+ * Combined status from a single /api/tags fetch — use this on hot paths
+ * (chat route) that previously called ollamaAvailable() + ollamaHasModel()
+ * back-to-back, doubling the request.
+ */
+export async function ollamaStatus(
+  name?: string,
+): Promise<{ up: boolean; hasModel: boolean }> {
+  const { model } = ollamaConfig();
+  const target = name || model;
+  const { ok, models } = await fetchTags(3000);
+  return { up: ok, hasModel: ok ? matchesModel(models, target) : false };
 }
 
 /** Strip DeepSeek-R1 style think blocks from operator-facing text. */

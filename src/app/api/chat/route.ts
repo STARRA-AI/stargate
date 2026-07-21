@@ -13,8 +13,7 @@ import {
   queueMontageJob,
 } from "@/lib/tools/openmontage";
 import {
-  ollamaAvailable,
-  ollamaHasModel,
+  ollamaStatus,
   ollamaConfig,
   streamOllama,
   stripThinkTags,
@@ -303,8 +302,7 @@ export async function POST(req: Request) {
         if (toolReply) {
           for await (const chunk of stubStream(toolReply)) push(chunk);
         } else {
-          const ollamaUp = await ollamaAvailable();
-          const hasModel = ollamaUp ? await ollamaHasModel() : false;
+          const { up: ollamaUp, hasModel } = await ollamaStatus();
           const useOllama =
             prefer === "ollama" ||
             (prefer === "auto" && ollamaUp && hasModel && !anthropicKey) ||
