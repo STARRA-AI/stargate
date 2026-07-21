@@ -9,6 +9,11 @@ import { getVault, vaultForPrompt } from "@/lib/vault/store";
 import { obsidianForPrompt } from "@/lib/obsidian";
 import { runRepomix, readLatestPackPreview } from "@/lib/tools/repomix";
 import {
+  webSearch,
+  webSearchQuery,
+  formatWebResults,
+} from "@/lib/tools/websearch";
+import {
   briefForPipeline,
   queueMontageJob,
 } from "@/lib/tools/openmontage";
@@ -247,9 +252,18 @@ export async function POST(req: Request) {
 
   // Phase 2: build once per request — stable canon reused from in-process cache;
   // volatile extras (memory/vault/pack) stay out of the Anthropic cache prefix.
+  // Live web search — runs only for explicit or clearly current-info queries;
+  // results are fenced as untrusted web content. Placed early in volatileExtras
+  // so it survives the Kimi tiered-prompt budget over lower-priority extras.
+  const searchQ = lastUser ? webSearchQuery(lastUser) : null;
+  const web = searchQ ? await webSearch(searchQ, 3) : null;
+
   const volatileExtras = [
     threatVolatile,
     serializeTier1(tier1),
+    web?.ok
+      ? fenceUntrusted(formatWebResults(searchQ!, web.results), "web-search")
+      : "",
     memoryForPrompt(memory, lastUser),
     vaultForPrompt(vault.docs, lastUser),
     obsidianVolatile,
