@@ -5,6 +5,7 @@ import { useStargate, useStargateStream } from "@/lib/stargate-context";
 import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 import { MessageColumn } from "./MessageColumn";
+import { VoiceCallOverlay } from "./VoiceCallOverlay";
 
 export function DeckConsole({ onMic }: { onMic?: () => void }) {
   // Split on purpose: hudState/lastReply come from the main context (stable
@@ -15,6 +16,7 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
   const { hudState, lastReply } = useStargate();
   const { history, streaming, sendMessage } = useStargateStream();
   const [input, setInput] = useState("");
+  const [callOpen, setCallOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -83,9 +85,12 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
           onChange={setInput}
           onSubmit={() => submit(input)}
           onMic={onMic}
+          onCall={() => setCallOpen(true)}
           placeholder='> "GIVE ME THE BRIEF."'
         />
       </div>
+
+      <VoiceCallOverlay open={callOpen} onClose={() => setCallOpen(false)} />
     </div>
   );
 }

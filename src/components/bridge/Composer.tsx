@@ -37,6 +37,27 @@ function SendIcon() {
   );
 }
 
+/** Waveform-bars glyph for the voice-call button — distinct from the dictation
+ * mic icon. Five vertical bars, center-weighted heights, Grok-style. */
+function CallWaveIcon() {
+  return (
+    <svg
+      viewBox="0 0 24 24"
+      fill="none"
+      stroke="currentColor"
+      strokeWidth="2"
+      strokeLinecap="round"
+      aria-hidden
+    >
+      <line x1="2" y1="9" x2="2" y2="15" />
+      <line x1="7" y1="5" x2="7" y2="19" />
+      <line x1="12" y1="2" x2="12" y2="22" />
+      <line x1="17" y1="5" x2="17" y2="19" />
+      <line x1="22" y1="9" x2="22" y2="15" />
+    </svg>
+  );
+}
+
 /**
  * Pill composer: mic button + auto-growing textarea + send button.
  * Enter submits, Shift+Enter inserts a newline. Presentation only — `onSubmit`
@@ -47,6 +68,7 @@ export function Composer({
   onChange,
   onSubmit,
   onMic,
+  onCall,
   recording,
   placeholder,
 }: {
@@ -54,6 +76,7 @@ export function Composer({
   onChange: (v: string) => void;
   onSubmit: () => void;
   onMic?: () => void;
+  onCall?: () => void;
   recording?: boolean;
   placeholder?: string;
 }) {
@@ -103,6 +126,15 @@ export function Composer({
       />
       <button type="submit" className="send-btn" aria-label="Send">
         <SendIcon />
+      </button>
+      <button
+        type="button"
+        className="call-btn"
+        title="Start voice call"
+        onClick={onCall}
+        aria-label="Start voice call"
+      >
+        <CallWaveIcon />
       </button>
     </form>
   );

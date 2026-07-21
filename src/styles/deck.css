@@ -508,6 +508,18 @@ input::placeholder { color: #7a63a8; }
 .send-btn:active { transform: scale(0.94); }
 .send-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
 
+/* voice-call button — white/glowing circle, deliberately distinct from the
+   purple dictation mic-btn and the solid-purple send-btn (Grok-style). */
+.call-btn {
+  background: radial-gradient(circle at 34% 30%, #fff, var(--star) 55%, color-mix(in oklab, var(--purple) 65%, var(--star)) 100%);
+  color: #150826;
+  box-shadow: 0 0 14px color-mix(in oklab, var(--star) 55%, transparent), 0 0 3px rgba(255,255,255,0.65);
+  transition: box-shadow 0.18s ease-out, transform 0.18s ease-out, filter 0.18s ease-out;
+}
+.call-btn:hover { box-shadow: 0 0 22px color-mix(in oklab, var(--star) 70%, transparent), 0 0 6px #fff; filter: brightness(1.06); }
+.call-btn:active { transform: scale(0.94); }
+.call-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
+
 /* ── Agent Ops / feed ── */
 .feed-list { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
 .feed-line { display: flex; gap: 8px; align-items: baseline; font-family: var(--mono); font-size: 11px; line-height: 1.5; animation: feedIn 0.22s ease-out; }
@@ -960,6 +972,137 @@ input::placeholder { color: #7a63a8; }
   height: 18px;
 }
 
+/* ── voice call overlay ── */
+.call-overlay {
+  position: fixed; inset: 0; z-index: 60;
+  display: flex; align-items: center; justify-content: center;
+  padding: 24px;
+  background: radial-gradient(circle at center, color-mix(in oklab, var(--purple) 14%, transparent), rgba(5,2,10,0.86) 70%);
+  backdrop-filter: blur(14px);
+  animation: callBackdropIn 0.2s ease-out;
+}
+@keyframes callBackdropIn { from { opacity: 0; } to { opacity: 1; } }
+
+.call-panel {
+  position: relative;
+  width: min(420px, 100%);
+  max-height: min(720px, 92vh);
+  display: flex; flex-direction: column; gap: 16px;
+  padding: 30px 22px 22px;
+  border-radius: 20px;
+  border: 1px solid var(--border);
+  background:
+    linear-gradient(180deg, color-mix(in oklab, var(--chrome) 3%, transparent), transparent 22%),
+    linear-gradient(180deg, rgba(16,7,32,0.94), rgba(8,3,16,0.98));
+  box-shadow:
+    inset 0 0 0 1px color-mix(in oklab, var(--chrome) 4%, transparent),
+    inset 0 0 40px color-mix(in oklab, var(--purple) 10%, transparent),
+    0 20px 60px rgba(0,0,0,0.55);
+  animation: callPanelIn 0.22s ease-out;
+}
+@keyframes callPanelIn { from { opacity: 0; transform: translateY(10px) scale(0.98); } to { opacity: 1; transform: translateY(0) scale(1); } }
+
+.call-close-btn {
+  position: absolute; top: 14px; right: 14px; width: 28px; height: 28px; border-radius: 50%;
+  display: grid; place-items: center; border: 1px solid var(--border-soft); background: rgba(9,4,18,0.6);
+  color: var(--text-faint); cursor: pointer;
+  transition: color 0.18s ease-out, border-color 0.18s ease-out;
+}
+.call-close-btn svg { width: 13px; height: 13px; }
+.call-close-btn:hover { color: var(--text); border-color: var(--border); }
+.call-close-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
+
+.call-head { display: flex; flex-direction: column; align-items: center; gap: 4px; text-align: center; }
+.call-kicker { font-family: var(--display); font-size: 11px; letter-spacing: 0.34em; color: var(--text-faint); font-weight: 700; }
+.call-status { font-family: var(--mono); font-size: 13px; color: var(--accent-glow); letter-spacing: 0.06em; }
+.call-status.is-error { color: var(--bad); }
+
+.call-orb-stage { display: flex; align-items: center; justify-content: center; padding: 8px 0 2px; }
+.call-orb {
+  position: relative; width: 128px; height: 128px; border-radius: 50%;
+  background: radial-gradient(circle at 38% 32%, #fff, var(--star) 30%, var(--purple) 68%, transparent 100%);
+  box-shadow: 0 0 40px color-mix(in oklab, var(--purple) 55%, transparent);
+}
+.call-orb::before, .call-orb::after {
+  content: ""; position: absolute; inset: -14px; border-radius: 50%;
+  border: 1px solid color-mix(in oklab, var(--purple) 45%, transparent);
+  opacity: 0;
+}
+
+.call-orb-connecting { animation: callDim 1.6s ease-in-out infinite; }
+.call-orb-connecting::before { opacity: 1; border-style: dashed; animation: spinCW 2.2s linear infinite; }
+
+.call-orb-listening { animation: callBreathe 3s ease-in-out infinite; }
+
+.call-orb-speaking { animation: callBreathe 0.9s ease-in-out infinite; }
+.call-orb-speaking::before { opacity: 1; animation: callRipple 1.1s ease-out infinite; }
+.call-orb-speaking::after { opacity: 1; animation: callRipple 1.1s ease-out infinite 0.35s; }
+
+.call-orb-error {
+  background: radial-gradient(circle at 38% 32%, #fff, var(--bad) 40%, color-mix(in oklab, var(--bad) 70%, var(--void)) 100%);
+  box-shadow: 0 0 40px color-mix(in oklab, var(--bad) 55%, transparent);
+  animation: callDim 2.2s ease-in-out infinite;
+}
+
+@keyframes callDim { 0%, 100% { opacity: 0.75; transform: scale(1); } 50% { opacity: 1; transform: scale(1.03); } }
+@keyframes callBreathe { 0%, 100% { transform: scale(1); opacity: 0.92; } 50% { transform: scale(1.06); opacity: 1; } }
+@keyframes callRipple { 0% { transform: scale(0.9); opacity: 0.6; } 100% { transform: scale(1.55); opacity: 0; } }
+
+.call-error-box {
+  display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
+  border: 1px solid color-mix(in oklab, var(--bad) 40%, transparent); border-radius: 10px;
+  background: color-mix(in oklab, var(--bad) 8%, transparent);
+}
+.call-error-text { font-family: var(--mono); font-size: 12px; color: var(--bad); line-height: 1.5; }
+.call-error-link { font-family: var(--mono); font-size: 11px; color: var(--accent-glow); text-decoration: underline; text-underline-offset: 2px; width: fit-content; }
+
+.call-transcript {
+  flex: 1; min-height: 130px; max-height: 320px; overflow-y: auto;
+  display: flex; flex-direction: column; gap: 12px;
+  padding: 4px 2px;
+}
+.call-turn { display: flex; flex-direction: column; gap: 4px; animation: turnIn 0.2s ease-out; }
+.call-turn-user { align-items: flex-end; }
+.call-turn-assistant { align-items: flex-start; }
+.call-turn-label { font-family: var(--mono); font-size: 10px; letter-spacing: 0.16em; color: var(--text-faint); }
+.call-turn-user .call-turn-label { color: var(--text-dim); }
+.call-bubble-user {
+  max-width: 88%; background: var(--void-2); border: 1px solid var(--border); border-radius: 14px;
+  padding: 8px 12px; color: var(--text); font-family: var(--body); font-size: 14px; line-height: 1.5;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.call-bubble-user.is-live { opacity: 0.72; border-style: dashed; }
+.call-line-assistant {
+  max-width: 100%; color: var(--chrome); font-family: var(--body); font-size: 14px; line-height: 1.55;
+  white-space: pre-wrap; overflow-wrap: anywhere;
+}
+.call-line-assistant.is-live { color: var(--text-dim); }
+.call-transcript-empty {
+  margin: auto; font-family: var(--mono); font-size: 11px; color: var(--text-faint); font-style: italic; text-align: center;
+}
+
+.call-controls { display: flex; align-items: center; justify-content: center; gap: 10px; flex-wrap: wrap; }
+.call-mute-btn, .call-retry-btn {
+  font-family: var(--display); font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+  padding: 9px 16px; border-radius: 999px; cursor: pointer;
+  background: rgba(176,77,252,0.12); border: 1px solid var(--border); color: var(--text-dim);
+  transition: background 0.18s ease-out, color 0.18s ease-out, transform 0.18s ease-out;
+}
+.call-mute-btn:hover, .call-retry-btn:hover { background: rgba(176,77,252,0.26); color: var(--text); }
+.call-mute-btn:active, .call-retry-btn:active { transform: scale(0.96); }
+.call-mute-btn:focus-visible, .call-retry-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
+.call-mute-btn.is-muted { background: rgba(255,107,138,0.16); border-color: rgba(255,107,138,0.4); color: var(--bad); }
+
+.call-end-btn {
+  font-family: var(--display); font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+  padding: 9px 20px; border-radius: 999px; cursor: pointer; border: 1px solid rgba(255,107,138,0.5);
+  background: rgba(255,107,138,0.16); color: var(--bad);
+  transition: background 0.18s ease-out, transform 0.18s ease-out;
+}
+.call-end-btn:hover { background: rgba(255,107,138,0.3); }
+.call-end-btn:active { transform: scale(0.96); }
+.call-end-btn:focus-visible { outline: 2px solid var(--bad); outline-offset: 2px; }
+
 /* ── ECO / low-power mode ── */
 .eco-btn {
   margin-left: 18px; padding: 5px 12px; border-radius: 4px; cursor: pointer;
@@ -989,6 +1132,16 @@ body.low-power .reactor-cursor { animation: none; }
 body.low-power .panel-tag.pulse { animation: none; }
 body.low-power .panel,
 body.low-power .console { backdrop-filter: none; }
+body.low-power .call-overlay { backdrop-filter: none; animation: none; }
+body.low-power .call-panel { animation: none; }
+body.low-power .call-orb-connecting,
+body.low-power .call-orb-listening,
+body.low-power .call-orb-speaking,
+body.low-power .call-orb-error { animation: callDim 2.4s ease-in-out infinite; }
+body.low-power .call-orb-connecting::before,
+body.low-power .call-orb-speaking::before,
+body.low-power .call-orb-speaking::after { animation: none; opacity: 0; }
+body.low-power .call-turn { animation: none; }
 body.low-power .turn,
 body.low-power .feed-line,
 body.low-power .mobile-feed-line { animation: none; }
@@ -1024,8 +1177,25 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
   .chip:active,
   .mic-btn:active,
   .send-btn:active,
+  .call-btn:active,
   .mobile-tab:active,
   .mobile-hero-badge:active { transform: none; }
+  .call-overlay,
+  .call-panel,
+  .call-turn { animation: none !important; }
+  .call-orb-connecting,
+  .call-orb-listening,
+  .call-orb-speaking,
+  .call-orb-error {
+    animation: badgePulseDim 2.4s ease-in-out infinite !important;
+    transform: none;
+  }
+  .call-orb-connecting::before,
+  .call-orb-speaking::before,
+  .call-orb-speaking::after { animation: none !important; opacity: 0; }
+  .call-mute-btn:active,
+  .call-retry-btn:active,
+  .call-end-btn:active { transform: none; }
 }
 
 /* ── boot overlay ── */
