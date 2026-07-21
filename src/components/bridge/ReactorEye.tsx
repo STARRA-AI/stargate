@@ -60,6 +60,10 @@ export const ReactorEye = memo(function ReactorEye({
   // Tracked mirror of the reduced-motion media query for the 60fps rAF loop
   // below — that loop must not call matchMedia() itself every frame.
   const reducedMotionRef = useRef(false);
+  // Same idea for ECO (low-power) state: mirrored by the MutationObserver
+  // below so the 60fps rAF loop reads a ref instead of calling
+  // document.body.classList.contains() every frame.
+  const ecoRef = useRef(false);
 
   const signalRef = useRef<{
     doubleBlink: boolean;
@@ -87,8 +91,11 @@ export const ReactorEye = memo(function ReactorEye({
   });
 
   useEffect(() => {
-    const syncEco = () =>
-      setEco(document.body.classList.contains("low-power"));
+    const syncEco = () => {
+      const isEco = document.body.classList.contains("low-power");
+      setEco(isEco);
+      ecoRef.current = isEco;
+    };
     syncEco();
     const mo = new MutationObserver(syncEco);
     mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
@@ -238,7 +245,7 @@ export const ReactorEye = memo(function ReactorEye({
     };
 
     const frame = (now: number) => {
-      const ecoPaused = document.body.classList.contains("low-power");
+      const ecoPaused = ecoRef.current;
       const reduce = reducedMotionRef.current;
 
       if (ecoPaused || reduce) {

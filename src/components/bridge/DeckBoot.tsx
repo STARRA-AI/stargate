@@ -20,7 +20,7 @@ export function DeckBoot({ onDone }: { onDone: () => void }) {
     async function run() {
       for (let i = 0; i < BOOT_LINES.length; i++) {
         if (cancelled) return;
-        await new Promise((r) => setTimeout(r, 320));
+        await new Promise((r) => setTimeout(r, 180));
         setLines((prev) => [...prev.slice(-3), BOOT_LINES[i]]);
         setPct(Math.round(((i + 1) / BOOT_LINES.length) * 100));
       }

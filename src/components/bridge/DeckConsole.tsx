@@ -1,14 +1,19 @@
 "use client";
 
 import { CHIPS } from "@/lib/deck-demo";
-import { useStargate } from "@/lib/stargate-context";
+import { useStargate, useStargateStream } from "@/lib/stargate-context";
 import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 import { MessageColumn } from "./MessageColumn";
 
 export function DeckConsole({ onMic }: { onMic?: () => void }) {
-  const { hudState, lastReply, history, streaming, sendMessage } =
-    useStargate();
+  // Split on purpose: hudState/lastReply come from the main context (stable
+  // outside of real HUD transitions); history/streaming/sendMessage come
+  // from the stream-only context, which updates on every SSE token. Only
+  // this component (and its MessageColumn child) should feel that churn —
+  // see stargate-context.tsx for why.
+  const { hudState, lastReply } = useStargate();
+  const { history, streaming, sendMessage } = useStargateStream();
   const [input, setInput] = useState("");
   const logRef = useRef<HTMLDivElement>(null);
 

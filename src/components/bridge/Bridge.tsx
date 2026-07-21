@@ -76,9 +76,24 @@ function useInterval(fn: () => void, ms: number) {
   });
 
   useEffect(() => {
-    fnRef.current();
-    const id = setInterval(() => fnRef.current(), ms);
-    return () => clearInterval(id);
+    // Skip the poll while the tab is backgrounded — a hidden tab has no
+    // reason to keep hitting /api/* on a timer — and catch back up with a
+    // single fetch the moment it regains visibility instead of waiting out
+    // whatever's left of the current interval.
+    const tick = () => {
+      if (document.hidden) return;
+      fnRef.current();
+    };
+    tick();
+    const id = setInterval(tick, ms);
+    const onVisibility = () => {
+      if (!document.hidden) fnRef.current();
+    };
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
   }, [ms]);
 }
 

@@ -55,16 +55,19 @@ type StargateContextValue = {
   setToolName: (n?: string) => void;
   bootDone: boolean;
   setBootDone: (v: boolean) => void;
-  /** Shared conversation transcript — committed turns (typed chat + voice). */
-  history: Msg[];
-  /** In-progress assistant text for the currently streaming turn, if any. */
-  streaming: string;
   /**
    * Single entry point for a chat turn: streams /api/chat with prior
    * `history` as context, commits user+assistant turns to `history`, and
    * speaks the reply via speakStarra. Used by both DeckConsole (typed) and
    * useVoiceLoop (voice) so there is exactly one conversation + HUD state
    * machine.
+   *
+   * Also re-exposed (identical function, not a copy) on
+   * `StargateStreamContext` below — kept here too, on the main context,
+   * purely so `useVoiceLoop`'s existing `useStargate()` destructure keeps
+   * compiling unchanged. Its identity is stable across renders (see the
+   * `useCallback` deps in `StargateProvider`), so including it here never
+   * invalidates the main context's memo.
    */
   sendMessage: (text: string) => Promise<void>;
   /**
@@ -72,11 +75,33 @@ type StargateContextValue = {
    * and kills any currently playing audio. Does NOT touch HUD state — the
    * caller (e.g. useVoiceLoop's wake()) owns the coherent state transition
    * that follows, so a stale turn resolving later can never clobber it.
+   * Same stable-identity note as `sendMessage` above.
    */
   stopSpeaking: () => void;
 };
 
+/**
+ * Perf-motivated split from `StargateContextValue`: `history` and
+ * `streaming` change on every SSE token during a reply. Bundling them into
+ * the main context (as before) meant every consumer of `useStargate()` —
+ * effectively all of `Bridge`'s ~900-line tree — re-rendered on every
+ * streamed character. Consumers that only need hud/snap/connectors/etc.
+ * should use `useStargate()`; only the chat surface (`DeckConsole`,
+ * `MessageColumn`) should use `useStargateStream()`.
+ */
+type StargateStreamContextValue = {
+  /** Shared conversation transcript — committed turns (typed chat + voice). */
+  history: Msg[];
+  /** In-progress assistant text for the currently streaming turn, if any. */
+  streaming: string;
+  sendMessage: (text: string) => Promise<void>;
+  stopSpeaking: () => void;
+};
+
 const StargateContext = createContext<StargateContextValue | null>(null);
+const StargateStreamContext = createContext<StargateStreamContextValue | null>(
+  null,
+);
 
 function nowStamp() {
   const d = new Date();
@@ -250,6 +275,11 @@ export function StargateProvider({ children }: { children: ReactNode }) {
     [abortTurn, pushLog, setHudState],
   );
 
+  // Deliberately does NOT depend on `history`/`streaming` — those live only
+  // in `streamValue` below. sendMessage/stopSpeaking have stable identity
+  // (see their useCallback deps above), so this object only changes on real
+  // hud/snap/connector/etc. transitions, not on every streamed token. That
+  // stability is what stops a chat reply from re-rendering all of Bridge.
   const value = useMemo(
     () => ({
       hudState,
@@ -266,8 +296,6 @@ export function StargateProvider({ children }: { children: ReactNode }) {
       setToolName,
       bootDone,
       setBootDone,
-      history,
-      streaming,
       sendMessage,
       stopSpeaking,
     }),
@@ -281,20 +309,42 @@ export function StargateProvider({ children }: { children: ReactNode }) {
       snap,
       toolName,
       bootDone,
-      history,
-      streaming,
       sendMessage,
       stopSpeaking,
     ],
   );
 
+  const streamValue = useMemo(
+    () => ({ history, streaming, sendMessage, stopSpeaking }),
+    [history, streaming, sendMessage, stopSpeaking],
+  );
+
   return (
-    <StargateContext.Provider value={value}>{children}</StargateContext.Provider>
+    <StargateContext.Provider value={value}>
+      <StargateStreamContext.Provider value={streamValue}>
+        {children}
+      </StargateStreamContext.Provider>
+    </StargateContext.Provider>
   );
 }
 
 export function useStargate() {
   const ctx = useContext(StargateContext);
   if (!ctx) throw new Error("useStargate must be used within StargateProvider");
+  return ctx;
+}
+
+/**
+ * Conversation-only context: `history`, `streaming`, and the two chat
+ * entry points. Consume this (not `useStargate()`) from anything that needs
+ * to react to in-progress streaming text — currently `DeckConsole` and, via
+ * its props, `MessageColumn`. Keeping this separate from `useStargate()` is
+ * the fix for Bridge re-rendering its whole tree on every SSE token.
+ */
+export function useStargateStream() {
+  const ctx = useContext(StargateStreamContext);
+  if (!ctx) {
+    throw new Error("useStargateStream must be used within StargateProvider");
+  }
   return ctx;
 }
