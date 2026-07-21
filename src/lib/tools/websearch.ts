@@ -103,6 +103,62 @@ export function formatWebResults(query: string, results: WebResult[]): string {
 }
 
 /**
+ * Weather via wttr.in (no key, JSON). DDG snippets don't carry a live temp, so
+ * weather questions route here instead. Returns null location if no clear place
+ * is named (we don't guess a location).
+ */
+export function weatherLocation(message: string): string | null {
+  const m = message.trim();
+  if (!/\bweather\b/i.test(m)) return null;
+  const loc = m.match(
+    /\bweather\b(?:\s+(?:like|today|right now))?\s+(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s,.'-]*?)(?:\s+(?:today|right now|now|this week))?\s*[?.!]*$/i,
+  );
+  return loc ? loc[1].trim() : null;
+}
+
+export async function getWeather(
+  location: string,
+): Promise<{ ok: boolean; text?: string; error?: string }> {
+  const loc = location.trim();
+  if (!loc) return { ok: false, error: "no location" };
+  try {
+    const res = await fetch(
+      `https://wttr.in/${encodeURIComponent(loc)}?format=j1`,
+      { headers: { "User-Agent": "curl/8" }, signal: AbortSignal.timeout(7000) },
+    );
+    if (!res.ok) return { ok: false, error: `wttr ${res.status}` };
+    const d = (await res.json()) as {
+      current_condition?: {
+        temp_F?: string;
+        temp_C?: string;
+        FeelsLikeF?: string;
+        humidity?: string;
+        weatherDesc?: { value: string }[];
+      }[];
+      nearest_area?: {
+        areaName?: { value: string }[];
+        region?: { value: string }[];
+      }[];
+    };
+    const c = d.current_condition?.[0];
+    if (!c) return { ok: false, error: "no conditions" };
+    const a = d.nearest_area?.[0];
+    const place =
+      [a?.areaName?.[0]?.value, a?.region?.[0]?.value]
+        .filter(Boolean)
+        .join(", ") || loc;
+    const desc = c.weatherDesc?.[0]?.value ?? "";
+    const text = `LIVE WEATHER for ${place}: ${c.temp_F}°F (${c.temp_C}°C), ${desc}, feels like ${c.FeelsLikeF}°F, humidity ${c.humidity}%. Report this to Classic.`;
+    return { ok: true, text };
+  } catch (e) {
+    return {
+      ok: false,
+      error: e instanceof Error ? e.message : "weather failed",
+    };
+  }
+}
+
+/**
  * Decide whether a message needs a live web lookup and extract the query.
  * Conservative on purpose — only explicit search requests or clearly
  * current/time-sensitive questions trigger a fetch (no per-message cost).

@@ -12,6 +12,8 @@ import {
   webSearch,
   webSearchQuery,
   formatWebResults,
+  weatherLocation,
+  getWeather,
 } from "@/lib/tools/websearch";
 import {
   briefForPipeline,
@@ -252,18 +254,24 @@ export async function POST(req: Request) {
 
   // Phase 2: build once per request — stable canon reused from in-process cache;
   // volatile extras (memory/vault/pack) stay out of the Anthropic cache prefix.
-  // Live web search — runs only for explicit or clearly current-info queries;
-  // results are fenced as untrusted web content. Placed early in volatileExtras
-  // so it survives the Kimi tiered-prompt budget over lower-priority extras.
-  const searchQ = lastUser ? webSearchQuery(lastUser) : null;
+  // Live info — weather (wttr.in) takes priority over generic web search since
+  // DDG snippets lack a live temp; otherwise DuckDuckGo for explicit/current
+  // queries. Both fenced as untrusted and placed early in volatileExtras so they
+  // survive the Kimi tiered-prompt budget over lower-priority extras.
+  const weatherLoc = lastUser ? weatherLocation(lastUser) : null;
+  const weather = weatherLoc ? await getWeather(weatherLoc) : null;
+  const searchQ = !weather?.ok && lastUser ? webSearchQuery(lastUser) : null;
   const web = searchQ ? await webSearch(searchQ, 3) : null;
 
   const volatileExtras = [
     threatVolatile,
-    serializeTier1(tier1),
+    // Live info FIRST (after the security brief) — for a search/weather query it
+    // is the most important context, so it must win the tiered budget.
+    weather?.ok ? fenceUntrusted(weather.text!, "weather") : "",
     web?.ok
       ? fenceUntrusted(formatWebResults(searchQ!, web.results), "web-search")
       : "",
+    serializeTier1(tier1),
     memoryForPrompt(memory, lastUser),
     vaultForPrompt(vault.docs, lastUser),
     obsidianVolatile,
@@ -368,6 +376,10 @@ export async function POST(req: Request) {
               volatile: volatileExtras,
               includeUntrusted: Boolean(packPreview),
               includeSecurityTeam: !operatorScan.clean,
+              // A live web/weather lookup is the point of the turn — give the
+              // tiered budget headroom so the results fit (still < 8K TPM with
+              // a short query) instead of getting deferred.
+              maxTokens: weather?.ok || web?.ok ? 7900 : undefined,
             });
             try {
               const r = await streamHosted({
