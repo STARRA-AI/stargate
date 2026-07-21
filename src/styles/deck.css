@@ -60,7 +60,7 @@ input::placeholder { color: #7a63a8; }
   overflow: hidden;
   font-family: var(--display);
   color: var(--text);
-  background: var(--bg) url("/brand/hud_panel.png") center center / cover no-repeat;
+  background: var(--bg) url("/brand/hud_panel.webp") center center / cover no-repeat;
   transform-origin: top left;
 }
 

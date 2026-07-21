@@ -313,12 +313,12 @@ export function Bridge() {
             <div className="mobile-topbar-left">
               <div className="badge-wrap mobile-badge-wrap">
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="mobile-topbar-badge" src="/brand/badge.png" alt="" aria-hidden />
+                <img className="mobile-topbar-badge" src="/brand/badge.webp" alt="" aria-hidden />
               </div>
               <div className="mobile-topbar-copy">
                 <span className="mobile-topbar-kicker">STARGATE</span>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="mobile-wordmark" src="/brand/wordmark.png" alt="STARRA" />
+                <img className="mobile-wordmark" src="/brand/wordmark.webp" alt="STARRA" />
               </div>
             </div>
             <div className="mobile-topbar-status">
@@ -334,14 +334,14 @@ export function Bridge() {
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   className="mobile-ring mobile-ring-outer"
-                  src="/brand/hud_ring.png"
+                  src="/brand/hud_ring.webp"
                   alt=""
                   aria-hidden
                 />
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
                   className="mobile-ring mobile-ring-inner"
-                  src="/brand/hud_ring.png"
+                  src="/brand/hud_ring.webp"
                   alt=""
                   aria-hidden
                 />
@@ -359,7 +359,7 @@ export function Bridge() {
                   }
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img src="/brand/badge.png" alt="Activate voice" />
+                  <img src="/brand/badge.webp" alt="Activate voice" />
                 </button>
               </div>
             </div>
@@ -524,7 +524,7 @@ export function Bridge() {
         <header className="topbar">
           <div className="badge-wrap">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img className="badge" src="/brand/badge.png" alt="STARRA badge" />
+            <img className="badge" src="/brand/badge.webp" alt="STARRA badge" />
             <video
               ref={badgeCineRef}
               className="badge-cine"
@@ -538,7 +538,7 @@ export function Bridge() {
           </div>
           <div className="wordmark-wrap">
             {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img className="wordmark" src="/brand/wordmark.png" alt="STARRA" />
+            <img className="wordmark" src="/brand/wordmark.webp" alt="STARRA" />
             <video
               ref={shineRef}
               className="wordmark-cine"

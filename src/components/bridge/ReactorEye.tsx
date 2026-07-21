@@ -435,17 +435,17 @@ export const ReactorEye = memo(function ReactorEye({
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
                 className="ring ring-outer"
-                src="/brand/hud_ring.png"
+                src="/brand/hud_ring.webp"
                 alt=""
               />
             </div>
             <div className="ring-parallax eye-inner" ref={innerRef}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img className="ring ring-inner" src="/brand/hud_ring.png" alt="" />
+              <img className="ring ring-inner" src="/brand/hud_ring.webp" alt="" />
             </div>
             <div className="ring-parallax eye-pupil" ref={pupilRef}>
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img className="ring ring-pupil" src="/brand/hud_ring.png" alt="" />
+              <img className="ring ring-pupil" src="/brand/hud_ring.webp" alt="" />
               <button
                 type="button"
                 className={`reactor-core${speaking ? " speaking" : ""}`}

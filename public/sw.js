@@ -1,6 +1,6 @@
 /* STARGATE service worker — cache shell + last brief/memory for offline read */
 const CACHE = "stargate-v1";
-const PRECACHE = ["/", "/manifest.webmanifest", "/brand/badge.png", "/brand/wordmark.png"];
+const PRECACHE = ["/", "/manifest.webmanifest", "/brand/badge.png", "/brand/badge.webp", "/brand/wordmark.webp"];
 
 self.addEventListener("install", (event) => {
   event.waitUntil(

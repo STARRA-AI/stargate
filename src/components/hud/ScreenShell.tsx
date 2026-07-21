@@ -19,7 +19,7 @@ export function ScreenShell({
         <header className="mb-6 flex items-center gap-4">
           <Link href="/" className="focus-magenta shrink-0" aria-label="Return to Bridge">
             <Image
-              src="/brand/badge.png"
+              src="/brand/badge.webp"
               alt=""
               width={44}
               height={44}
