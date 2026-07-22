@@ -32,7 +32,11 @@ if [[ -f "$MODEL" ]]; then
   echo "● model present: blaze_face_short_range.tflite"
 else
   echo "→ downloading BlazeFace model…"
-  curl -sSL --max-time 120 -o "$MODEL" "$MODEL_URL"
+  if ! curl -fsSL --max-time 120 -o "$MODEL" "$MODEL_URL"; then
+    echo "◆ Download failed for blaze_face_short_range.tflite" >&2
+    rm -f "$MODEL"
+    exit 1
+  fi
   echo "● model downloaded"
 fi
 

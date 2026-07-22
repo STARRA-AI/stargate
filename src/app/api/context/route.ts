@@ -28,7 +28,10 @@ export async function PUT(req: Request) {
   } catch {
     return Response.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const parsed = Tier1Schema.parse(body);
-  const saved = await saveTier1(parsed);
+  const parsed = Tier1Schema.safeParse(body);
+  if (!parsed.success) {
+    return Response.json({ error: "invalid tier1 payload" }, { status: 400 });
+  }
+  const saved = await saveTier1(parsed.data);
   return Response.json(saved);
 }

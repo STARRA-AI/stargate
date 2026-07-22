@@ -18,7 +18,7 @@ mkdir -p "$LOG_DIR" "$PROJ/data" 2>/dev/null || true
 
 PID_FILE="$PROJ/data/starra-dev.pid"
 LOG="$LOG_DIR/starra-up.log"
-HOST="${STARRA_HOST:-0.0.0.0}"
+HOST="${STARRA_HOST:-127.0.0.1}"
 PORT="${STARRA_PORT:-3000}"
 URL="http://127.0.0.1:${PORT}"
 

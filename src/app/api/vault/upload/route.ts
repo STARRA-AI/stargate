@@ -12,8 +12,10 @@ export async function GET() {
 }
 
 export async function POST(req: Request) {
-  const contentLength = Number(req.headers.get("content-length") ?? 0);
-  if (contentLength > MAX_UPLOAD_BYTES) {
+  const contentLengthHeader = req.headers.get("content-length");
+  const contentLength =
+    contentLengthHeader !== null ? Number(contentLengthHeader) : NaN;
+  if (!Number.isFinite(contentLength) || contentLength > MAX_UPLOAD_BYTES) {
     return Response.json({ error: "file too large" }, { status: 413 });
   }
 

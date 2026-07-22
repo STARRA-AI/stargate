@@ -30,6 +30,7 @@ export async function POST() {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({ model, voice: "ara" }),
+      signal: AbortSignal.timeout(10_000),
     });
     if (!res.ok) {
       const err = await res.text();
