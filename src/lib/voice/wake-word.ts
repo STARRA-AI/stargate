@@ -28,7 +28,7 @@ export function matchWakeWord(transcript: string): {
 } {
   const t = transcript.trim();
   if (!t) return { woke: false, command: "" };
-  const re = /^(?:hey\s+|ok(?:ay)?\s+)?starra[\s,.!?]*(.*)$/i;
+  const re = /^(?:hey\s+|ok(?:ay)?\s+)?starra\b[\s,.!?]*(.*)$/i;
   const m = t.match(re);
   if (!m) return { woke: false, command: "" };
   return { woke: true, command: (m[1] ?? "").trim() };

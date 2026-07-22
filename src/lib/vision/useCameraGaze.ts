@@ -177,14 +177,15 @@ export function useCameraGaze() {
               y: ((b.y + b.height / 2) / h - 0.5) * 2,
               at: now,
             };
-          } else if (
-            lastFaceRef.current &&
-            now - lastFaceRef.current.at > 2000
-          ) {
-            lastFaceRef.current = null; // face lost > 2s → release to idle wander
           }
         } catch {
           /* keep last face briefly */
+        }
+        // Runs regardless of whether detect() succeeded, threw, or found no
+        // face — otherwise a persistently-throwing detector would never age
+        // out a stale face and the gaze would stick forever.
+        if (lastFaceRef.current && now - lastFaceRef.current.at > 2000) {
+          lastFaceRef.current = null; // face lost > 2s → release to idle wander
         }
       }
       if (lastFaceRef.current) {

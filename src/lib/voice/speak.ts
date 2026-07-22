@@ -144,6 +144,10 @@ export async function speakStarra(
     }
   }
 
+  if (signal?.aborted) {
+    return "none";
+  }
+
   // When a specific Web Speech voice is chosen, honor it — skip Piper (which
   // can't render a chosen voiceURI) and go straight to Web Speech below.
   //

@@ -66,6 +66,10 @@ export function VoiceCallOverlay({
     toggleMute,
   } = useVoiceCall();
 
+  const panelRef = useRef<HTMLDivElement>(null);
+  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+
   // Mirror connect/disconnect in refs so the open/close effect below reacts
   // only to `open` itself, not to callback identity churn as the engine
   // advances through connecting -> listening -> speaking — reacting to that
@@ -96,6 +100,52 @@ export function VoiceCallOverlay({
     };
   }, []);
 
+  // Focus management for the modal: move focus into the panel on open, trap
+  // Tab within it while open, and restore whatever had focus before the
+  // overlay opened once it closes. `aria-modal` alone doesn't do any of this
+  // — it's just a hint to assistive tech, the browser enforces none of it.
+  useEffect(() => {
+    if (typeof window === "undefined" || !open) return;
+
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    // Defer one tick so the panel (which only renders once `open` is true)
+    // has mounted before we try to move focus into it.
+    const focusTimer = window.setTimeout(() => {
+      (closeBtnRef.current ?? panelRef.current)?.focus();
+    }, 0);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = panel.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (e.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current = null;
+    };
+  }, [open]);
+
   const transcriptRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     const el = transcriptRef.current;
@@ -125,9 +175,10 @@ export function VoiceCallOverlay({
       aria-modal="true"
       aria-label="Voice call with STARRA"
     >
-      <div className="call-panel">
+      <div className="call-panel" ref={panelRef} tabIndex={-1}>
         <button
           type="button"
+          ref={closeBtnRef}
           className="call-close-btn"
           onClick={endCall}
           aria-label="End call and close"

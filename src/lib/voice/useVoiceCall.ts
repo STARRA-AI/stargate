@@ -594,6 +594,11 @@ export function useVoiceCall(): UseVoiceCallResult {
 
       const micContext = new AudioContextCtor();
       micContextRef.current = micContext;
+      // The click that triggered connect() gives us transient activation, but
+      // by the time we get here we've awaited /api/realtime + getUserMedia —
+      // both real round-trips — so that activation may already be gone.
+      // Resume explicitly rather than assume the context started running.
+      await micContext.resume().catch(() => {});
       await micContext.audioWorklet.addModule("/pcm-worklet-processor.js");
 
       const micSource = micContext.createMediaStreamSource(stream);
@@ -621,6 +626,8 @@ export function useVoiceCall(): UseVoiceCallResult {
 
       const playbackContext = new AudioContextCtor({ sampleRate: REALTIME_SAMPLE_RATE });
       playbackContextRef.current = playbackContext;
+      // Same rationale as micContext above — don't assume it started running.
+      await playbackContext.resume().catch(() => {});
       nextStartRef.current = 0;
 
       const ws = new WebSocket(data.url, [XAI_REALTIME_WS_SUBPROTOCOL_PREFIX + data.value]);

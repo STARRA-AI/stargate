@@ -19,4 +19,9 @@ describe("wake word", () => {
     const r = matchWakeWord("schedule the short");
     assert.equal(r.woke, false);
   });
+
+  it("does not match a word that merely starts with starra", () => {
+    const r = matchWakeWord("starrantula");
+    assert.equal(r.woke, false);
+  });
 });
