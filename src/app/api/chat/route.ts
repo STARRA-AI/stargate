@@ -81,6 +81,25 @@ function needsCopyRetry(text: string): boolean {
   return isCopyOnly(text) || isFewShotEcho(text) || !text.trim();
 }
 
+/** Groq free tier caps a request at 8K tokens — clamp history alongside the
+ * tiered system prompt so system+messages stays under the cap. Grok/Anthropic
+ * have no such cap and keep the full, unclamped history. */
+const KIMI_HISTORY_TURN_LIMIT = 6;
+const KIMI_HISTORY_CHAR_BUDGET = 2_000;
+
+function clampHistoryForKimi(msgs: ChatMessage[]): ChatMessage[] {
+  const tail = msgs.slice(-KIMI_HISTORY_TURN_LIMIT);
+  let budget = KIMI_HISTORY_CHAR_BUDGET;
+  const out: ChatMessage[] = [];
+  for (let i = tail.length - 1; i >= 0; i--) {
+    const m = tail[i];
+    budget -= m.content.length;
+    out.unshift(m);
+    if (budget <= 0) break;
+  }
+  return out.length ? out : tail.slice(-1);
+}
+
 function clipSystemForLocal(system: string): string {
   const reserve = LOCAL_VOICE_TAIL.length + 24;
   const budget = Math.max(800, LOCAL_SYSTEM_BUDGET - reserve);
@@ -325,9 +344,17 @@ export async function POST(req: Request) {
           for await (const chunk of stubStream(toolReply)) push(chunk);
         } else {
           const { up: ollamaUp, hasModel } = await ollamaStatus();
+          // Auto priority: keyed Kimi (free, tiered) -> keyed Anthropic -> local
+          // Ollama -> offline canned message. Grok stays opt-in (prefer === "grok"
+          // only) — never entered implicitly by auto.
+          const kimiKeyed = await hostedAvailable("kimi");
           const useOllama =
             prefer === "ollama" ||
-            (prefer === "auto" && ollamaUp && hasModel && !anthropicKey) ||
+            (prefer === "auto" &&
+              ollamaUp &&
+              hasModel &&
+              !kimiKeyed &&
+              !anthropicKey) ||
             (prefer === "auto" &&
               ollamaUp &&
               hasModel &&
@@ -368,7 +395,10 @@ export async function POST(req: Request) {
               lastUser,
               onText: (t) => push(t),
             });
-          } else if (prefer === "kimi" && (await hostedAvailable("kimi"))) {
+          } else if (
+            (prefer === "auto" || prefer === "kimi") &&
+            kimiKeyed
+          ) {
             // Free Kimi (Groq) — tiered under the 8K free cap: always-on core
             // identity + on-demand doctrines/volatile budgeted to fit.
             const tiered = buildTieredSystemPrompt({
@@ -385,8 +415,9 @@ export async function POST(req: Request) {
               const r = await streamHosted({
                 provider: "kimi",
                 system: tiered.full,
-                messages,
+                messages: clampHistoryForKimi(messages),
                 onText: (t) => push(t),
+                signal: req.signal,
               });
               pushFeed(
                 "ORACLE",
@@ -396,13 +427,15 @@ export async function POST(req: Request) {
               await localFallback("Kimi", err);
             }
           } else if (prefer === "grok" && (await hostedAvailable("grok"))) {
-            // xAI Grok — no TPM cap, send the full canon (identical assembly).
+            // xAI Grok — opt-in only (never entered by auto), no TPM cap, send
+            // the full canon (identical assembly).
             try {
               const r = await streamHosted({
                 provider: "grok",
                 system,
                 messages,
                 onText: (t) => push(t),
+                signal: req.signal,
               });
               pushFeed("ORACLE", `Grok brain — ${r.model}`);
             } catch (err) {

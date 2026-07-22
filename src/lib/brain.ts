@@ -513,10 +513,13 @@ export function buildTieredSystemPrompt(opts: {
     candidates.push({ name: "untrusted-rules", text: untrustedContentRules() });
   if (opts.includeSecurityTeam)
     candidates.push({ name: "security-team", text: securityTeamRules() });
-  candidates.push(...selectOnDemandDoctrines(opts.query));
+  // Per-turn grounding (tier-1 goals/tasks, memory, vault, threat brief) outranks
+  // on-demand doctrines under the budget — doctrines are the ones that should
+  // get deferred first, not the operator's live context.
   (opts.volatile ?? [])
     .filter(Boolean)
     .forEach((t, i) => candidates.push({ name: `volatile:${i}`, text: t }));
+  candidates.push(...selectOnDemandDoctrines(opts.query));
 
   for (const c of candidates) {
     if (!c.text) continue;

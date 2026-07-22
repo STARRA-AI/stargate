@@ -109,6 +109,8 @@ export async function streamHosted(opts: {
   system: string;
   messages: ChatMessage[];
   onText: (chunk: string) => void;
+  /** Caller-side abort (e.g. the inbound request closing) — combined with the fixed timeout below. */
+  signal?: AbortSignal;
 }): Promise<{ provider: string; model: string }> {
   const cfg = CONFIG[opts.provider];
   const key = await hostedKey(opts.provider);
@@ -129,7 +131,11 @@ export async function streamHosted(opts: {
         ...opts.messages,
       ],
     }),
-    signal: AbortSignal.timeout(120_000),
+    signal: AbortSignal.any(
+      [opts.signal, AbortSignal.timeout(120_000)].filter(
+        (s): s is AbortSignal => Boolean(s),
+      ),
+    ),
   });
 
   if (!res.ok || !res.body) {
