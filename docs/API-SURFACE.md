@@ -35,7 +35,12 @@ Full canon: [`STARRA_STARGATE_UNIFIED.md`](../STARRA_STARGATE_UNIFIED.md). Tool 
 | `GET` | `/api/proposals` | Operator proposals queue | None |
 | `POST` | `/api/proposals` | Submit proposal | None |
 
-**Note:** `xai` slot powers Think Tank only today — not chat or voice until wired.
+**Note:** `xai` slot powers Think Tank votes. It also powers the primary chat
+brain when `LLM_PROVIDER=grok` (opt-in only — `auto` selects Kimi, not Grok) —
+`/api/chat` streams via `streamHosted({ provider: "grok" })`. Duplex Realtime
+voice IS wired (voice "ara") via `/api/realtime` + the `useVoiceCall` hook /
+call overlay, pending a live mic pass; Ara (xAI TTS) voice output is wired
+separately via `/api/tts`.
 
 ---
 
@@ -75,7 +80,7 @@ Full canon: [`STARRA_STARGATE_UNIFIED.md`](../STARRA_STARGATE_UNIFIED.md). Tool 
 | `anthropic` | Anthropic (Claude) | Think Tank · premium brain |
 | `openai` | OpenAI (GPT) | Think Tank · Realtime stub |
 | `gemini` | Google (Gemini) | Think Tank |
-| **`xai`** | **xAI (Grok)** | **Think Tank today → chat + voice target** |
+| **`xai`** | **xAI (Grok)** | **Think Tank · chat brain (`LLM_PROVIDER=grok`) · Ara TTS** |
 | `kalshi_key_id` | Kalshi API key ID | Dragon Tradar |
 | `kalshi_private_key` | Kalshi RSA private key | Dragon Tradar |
 | `dragontradar_url` | Dragon stats URL | Site telemetry |
@@ -100,10 +105,10 @@ Env fallbacks: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, **`XAI_A
 | `ANTHROPIC_API_KEY` | — | Cloud brain + agent |
 | `OPENAI_API_KEY` | — | Realtime stub |
 | `OPENAI_REALTIME_MODEL` | `gpt-4o-realtime-preview` | OpenAI Realtime model |
-| **`XAI_API_KEY`** | — | **Target: chat + Realtime (not wired yet)** |
+| **`XAI_API_KEY`** | — | **Live: chat (`LLM_PROVIDER=grok`) + Ara TTS + Realtime duplex voice call (pending live mic pass)** |
 | `OLLAMA_BASE_URL` | `http://127.0.0.1:11434` | Local brain |
 | `OLLAMA_MODEL` | `qwen2.5:1.5b` | Local model |
-| `LLM_PROVIDER` | `auto` | `auto` \| `ollama` \| `anthropic` |
+| `LLM_PROVIDER` | `auto` | `auto` \| `ollama` \| `anthropic` \| `kimi` \| `grok` |
 | `OLLAMA_PRIORITY` | `1` | Prefer Ollama when set |
 
 ---
