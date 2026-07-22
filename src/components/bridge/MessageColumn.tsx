@@ -33,7 +33,10 @@ function useThrottledStreamText(
   const latestRef = useRef(value);
   const timerRef = useRef<number | null>(null);
   const lastFlushRef = useRef(0);
-  latestRef.current = value;
+
+  useEffect(() => {
+    latestRef.current = value;
+  }, [value]);
 
   useEffect(() => {
     if (!active) {

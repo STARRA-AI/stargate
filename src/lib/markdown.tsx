@@ -1,4 +1,4 @@
-import type { ReactNode } from "react";
+import { Fragment, type ReactNode } from "react";
 
 /**
  * Tiny, dependency-free markdown renderer that emits React elements.
@@ -247,10 +247,12 @@ export function renderMarkdown(src: string, trailing?: ReactNode): ReactNode {
             );
           case "code":
             return (
-              <pre key={key} className="md-pre">
-                <code>{b.code}</code>
+              <Fragment key={key}>
+                <pre className="md-pre">
+                  <code>{b.code}</code>
+                </pre>
                 {tail}
-              </pre>
+              </Fragment>
             );
           case "quote":
             return (
@@ -268,19 +270,23 @@ export function renderMarkdown(src: string, trailing?: ReactNode): ReactNode {
             );
           case "list":
             return b.ordered ? (
-              <ol key={key} className="md-list">
-                {b.items.map((it, j) => (
-                  <li key={`${key}-${j}`}>{parseInline(it, `${key}-${j}`)}</li>
-                ))}
+              <Fragment key={key}>
+                <ol className="md-list">
+                  {b.items.map((it, j) => (
+                    <li key={`${key}-${j}`}>{parseInline(it, `${key}-${j}`)}</li>
+                  ))}
+                </ol>
                 {tail}
-              </ol>
+              </Fragment>
             ) : (
-              <ul key={key} className="md-list">
-                {b.items.map((it, j) => (
-                  <li key={`${key}-${j}`}>{parseInline(it, `${key}-${j}`)}</li>
-                ))}
+              <Fragment key={key}>
+                <ul className="md-list">
+                  {b.items.map((it, j) => (
+                    <li key={`${key}-${j}`}>{parseInline(it, `${key}-${j}`)}</li>
+                  ))}
+                </ul>
                 {tail}
-              </ul>
+              </Fragment>
             );
           case "p":
           default:

@@ -148,6 +148,12 @@ export function StargateProvider({ children }: { children: ReactNode }) {
   const [streaming, setStreaming] = useState("");
   const fetchAbortRef = useRef<AbortController | null>(null);
   const ttsAbortRef = useRef<AbortController | null>(null);
+  // Mirrors `history` so sendMessage can read the latest committed history
+  // synchronously when building the fetch body, without assigning to an
+  // outer variable from inside the setHistory updater (which must stay pure
+  // — React may invoke it more than once, e.g. under StrictMode).
+  const historyRef = useRef<Msg[]>(history);
+  historyRef.current = history;
 
   const pushLog = useCallback((text: string) => {
     setActionLog((prev) => [
@@ -192,11 +198,8 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         window.speechSynthesis.getVoices();
       }
 
-      let nextHistory: Msg[] = [];
-      setHistory((h) => {
-        nextHistory = [...h, { role: "user", content: trimmed }];
-        return nextHistory;
-      });
+      const nextHistory: Msg[] = [...historyRef.current, { role: "user", content: trimmed }];
+      setHistory(nextHistory);
       setStreaming("");
       setHudState("thinking");
       pushLog(`[EXEC] ${trimmed.slice(0, 48)}`);
@@ -253,13 +256,16 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         const { speakStarra } = await import("@/lib/voice/speak");
         const speakPromise = speakStarra(full, ttsAc.signal);
         setHistory((h) => [...h, { role: "assistant", content: full }]);
+        // Turn is committed to history now — clear the streaming mirror
+        // immediately so MessageColumn doesn't render the reply twice for
+        // the duration of TTS playback below.
+        setStreaming("");
         const engine = await speakPromise;
         if (ttsAc.signal.aborted) {
           // Barge-in (or a newer turn) already interrupted this one and owns
           // whatever HUD state comes next — don't clobber it.
           return;
         }
-        setStreaming("");
         setHudState("idle");
         pushLog(`[ORACLE] reply landed · voice ${engine}`);
       } catch (err) {
