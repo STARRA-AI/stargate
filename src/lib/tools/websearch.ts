@@ -42,10 +42,11 @@ function realUrl(href: string): string {
 
 export async function webSearch(
   query: string,
-  limit = 5,
+  limit = 3,
 ): Promise<{ ok: boolean; results: WebResult[]; error?: string }> {
   const q = query.trim();
   if (!q) return { ok: false, results: [], error: "empty query" };
+  const max = Math.min(3, Math.max(0, Math.floor(limit)));
   try {
     const res = await fetch(
       `https://html.duckduckgo.com/html/?q=${encodeURIComponent(q)}`,
@@ -67,13 +68,13 @@ export async function webSearch(
     ].map((m) => stripTags(m[1]));
 
     const results: WebResult[] = [];
-    for (let i = 0; i < anchors.length && results.length < limit; i++) {
+    for (let i = 0; i < anchors.length && results.length < max; i++) {
       const title = stripTags(anchors[i][2]);
       if (!title) continue;
       results.push({
         title,
         url: realUrl(anchors[i][1]),
-        snippet: snippets[results.length] ?? "",
+        snippet: snippets[i] ?? "",
       });
     }
     return {
@@ -111,9 +112,17 @@ export function weatherLocation(message: string): string | null {
   const m = message.trim();
   if (!/\bweather\b/i.test(m)) return null;
   const loc = m.match(
-    /\bweather\b(?:\s+(?:like|today|right now))?\s+(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s,.'-]*?)(?:\s+(?:today|right now|now|this week))?\s*[?.!]*$/i,
+    /\bweather\b(?:\s+(?:like|today|right now))?\s+(?:in|for|at|near)\s+([A-Za-z][A-Za-z\s,.'-]*?)(?:\s+(?:today|right now|now|this week|tomorrow|tonight))?\s*[?.!]*$/i,
   );
-  return loc ? loc[1].trim() : null;
+  if (!loc) return null;
+  const captured = loc[1].trim();
+  // Reject captures that are themselves just a temporal word (e.g. "weather
+  // for tonight" greedily captures "tonight" as the location) — that's not
+  // a place, so don't pretend we found one.
+  if (/^(?:today|tomorrow|tonight|now|right now|this week)$/i.test(captured)) {
+    return null;
+  }
+  return captured;
 }
 
 export async function getWeather(
@@ -142,6 +151,9 @@ export async function getWeather(
     };
     const c = d.current_condition?.[0];
     if (!c) return { ok: false, error: "no conditions" };
+    if (!c.temp_F || !c.temp_C || !c.FeelsLikeF || !c.humidity) {
+      return { ok: false, error: "partial weather" };
+    }
     const a = d.nearest_area?.[0];
     const place =
       [a?.areaName?.[0]?.value, a?.region?.[0]?.value]
@@ -165,8 +177,11 @@ export async function getWeather(
  */
 export function webSearchQuery(message: string): string | null {
   const m = message.trim();
+  // "google" dropped as a bare alias: it false-triggers on ordinary prose
+  // like "I opened Google Chrome". The other explicit-search phrasings are
+  // unambiguous imperatives and stay unanchored.
   const explicit = m.match(
-    /\b(?:search (?:the web )?for|look up|web search|google)\s+(.+)/i,
+    /\b(?:search (?:the web )?for|look up|web search)\s+(.+)/i,
   );
   if (explicit) return explicit[1].replace(/[?.!]+$/, "").trim();
 
