@@ -207,8 +207,19 @@ export function VoiceCallOverlay({
       ref={panelRef}
       tabIndex={-1}
     >
-      {/* Full-bleed face — she fills the screen like a FaceTime call. */}
+      {/* Full-screen face — she's shown head-down (contain), with a soft blurred
+          copy of her filling the screen behind (FaceTime/iOS portrait framing),
+          so nothing is cropped close and there are no black bars. */}
       <div className={`call-face-stage call-face-${faceMode}`} ref={faceStageRef}>
+        <video
+          className="call-face-backdrop"
+          src="/avatar/starra-idle.mp4"
+          autoPlay
+          loop
+          muted
+          playsInline
+          aria-hidden
+        />
         <video
           ref={idleVideoRef}
           className="call-face-video call-face-idle"

@@ -1098,10 +1098,20 @@ body.low-power .star-ring { animation: none; }
   background: var(--void);
   --starra-level: 0;
 }
+/* Blurred, dimmed copy of her filling the whole screen behind the sharp face —
+   so a portrait clip fills a wide screen without black bars, and she's never
+   cropped in close. Always on, sits behind the crossfade trio. */
+.call-face-backdrop {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  object-fit: cover; object-position: center 22%;
+  transform: scale(1.15); filter: blur(28px) brightness(0.42) saturate(1.1);
+  z-index: 0;
+}
+/* The sharp foreground: CONTAIN so you see her head-down, nothing cropped. */
 .call-face-video {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; object-position: center 28%; /* keep her face framed on wide screens */
-  opacity: 0; transition: opacity 260ms ease;
+  object-fit: contain; object-position: center;
+  opacity: 0; transition: opacity 260ms ease; z-index: 1;
 }
 /* base = calm idle; listening / speaking crossfade their own clip in */
 .call-face-idle { opacity: 1; }
@@ -1117,7 +1127,7 @@ body.low-power .star-ring { animation: none; }
 
 /* speaking glow — magenta vignette whose strength rides her live loudness */
 .call-face-glow {
-  position: absolute; inset: 0; pointer-events: none;
+  position: absolute; inset: 0; pointer-events: none; z-index: 2;
   opacity: 0; transition: opacity 140ms ease;
   box-shadow:
     inset 0 0 70px color-mix(in oklab, var(--magenta) 40%, transparent),
@@ -1127,7 +1137,7 @@ body.low-power .star-ring { animation: none; }
 
 /* readability scrim (top + bottom) so status/controls sit on her cleanly */
 .call-face-scrim {
-  position: absolute; inset: 0; pointer-events: none;
+  position: absolute; inset: 0; pointer-events: none; z-index: 2;
   background:
     linear-gradient(180deg, rgba(5,2,10,0.55) 0%, transparent 22%),
     linear-gradient(0deg, rgba(5,2,10,0.7) 0%, transparent 27%);
@@ -1135,18 +1145,18 @@ body.low-power .star-ring { animation: none; }
 
 /* status (top) + controls (bottom) float over her face */
 .call-ft-top {
-  position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  position: absolute; top: 0; left: 0; right: 0; z-index: 3;
   display: flex; flex-direction: column; align-items: center; gap: 3px;
   padding: max(22px, env(safe-area-inset-top)) 16px 0; text-align: center;
 }
 .call-ft-controls {
-  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 3;
   display: flex; align-items: center; justify-content: center; gap: 12px;
   padding: 0 16px max(30px, env(safe-area-inset-bottom)); flex-wrap: wrap;
 }
 .call-ft-error {
   position: absolute; left: 50%; bottom: 100px; transform: translateX(-50%);
-  z-index: 3; max-width: min(420px, 90vw);
+  z-index: 4; max-width: min(420px, 90vw);
 }
 
 /* Reduced-motion / low-power: keep her face (her presence) but drop the live
