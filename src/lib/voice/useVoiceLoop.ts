@@ -48,7 +48,7 @@ function getSR(): (new () => Recog) | null {
  * interrupt a single in-flight turn (see `stopSpeaking` below) instead of
  * juggling two independent abort paths.
  */
-export function useVoiceLoop() {
+export function useVoiceLoop(opts?: { suspended?: boolean }) {
   const { setHudState, setLastReply, pushLog, hudState, sendMessage, stopSpeaking } =
     useStargate();
   const sessionActive = useRef(false);
@@ -63,6 +63,16 @@ export function useVoiceLoop() {
   useEffect(() => {
     hudStateRef.current = hudState;
   }, [hudState]);
+
+  // Fresh read of `suspended` inside long-lived handlers (⌥+Space keydown,
+  // startWakeListener) — same rationale as hudStateRef. When the full-duplex
+  // call owns the mic (suspended === true), the wake-word listener must not
+  // run and the hotkey must not fire wake(), or the two would fight over the
+  // microphone.
+  const suspendedRef = useRef(opts?.suspended ?? false);
+  useEffect(() => {
+    suspendedRef.current = opts?.suspended ?? false;
+  }, [opts?.suspended]);
 
   // Guards sendToChat's `finally` against resetting sessionActive after a
   // newer barge-in has already claimed it (see wake()).
@@ -194,6 +204,7 @@ export function useVoiceLoop() {
   }, [pushLog, sendToChat, setHudState, setLastReply, stopSpeaking, stopWakeListener]);
 
   const startWakeListener = useCallback(() => {
+    if (suspendedRef.current) return;
     if (!getWakeWordEnabled()) return;
     if (sessionActive.current) return;
     if (hudStateRef.current === "speaking") return;
@@ -248,6 +259,10 @@ export function useVoiceLoop() {
   // Hotkey ⌥+Space
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
+      // While the full-duplex call owns the mic, the hotkey must not fire
+      // wake() — that would spin up the command recognizer against the same
+      // microphone the call is capturing.
+      if (suspendedRef.current) return;
       if (e.code === "Space" && e.altKey) {
         e.preventDefault();
         void wake();
@@ -258,7 +273,15 @@ export function useVoiceLoop() {
   }, [wake]);
 
   // Wake-word loop when idle
+  const suspended = opts?.suspended ?? false;
   useEffect(() => {
+    // While the full-duplex call owns the mic, never start the wake-word
+    // listener — stop any running one and bail so the two don't contend.
+    if (suspended) {
+      stopWakeListener();
+      return;
+    }
+
     const busy =
       hudState === "wake" ||
       hudState === "listening" ||
@@ -277,7 +300,7 @@ export function useVoiceLoop() {
     return () => {
       window.clearTimeout(t);
     };
-  }, [hudState, wakeWordOn, startWakeListener, stopWakeListener]);
+  }, [hudState, wakeWordOn, suspended, startWakeListener, stopWakeListener]);
 
   // Cleanup on unmount
   useEffect(() => {

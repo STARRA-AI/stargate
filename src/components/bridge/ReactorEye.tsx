@@ -15,11 +15,17 @@ import { memo, useEffect, useRef, useState } from "react";
  * Hardware budget: transform + opacity only; webm carries heavy visuals.
  */
 
-const MAX_X = 14;
-const MAX_Y = 10;
-const CAMERA_GAIN = 12;
+const MAX_X = 24; // idle saccade / cursor range (widened for the larger galaxy eye)
+const MAX_Y = 18;
+// Camera face-tracking gets its OWN, much larger range + gain so moving in front
+// of the webcam clearly moves the eye. The old ±14px cap was ~4% of the 360px
+// galaxy eye — imperceptible, which read as "not tracking at all".
+const CAMERA_GAIN = 55;
+const CAMERA_MAX_X = 54;
+const CAMERA_MAX_Y = 40;
 const LERP_SACCADE = 0.25;
 const LERP_TRACK = 0.14;
+const LERP_FOLLOW = 0.45; // snappy pursuit for live camera / cursor tracking
 const BLINK_MS = 140;
 const REACTION_MIN = 150;
 const REACTION_MAX = 280;
@@ -73,6 +79,10 @@ export const ReactorEye = memo(function ReactorEye({
 
   const { active: camActive, error: camError, gazeRef: camGaze, toggle: toggleCam } =
     useCameraGaze();
+  // Continuously-updated cursor position (window coords), written on every
+  // mousemove. The eye follows the cursor whenever it's on the page (camera on
+  // or off); an actively-detected face takes priority over it.
+  const cursorRef = useRef<{ x: number; y: number } | null>(null);
 
   const [eco, setEco] = useState(false);
   const [reduced, setReduced] = useState(false);
@@ -180,8 +190,6 @@ export const ReactorEye = memo(function ReactorEye({
     let inSaccade = false;
     let pendingTarget: Vec | null = null;
     let pendingAt = 0;
-    let mouseAbsent = true;
-    let glanceUsed = false;
     let sleepLocal = false;
     let frameSkip = 0;
     let raf = 0;
@@ -205,24 +213,15 @@ export const ReactorEye = memo(function ReactorEye({
 
     const onMouseMove = (ev: MouseEvent) => {
       lastInteractAt = performance.now();
+      cursorRef.current = { x: ev.clientX, y: ev.clientY };
       if (sleepLocal) {
         sleepLocal = false;
         setSleeping(false);
       }
-      if (mouseAbsent || !glanceUsed) {
-        mouseAbsent = false;
-        glanceUsed = true;
-        const rect = centerEl.getBoundingClientRect();
-        const dx = ev.clientX - rect.left;
-        const dy = ev.clientY - rect.top;
-        const mag = Math.hypot(dx, dy) || 1;
-        scheduleTarget((dx / mag) * MAX_X * 0.7, (dy / mag) * MAX_Y * 0.7);
-      }
     };
 
     const onMouseLeave = () => {
-      mouseAbsent = true;
-      glanceUsed = false;
+      cursorRef.current = null;
     };
 
     const onFocusIn = (ev: FocusEvent) => {
@@ -295,16 +294,38 @@ export const ReactorEye = memo(function ReactorEye({
       const hud = hudRef.current;
       const cam = camGaze.current;
       const camMag = Math.hypot(cam.x, cam.y);
-      const useCam = camMag > 0.08;
+      const useCam = camMag > 0.12; // a clearly off-center face; else the cursor takes over
 
       let desired: Vec;
       if (sig.forceGaze) {
         desired = clampGaze(sig.forceGaze);
       } else if (useCam) {
-        desired = clampGaze({
-          x: cam.x * CAMERA_GAIN,
-          y: cam.y * CAMERA_GAIN,
-        });
+        // Clamp to the LARGER camera range (not the modest saccade range) so the
+        // eye visibly follows your face across a wide arc.
+        desired = {
+          x: Math.max(-CAMERA_MAX_X, Math.min(CAMERA_MAX_X, cam.x * CAMERA_GAIN)),
+          y: Math.max(-CAMERA_MAX_Y, Math.min(CAMERA_MAX_Y, cam.y * CAMERA_GAIN)),
+        };
+        lastInteractAt = now;
+        if (sleepLocal) {
+          sleepLocal = false;
+          setSleeping(false);
+        }
+      } else if (cursorRef.current) {
+        // Continuous cursor-follow whenever the mouse is on the page (camera on
+        // OR off). Mapped to the wide camera range (×1.4 so mid-screen moves
+        // already swing the eye clearly).
+        const rect = centerEl.getBoundingClientRect();
+        const cx = rect.left + rect.width / 2;
+        const cy = rect.top + rect.height / 2;
+        const dx = cursorRef.current.x - cx;
+        const dy = cursorRef.current.y - cy;
+        const halfW = window.innerWidth / 2 || 1;
+        const halfH = window.innerHeight / 2 || 1;
+        desired = {
+          x: Math.max(-CAMERA_MAX_X, Math.min(CAMERA_MAX_X, (dx / halfW) * CAMERA_MAX_X * 1.4)),
+          y: Math.max(-CAMERA_MAX_Y, Math.min(CAMERA_MAX_Y, (dy / halfH) * CAMERA_MAX_Y * 1.4)),
+        };
         lastInteractAt = now;
         if (sleepLocal) {
           sleepLocal = false;
@@ -329,7 +350,10 @@ export const ReactorEye = memo(function ReactorEye({
       }
 
       const dist = Math.hypot(target.x - current.x, target.y - current.y);
-      const lerp = dist > 6 ? LERP_SACCADE : LERP_TRACK;
+      // Snappy pursuit while actively tracking a face or the cursor; gentler
+      // lerp for idle saccades.
+      const tracking = useCam || (!sig.forceGaze && Boolean(cursorRef.current));
+      const lerp = tracking ? LERP_FOLLOW : dist > 6 ? LERP_SACCADE : LERP_TRACK;
       current.x += (target.x - current.x) * lerp;
       current.y += (target.y - current.y) * lerp;
       if (dist < 0.45) inSaccade = false;
@@ -430,27 +454,26 @@ export const ReactorEye = memo(function ReactorEye({
         ref={centerRef}
       >
         <div className="eye-socket">
+          {/* Outer galaxy data ring — spins independently; sits OUTSIDE the
+              gimbal so it never gaze-tracks or blink-squashes with the eye. */}
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img className="star-ring" src="/brand/star-ring.png" alt="" aria-hidden />
+
           <div className="eye-gimbal" ref={gimbalRef}>
-            <div className="ring-parallax eye-outer" ref={outerRef}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img
-                className="ring ring-outer"
-                src="/brand/hud_ring.webp"
-                alt=""
-              />
-            </div>
-            <div className="ring-parallax eye-inner" ref={innerRef}>
-              {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img className="ring ring-inner" src="/brand/hud_ring.webp" alt="" />
-            </div>
+            {/* outer/inner parallax layers kept empty — the rAF loop still drives
+                their refs; the galaxy look no longer needs ring art in them. */}
+            <div className="ring-parallax eye-outer" ref={outerRef} />
+            <div className="ring-parallax eye-inner" ref={innerRef} />
             <div className="ring-parallax eye-pupil" ref={pupilRef}>
+              {/* The cybernetic eye — tracks (gimbal translate) + blinks (scaleY)
+                  + pupil dilation (scale) via the existing rAF loop. */}
               {/* eslint-disable-next-line @next/next/no-img-element */}
-              <img className="ring ring-pupil" src="/brand/hud_ring.webp" alt="" />
+              <img className="star-eye" src="/brand/star-eye.png" alt="" />
               <button
                 type="button"
                 className={`reactor-core${speaking ? " speaking" : ""}`}
                 id="reactor-core"
-                aria-label="Activate voice"
+                aria-label="Call STARRA"
                 onClick={onMic}
               />
             </div>
@@ -484,6 +507,9 @@ export const ReactorEye = memo(function ReactorEye({
         >
           {camActive ? "EYE ON" : "EYE CAM"}
         </button>
+        {camActive ? (
+          <span className="eye-cam-safe">LOCAL · NOT RECORDED</span>
+        ) : null}
         {camError ? (
           <span className="eye-cam-err" title={camError}>
             CAM DENIED

@@ -10,7 +10,6 @@ import {
   runBoundedAgentLoop,
 } from "@/lib/agent/loop";
 import type { SystemPromptBlocks } from "@/lib/brain";
-import { gateCommand } from "@/lib/security/command-gate";
 import { fenceUntrusted } from "@/lib/security/fencing";
 import { redact } from "@/lib/security/redact";
 import {
@@ -167,29 +166,14 @@ async function runTool(
   }
 
   if (name === "run_shell") {
-    const cmd = String(input.cmd ?? "");
-    const gated = gateCommand(cmd);
-    if (!gated.ok) {
-      return gated.message;
-    }
-    // No free-form shell executor in this PWA yet — Multica may add one.
-    // Gate still runs so destructive patterns never pass silently.
-    return (
-      `Command classified safe but no shell executor is wired in this build: ${gated.cmd}\n` +
-      `Use Tools page / Multica when shell uplink is online.`
-    );
+    // Real gated executor (30s timeout, destructive commands held for confirm).
+    const { runShellCommand } = await import("@/lib/tools/shell");
+    return runShellCommand(String(input.cmd ?? ""));
   }
 
   if (name === "confirm_command") {
-    const { confirm } = await import("@/lib/security/command-gate");
-    const cmd = confirm(String(input.token ?? ""));
-    if (!cmd) {
-      return "Confirmation token invalid or expired.";
-    }
-    return (
-      `Token accepted for: ${cmd}\n` +
-      `Shell executor not wired in this build — operator must run manually or enable Multica shell.`
-    );
+    const { confirmAndRun } = await import("@/lib/tools/shell");
+    return confirmAndRun(String(input.token ?? ""));
   }
 
   return `Unknown tool: ${name}`;

@@ -18,16 +18,35 @@ mkdir -p "$LOG_DIR" "$PROJ/data" 2>/dev/null || true
 
 PID_FILE="$PROJ/data/starra-dev.pid"
 LOG="$LOG_DIR/starra-up.log"
-HOST="${STARRA_HOST:-127.0.0.1}"
 PORT="${STARRA_PORT:-3000}"
-URL="http://127.0.0.1:${PORT}"
+
+# ── TLS ── Serve HTTPS when a locally-trusted mkcert cert is present, so browsers
+# stop warning "Not secure" and the mic/camera work over the LAN (secure context
+# is required for getUserMedia off localhost). Falls back to plain HTTP when no
+# cert exists. Trust the CA once: `mkcert -install` on the Mac + install
+# rootCA.pem on the iPhone (see: mkcert -CAROOT).
+CERT="$PROJ/certs/deck-cert.pem"
+KEY="$PROJ/certs/deck-key.pem"
+# HTTPS is OPT-IN: `STARRA_HTTPS=1 starra up` (with a cert present) serves TLS for
+# the phone / secure-context. Default is plain HTTP so the deck ALWAYS loads with
+# zero cert-trust friction. localhost HTTP is already a secure context, so the
+# mic/camera still work on the Mac.
+if [[ "${STARRA_HTTPS:-0}" == "1" && -f "$CERT" && -f "$KEY" ]]; then
+  SCHEME="https"
+  HOST="${STARRA_HOST:-0.0.0.0}"   # all interfaces so the phone can reach HTTPS
+else
+  SCHEME="http"
+  HOST="${STARRA_HOST:-127.0.0.1}"
+fi
+URL="${SCHEME}://127.0.0.1:${PORT}"
 
 ollama_up() {
   curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
 }
 
 deck_up() {
-  curl -sf --max-time 2 "http://127.0.0.1:${PORT}/" >/dev/null 2>&1
+  # -k: accept the cert even before the CA is trusted, so the health check works.
+  curl -sfk --max-time 2 "${SCHEME}://127.0.0.1:${PORT}/" >/dev/null 2>&1
 }
 
 # Guard against the dead-symlink trap: if ~/.ollama/models is a symlink whose
@@ -72,6 +91,30 @@ start_ollama() {
   return 1
 }
 
+# Make npm/node reachable even when launched from STARRA.app or Spotlight, where
+# the GUI PATH is minimal and nvm (which owns npm) is never sourced — otherwise
+# `nohup npm run dev` dies with "nohup: npm: No such file or directory". Mirrors
+# start_ollama: resolve the toolchain instead of trusting the inherited PATH.
+# Prepends the node bin dir so npm AND its child node/next processes resolve.
+ensure_node_on_path() {
+  command -v npm >/dev/null 2>&1 && return 0
+  if [[ -s "$HOME/.nvm/nvm.sh" ]]; then
+    export NVM_DIR="$HOME/.nvm"
+    # shellcheck disable=SC1090
+    . "$NVM_DIR/nvm.sh" >/dev/null 2>&1 || true
+  fi
+  if ! command -v npm >/dev/null 2>&1; then
+    local nb
+    nb="$(ls -dt "$HOME"/.nvm/versions/node/*/bin 2>/dev/null | head -1)"
+    [[ -n "$nb" ]] && export PATH="$nb:$PATH"
+  fi
+  for d in /opt/homebrew/bin /usr/local/bin; do
+    command -v npm >/dev/null 2>&1 && break
+    [[ -x "$d/npm" ]] && export PATH="$d:$PATH"
+  done
+  command -v npm >/dev/null 2>&1
+}
+
 start_deck() {
   if deck_up; then
     echo "● Deck already online at $URL"
@@ -89,15 +132,25 @@ start_deck() {
     fi
     rm -f "$PID_FILE"
   fi
-  echo "→ Starting STARGATE on ${HOST}:${PORT}…"
+  if ! ensure_node_on_path; then
+    echo "◆ npm not found. Install Node (nvm or Homebrew) then retry."
+    return 1
+  fi
+  echo "→ Starting STARGATE (${SCHEME}) on ${HOST}:${PORT}…"
   cd "$PROJ"
-  # -H 0.0.0.0 so iPhone on same Wi‑Fi can reach the Mac
-  nohup npm run dev -- --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
+  # --hostname $HOST (0.0.0.0 under HTTPS) so the iPhone on the same Wi‑Fi can reach the Mac.
+  if [[ "$SCHEME" == "https" ]]; then
+    # Next 15 dev TLS using our mkcert cert (trusted → no "Not secure" warning).
+    nohup npm run dev -- --experimental-https --experimental-https-key "$KEY" \
+      --experimental-https-cert "$CERT" --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
+  else
+    nohup npm run dev -- --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
+  fi
   echo $! >"$PID_FILE"
   for _ in $(seq 1 60); do
     if deck_up; then
       echo "● Deck online at $URL"
-      echo "  Phone (same Wi‑Fi): http://$(ipconfig getifaddr en0 2>/dev/null || echo YOUR_LAN_IP):${PORT}"
+      echo "  Phone (same Wi‑Fi): ${SCHEME}://$(ipconfig getifaddr en0 2>/dev/null || echo YOUR_LAN_IP):${PORT}"
       return 0
     fi
     sleep 0.5
@@ -139,7 +192,7 @@ cmd_open() {
     echo "  On this Mac:  $URL"
     local lan
     lan="$(ipconfig getifaddr en0 2>/dev/null || true)"
-    [[ -n "$lan" ]] && echo "  On iPhone:    http://${lan}:${PORT}"
+    [[ -n "$lan" ]] && echo "  On iPhone:    ${SCHEME}://${lan}:${PORT}"
     echo "  Wake: say \"starra\" or press Option+Space"
     echo ""
   else
@@ -174,7 +227,7 @@ cmd_status() {
   if deck_up; then echo "● Deck $URL"; else echo "○ Deck"; fi
   local lan
   lan="$(ipconfig getifaddr en0 2>/dev/null || true)"
-  [[ -n "$lan" ]] && echo "  iPhone: http://${lan}:${PORT}"
+  [[ -n "$lan" ]] && echo "  iPhone: ${SCHEME}://${lan}:${PORT}"
   [[ -f "$LOG" ]] && echo "  log: $LOG"
 }
 

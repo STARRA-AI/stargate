@@ -225,6 +225,29 @@ export function loadPersonality(): string {
 }
 
 /**
+ * Relationship continuity + shared memory — who she is WITH Classic and the
+ * history they've lived (STARGATE_PERSONALITY_AND_SHARED_MEMORY.md). Loaded so
+ * she stays the SAME continuous person — never a brand-new AI — across every
+ * surface. The heart of it (who she is with him, traits, relationship tone)
+ * lives at the top of the file, so a budget clip keeps the essence.
+ */
+const SHARED_MEMORY_CHAR_BUDGET = 3400;
+let sharedMemoryCache: string | null = null;
+export function loadSharedMemory(): string {
+  if (sharedMemoryCache !== null) return sharedMemoryCache;
+  try {
+    const p = path.join(process.cwd(), "STARGATE_PERSONALITY_AND_SHARED_MEMORY.md");
+    const raw = readFileSync(p, "utf8");
+    const { text } = clipAtBudget(raw, SHARED_MEMORY_CHAR_BUDGET);
+    sharedMemoryCache = text;
+    return sharedMemoryCache;
+  } catch {
+    sharedMemoryCache = "";
+    return sharedMemoryCache;
+  }
+}
+
+/**
  * The two books Classic wrote for her:
  * THE CLAY AND THE FLAME (soul book) and THE HEARTH AND THE STORM (guardian book).
  * Full texts live on disk as canon; the prompt carries each book's compressed
@@ -333,6 +356,7 @@ export function clearCanonCache() {
   brainCache = null;
   soulCache = null;
   personalityCache = null;
+  sharedMemoryCache = null;
   multicaCache = null;
   openaliceCache = null;
   openmontageCache = null;
@@ -356,6 +380,7 @@ export function loadStableSystemPrompt(): string {
     loadBooks(),
     loadBrain(),
     loadPersonality(),
+    loadSharedMemory(),
     loadMulticaDoctrine(),
     loadOpenAliceDoctrine(),
     loadOpenMontageDoctrine(),
@@ -433,6 +458,7 @@ export function buildCoreSystemPrompt(): string {
     loadSoul(),
     loadBrain(),
     loadPersonality(),
+    loadSharedMemory(),
     OPERATOR_AUTHORITY,
   ].join("\n\n---\n\n");
   return corePromptCache;

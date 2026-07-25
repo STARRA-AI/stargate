@@ -13,6 +13,7 @@ import { DeckConsole } from "./DeckConsole";
 import { ReactorEye } from "./ReactorEye";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
+import { VoiceCallOverlay } from "./VoiceCallOverlay";
 import "@/styles/deck.css";
 
 /* ── live data shapes from the API layer ── */
@@ -107,7 +108,6 @@ export function Bridge() {
     snap,
     connectors,
   } = useStargate();
-  const { wake } = useVoiceLoop();
   const stageRef = useStageScale();
 
   const [vitals, setVitals] = useState<Vitals | null>(null);
@@ -120,21 +120,28 @@ export function Bridge() {
   const [ventures, setVentures] = useState<Venture[]>([]);
   const [feed, setFeed] = useState<FeedLine[]>([]);
   const [clock, setClock] = useState("—");
-  const [eco, setEco] = useState(true); /* default ECO — 8GB Mac stays responsive */
+  const [eco, setEco] = useState(false); /* launches with full motion; toggle ECO on if the machine needs it */
   const [shine, setShine] = useState(false);
   const [reduced, setReduced] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("today");
+  const [callOpen, setCallOpen] = useState(false);
   const badgeCineRef = useRef<HTMLVideoElement>(null);
   const shineRef = useRef<HTMLVideoElement>(null);
+
+  useVoiceLoop({ suspended: callOpen });
 
   const onBootDone = useCallback(() => {
     setBootDone(true);
     setShine(true);
   }, [setBootDone]);
-  const onMic = useCallback(() => {
-    void wake();
-  }, [wake]);
+
+  // ONE call entry, everywhere: the composer call button, tapping her reactor
+  // core, and tapping the mobile hero badge all open the full-screen call —
+  // her face + the live xAI voice. END CALL in the overlay hangs up. No
+  // separate native window, no redundant mic button.
+  const openCall = useCallback(() => setCallOpen(true), []);
+  const closeCall = useCallback(() => setCallOpen(false), []);
 
   const motionOk = !eco && !reduced && bootDone;
 
@@ -348,8 +355,8 @@ export function Bridge() {
                 <button
                   type="button"
                   className="mobile-hero-badge"
-                  onClick={onMic}
-                  aria-label="Activate voice"
+                  onClick={openCall}
+                  aria-label="Call STARRA"
                   aria-pressed={
                     hudState === "wake" ||
                     hudState === "listening" ||
@@ -506,9 +513,10 @@ export function Bridge() {
           </section>
 
           <div className="mobile-console">
-            <DeckConsole onMic={onMic} />
+            <DeckConsole onCall={openCall} callActive={callOpen} />
           </div>
         </div>
+        <VoiceCallOverlay open={callOpen} onClose={closeCall} />
       </div>
     );
   }
@@ -831,8 +839,8 @@ export function Bridge() {
 
           {/* ── CENTER ── */}
           <div className="col col-center">
-            <ReactorEye hudState={hudState} label={coreLabel} onMic={onMic} />
-            <DeckConsole onMic={onMic} />
+            <ReactorEye hudState={hudState} label={coreLabel} onMic={openCall} />
+            <DeckConsole onCall={openCall} callActive={callOpen} />
           </div>
 
           {/* ── RIGHT ── */}
@@ -934,6 +942,7 @@ export function Bridge() {
 
         {!bootDone ? <DeckBoot onDone={onBootDone} /> : null}
       </div>
+      <VoiceCallOverlay open={callOpen} onClose={closeCall} />
     </div>
   );
 }

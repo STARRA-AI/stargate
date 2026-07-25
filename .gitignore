@@ -73,5 +73,11 @@ next-env.d.ts
 # Local tooling
 .tools/
 
+# Compiled native-app binaries (build artifacts — keep desktop/main.swift source only)
+desktop/STARGATE
+desktop/*.bak
+desktop/build/
+
 # MediaPipe face detector — wasm + model (provision with npm run face:download)
 /public/vendor/mediapipe/
+certs/

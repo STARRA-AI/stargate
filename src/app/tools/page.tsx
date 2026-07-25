@@ -166,23 +166,27 @@ export default function ToolsPage() {
   const [packPreview, setPackPreview] = useState("");
 
   const refresh = useCallback(async () => {
-    const [r, m, p, mu, oa, f, ob] = await Promise.all([
-      fetch("/api/tools/repomix").then((x) => x.json()),
-      fetch("/api/tools/openmontage").then((x) => x.json()),
-      fetch("/api/tools/prompts").then((x) => x.json()),
-      fetch("/api/tools/multica").then((x) => x.json()),
-      fetch("/api/tools/openalice").then((x) => x.json()),
-      fetch("/api/tools/funding").then((x) => x.json()),
-      fetch("/api/tools/obsidian?action=status").then((x) => x.json()),
-    ]);
-    setRepomix(r);
-    setMontage(m);
-    setPrompts(p);
-    setMultica(mu);
-    setOpenalice(oa);
-    setFunding(f);
-    setObsidian(ob);
-    if (r.preview) setPackPreview(r.preview);
+    try {
+      const [r, m, p, mu, oa, f, ob] = await Promise.all([
+        fetch("/api/tools/repomix").then((x) => x.json()),
+        fetch("/api/tools/openmontage").then((x) => x.json()),
+        fetch("/api/tools/prompts").then((x) => x.json()),
+        fetch("/api/tools/multica").then((x) => x.json()),
+        fetch("/api/tools/openalice").then((x) => x.json()),
+        fetch("/api/tools/funding").then((x) => x.json()),
+        fetch("/api/tools/obsidian?action=status").then((x) => x.json()),
+      ]);
+      setRepomix(r ?? {});
+      setMontage(m ?? null);
+      setPrompts(p ?? null);
+      setMultica(mu ?? null);
+      setOpenalice(oa ?? null);
+      setFunding(f ?? null);
+      setObsidian(ob ?? null);
+      if (r?.preview) setPackPreview(r.preview);
+    } catch {
+      setStatus("LINK DEGRADED · tools status unavailable");
+    }
   }, []);
 
   useEffect(() => {
@@ -191,198 +195,250 @@ export default function ToolsPage() {
 
   async function packRepo() {
     setStatus("EXECUTING — REPOMIX");
-    const res = await fetch("/api/tools/repomix", { method: "POST", body: "{}" });
-    const data = await res.json();
-    setStatus(data.ok ? `PACKED · ${data.bytes} bytes` : `LINK DEGRADED · ${data.error}`);
-    if (data.preview) setPackPreview(data.preview);
-    await refresh();
+    try {
+      const res = await fetch("/api/tools/repomix", { method: "POST", body: "{}" });
+      const data = await res.json();
+      setStatus(data.ok ? `PACKED · ${data.bytes} bytes` : `LINK DEGRADED · ${data.error}`);
+      if (data.preview) setPackPreview(data.preview);
+      await refresh();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function queueMontage() {
     setStatus("EXECUTING — OPENMONTAGE QUEUE");
-    const res = await fetch("/api/tools/openmontage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ topic, pipeline: montagePipeline }),
-    });
-    const data = await res.json();
-    setStatus(res.ok ? `QUEUED · ${data.id}` : "LINK DEGRADED. RETRY?");
-    await refresh();
+    try {
+      const res = await fetch("/api/tools/openmontage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ topic, pipeline: montagePipeline }),
+      });
+      const data = await res.json();
+      setStatus(res.ok ? `QUEUED · ${data.id}` : "LINK DEGRADED. RETRY?");
+      await refresh();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function markMontageDone(id: string) {
     setStatus("EXECUTING — MARK RENDER DONE");
-    const res = await fetch("/api/tools/openmontage", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "mark_done", id }),
-    });
-    setStatus(res.ok ? `DONE · ${id}` : "LINK DEGRADED. RETRY?");
-    await refresh();
+    try {
+      const res = await fetch("/api/tools/openmontage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "mark_done", id }),
+      });
+      setStatus(res.ok ? `DONE · ${id}` : "LINK DEGRADED. RETRY?");
+      await refresh();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function distillPrompts() {
     setStatus("EXECUTING — PROMPT DISTILL");
-    const res = await fetch("/api/tools/prompts", { method: "POST" });
-    const data = await res.json();
-    setStatus(data.ok ? "STRUCTURE DISTILLED" : "LINK DEGRADED. RETRY?");
-    await refresh();
+    try {
+      const res = await fetch("/api/tools/prompts", { method: "POST" });
+      const data = await res.json();
+      setStatus(data.ok ? "STRUCTURE DISTILLED" : "LINK DEGRADED. RETRY?");
+      await refresh();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function loadMulticaBoard() {
     setStatus("EXECUTING — MULTICA LIST");
-    const [wsRes, isRes, agRes] = await Promise.all([
-      fetch("/api/tools/multica?action=workspaces").then((x) => x.json()),
-      fetch("/api/tools/multica?action=issues").then((x) => x.json()),
-      fetch("/api/tools/multica?action=agents").then((x) => x.json()),
-    ]);
-    if (wsRes.error || isRes.error) {
-      setStatus(`LINK DEGRADED · ${wsRes.error ?? isRes.error}`);
-      return;
+    try {
+      const [wsRes, isRes, agRes] = await Promise.all([
+        fetch("/api/tools/multica?action=workspaces").then((x) => x.json()),
+        fetch("/api/tools/multica?action=issues").then((x) => x.json()),
+        fetch("/api/tools/multica?action=agents").then((x) => x.json()),
+      ]);
+      if (wsRes?.error || isRes?.error) {
+        setStatus(`LINK DEGRADED · ${wsRes?.error ?? isRes?.error}`);
+        return;
+      }
+      setWorkspaces(wsRes?.workspaces ?? []);
+      setIssues(isRes?.issues ?? []);
+      const agentCount = Array.isArray(agRes?.agents) ? agRes.agents.length : 0;
+      setStatus(
+        `MULTICA · ${(wsRes?.workspaces ?? []).length} workspaces · ${(isRes?.issues ?? []).length} issues · ${agentCount} agents`,
+      );
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
     }
-    setWorkspaces(wsRes.workspaces ?? []);
-    setIssues(isRes.issues ?? []);
-    const agentCount = Array.isArray(agRes.agents) ? agRes.agents.length : 0;
-    setStatus(
-      `MULTICA · ${(wsRes.workspaces ?? []).length} workspaces · ${(isRes.issues ?? []).length} issues · ${agentCount} agents`,
-    );
   }
 
   async function createMulticaIssue() {
     setStatus("EXECUTING — MULTICA CREATE");
-    const res = await fetch("/api/tools/multica", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: issueTitle }),
-    });
-    const data = await res.json();
-    setStatus(
-      res.ok
-        ? `CREATED · ${data.identifier ?? data.id ?? "issue"}`
-        : `LINK DEGRADED · ${data.error ?? "retry"}`,
-    );
-    if (res.ok) await loadMulticaBoard();
+    try {
+      const res = await fetch("/api/tools/multica", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ title: issueTitle }),
+      });
+      const data = await res.json();
+      setStatus(
+        res.ok
+          ? `CREATED · ${data.identifier ?? data.id ?? "issue"}`
+          : `LINK DEGRADED · ${data.error ?? "retry"}`,
+      );
+      if (res.ok) await loadMulticaBoard();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function quickCreateMultica() {
     setStatus("EXECUTING — MULTICA QUICK");
-    const res = await fetch("/api/tools/multica", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ mode: "quick", prompt: issueTitle }),
-    });
-    const data = await res.json();
-    setStatus(
-      res.ok
-        ? `QUEUED · ${data.task_id ?? "run"}`
-        : `LINK DEGRADED · ${data.error ?? "retry"}`,
-    );
-    if (res.ok) await loadMulticaBoard();
+    try {
+      const res = await fetch("/api/tools/multica", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ mode: "quick", prompt: issueTitle }),
+      });
+      const data = await res.json();
+      setStatus(
+        res.ok
+          ? `QUEUED · ${data.task_id ?? "run"}`
+          : `LINK DEGRADED · ${data.error ?? "retry"}`,
+      );
+      if (res.ok) await loadMulticaBoard();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function loadOpenAliceIntel() {
     setStatus("EXECUTING — OPENALICE LIST");
-    const [isRes, inRes] = await Promise.all([
-      fetch("/api/tools/openalice?action=issues").then((x) => x.json()),
-      fetch("/api/tools/openalice?action=inbox").then((x) => x.json()),
-    ]);
-    if (isRes.error && inRes.error) {
-      setStatus(`LINK DEGRADED · ${isRes.error ?? inRes.error}`);
-      return;
+    try {
+      const [isRes, inRes] = await Promise.all([
+        fetch("/api/tools/openalice?action=issues").then((x) => x.json()),
+        fetch("/api/tools/openalice?action=inbox").then((x) => x.json()),
+      ]);
+      if (isRes?.error && inRes?.error) {
+        setStatus(`LINK DEGRADED · ${isRes?.error ?? inRes?.error}`);
+        return;
+      }
+      setAliceIssues(isRes?.issues ?? []);
+      setAliceInbox(inRes?.entries ?? []);
+      setStatus(
+        `OPENALICE · ${(isRes?.issues ?? []).length} issues · ${(inRes?.entries ?? []).length} inbox`,
+      );
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
     }
-    setAliceIssues(isRes.issues ?? []);
-    setAliceInbox(inRes.entries ?? []);
-    setStatus(
-      `OPENALICE · ${(isRes.issues ?? []).length} issues · ${(inRes.entries ?? []).length} inbox`,
-    );
   }
 
   async function planOpenAliceResearch() {
     setStatus("EXECUTING — OPENALICE PLAN");
-    const res = await fetch(
-      `/api/tools/openalice?action=plan&q=${encodeURIComponent(researchQuery)}`,
-    );
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
-      return;
+    try {
+      const res = await fetch(
+        `/api/tools/openalice?action=plan&q=${encodeURIComponent(researchQuery)}`,
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
+        return;
+      }
+      setResearchPlan(
+        `${data.readout}\n\n${(data.steps ?? []).map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")}\n\n${data.executionNote}`,
+      );
+      setStatus(`PLAN · ${data.query}`);
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
     }
-    setResearchPlan(
-      `${data.readout}\n\n${data.steps.map((s: string, i: number) => `${i + 1}. ${s}`).join("\n")}\n\n${data.executionNote}`,
-    );
-    setStatus(`PLAN · ${data.query}`);
   }
 
   async function initVault() {
     setStatus("EXECUTING — VAULT INIT");
-    const res = await fetch("/api/tools/obsidian", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ action: "init" }),
-    });
-    const data = await res.json();
-    setStatus(
-      res.ok
-        ? `VAULT · ${data.alreadyPresent ? "ready" : `created ${data.created?.length ?? 0}`}`
-        : `LINK DEGRADED · ${data.error ?? "retry"}`,
-    );
-    await refresh();
+    try {
+      const res = await fetch("/api/tools/obsidian", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "init" }),
+      });
+      const data = await res.json();
+      setStatus(
+        res.ok
+          ? `VAULT · ${data.alreadyPresent ? "ready" : `created ${data.created?.length ?? 0}`}`
+          : `LINK DEGRADED · ${data.error ?? "retry"}`,
+      );
+      await refresh();
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
+    }
   }
 
   async function listVaultNotes() {
     setStatus("EXECUTING — VAULT LIST");
-    const res = await fetch("/api/tools/obsidian?action=list");
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
-      return;
+    try {
+      const res = await fetch("/api/tools/obsidian?action=list");
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
+        return;
+      }
+      setVaultNotes(data.notes ?? []);
+      setStatus(`VAULT · ${(data.notes ?? []).length} notes`);
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
     }
-    setVaultNotes(data.notes ?? []);
-    setStatus(`VAULT · ${(data.notes ?? []).length} notes`);
   }
 
   async function searchVault() {
     setStatus("EXECUTING — VAULT SEARCH");
-    const res = await fetch(
-      `/api/tools/obsidian?action=search&q=${encodeURIComponent(vaultQuery)}`,
-    );
-    const data = await res.json();
-    if (!res.ok) {
-      setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
-      return;
+    try {
+      const res = await fetch(
+        `/api/tools/obsidian?action=search&q=${encodeURIComponent(vaultQuery)}`,
+      );
+      const data = await res.json();
+      if (!res.ok) {
+        setStatus(`LINK DEGRADED · ${data.error ?? "retry"}`);
+        return;
+      }
+      setVaultSearchHits(data.hits ?? []);
+      setStatus(`HITS · ${(data.hits ?? []).length}`);
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
     }
-    setVaultSearchHits(data.hits ?? []);
-    setStatus(`HITS · ${(data.hits ?? []).length}`);
   }
 
   async function writeVaultNote(mode: "create" | "append" | "overwrite") {
     setStatus(`EXECUTING — VAULT ${mode.toUpperCase()}`);
-    const res = await fetch("/api/tools/obsidian", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        action: "write",
-        path: notePath,
-        content: noteContent,
-        mode,
-        confirmToken: confirmToken || undefined,
-      }),
-    });
-    const data = await res.json();
-    if (res.status === 428 && data.token) {
-      setConfirmToken(data.token);
-      setStatus(`HELD · confirm ${data.token}`);
-      return;
-    }
-    setStatus(
-      res.ok
-        ? `${mode.toUpperCase()} · ${data.rel}`
-        : `LINK DEGRADED · ${data.error ?? "retry"}`,
-    );
-    if (res.ok) {
-      setConfirmToken("");
-      await listVaultNotes();
-      await refresh();
+    try {
+      const res = await fetch("/api/tools/obsidian", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "write",
+          path: notePath,
+          content: noteContent,
+          mode,
+          confirmToken: confirmToken || undefined,
+        }),
+      });
+      const data = await res.json();
+      if (res.status === 428 && data.token) {
+        setConfirmToken(data.token);
+        setStatus(`HELD · confirm ${data.token}`);
+        return;
+      }
+      setStatus(
+        res.ok
+          ? `${mode.toUpperCase()} · ${data.rel}`
+          : `LINK DEGRADED · ${data.error ?? "retry"}`,
+      );
+      if (res.ok) {
+        setConfirmToken("");
+        await listVaultNotes();
+        await refresh();
+      }
+    } catch {
+      setStatus("LINK DEGRADED. RETRY?");
     }
   }
 

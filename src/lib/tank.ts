@@ -84,7 +84,7 @@ async function askAnthropic(topic: string): Promise<TankVote | null> {
       "Content-Type": "application/json",
     },
     body: JSON.stringify({
-      model: "claude-3-5-haiku-latest",
+      model: "claude-haiku-4-5",
       max_tokens: 60,
       messages: [{ role: "user", content: VOTE_PROMPT(topic) }],
     }),

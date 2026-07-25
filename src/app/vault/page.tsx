@@ -17,9 +17,17 @@ export default function VaultPage() {
   const [status, setStatus] = useState("");
 
   async function refresh() {
-    const res = await fetch("/api/vault/upload");
-    const data = (await res.json()) as { docs: Doc[] };
-    setDocs(data.docs ?? []);
+    try {
+      const res = await fetch("/api/vault/upload");
+      if (!res.ok) {
+        setDocs([]);
+        return;
+      }
+      const data = (await res.json()) as { docs?: Doc[] };
+      setDocs(data.docs ?? []);
+    } catch {
+      setDocs([]);
+    }
   }
 
   useEffect(() => {
@@ -31,14 +39,18 @@ export default function VaultPage() {
     const form = e.currentTarget;
     const fd = new FormData(form);
     setStatus("INGESTING");
-    const res = await fetch("/api/vault/upload", { method: "POST", body: fd });
-    if (!res.ok) {
+    try {
+      const res = await fetch("/api/vault/upload", { method: "POST", body: fd });
+      if (!res.ok) {
+        setStatus("LINK DEGRADED. RETRY?");
+        return;
+      }
+      setStatus("FACTS STORED");
+      form.reset();
+      await refresh();
+    } catch {
       setStatus("LINK DEGRADED. RETRY?");
-      return;
     }
-    setStatus("FACTS STORED");
-    form.reset();
-    await refresh();
   }
 
   return (

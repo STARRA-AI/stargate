@@ -205,7 +205,8 @@ function KeyVault() {
   const load = () =>
     fetch("/api/keys")
       .then((r) => r.json())
-      .then((d: { slots: KeySlot[] }) => setSlots(d.slots));
+      .then((d: { slots?: KeySlot[] }) => setSlots(d.slots ?? []))
+      .catch(() => setSlots([]));
 
   useEffect(() => {
     void load();
@@ -216,14 +217,18 @@ function KeyVault() {
       Object.entries(values).filter(([, v]) => v.trim() !== ""),
     );
     if (!Object.keys(patch).length) return;
-    const res = await fetch("/api/keys", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patch),
-    });
-    setSaved(res.ok ? "KEYS STORED — panels go live on next refresh" : "LINK DEGRADED. RETRY?");
-    setValues({});
-    await load();
+    try {
+      const res = await fetch("/api/keys", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      setSaved(res.ok ? "KEYS STORED — panels go live on next refresh" : "LINK DEGRADED. RETRY?");
+      setValues({});
+      await load();
+    } catch {
+      setSaved("LINK DEGRADED. RETRY?");
+    }
   }
 
   return (
@@ -301,17 +306,26 @@ export default function SettingsPage() {
   useEffect(() => {
     fetch("/api/context")
       .then((r) => r.json())
-      .then((d: { tier1: Tier1Data }) => setTier1(d.tier1));
+      .then((d: { tier1?: Tier1Data }) => {
+        if (d.tier1) setTier1(d.tier1);
+      })
+      .catch(() => {
+        /* PROCESSING state stays until a manual retry */
+      });
   }, []);
 
   async function saveContext() {
     if (!tier1) return;
-    const res = await fetch("/api/context", {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(tier1),
-    });
-    setSaved(res.ok ? "STORED" : "LINK DEGRADED. RETRY?");
+    try {
+      const res = await fetch("/api/context", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(tier1),
+      });
+      setSaved(res.ok ? "STORED" : "LINK DEGRADED. RETRY?");
+    } catch {
+      setSaved("LINK DEGRADED. RETRY?");
+    }
   }
 
   return (

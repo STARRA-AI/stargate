@@ -7,6 +7,8 @@ import {
   encodeMicFrame,
   rms,
 } from "@/lib/voice/pcm-audio";
+import { addVoiceSeconds } from "@/lib/voice/voiceCost";
+import { STARRA_VOICE_PERSONA } from "@/lib/persona";
 
 /**
  * Client engine for a full-duplex voice call against xAI's Realtime API.
@@ -35,11 +37,10 @@ import {
 
 const XAI_REALTIME_WS_SUBPROTOCOL_PREFIX = "xai-client-secret.";
 
-const STARRA_INSTRUCTIONS =
-  "You are STARGATE (STARRA) — Classic's warm, high-agency partner on a live voice call. " +
-  "Speak naturally, warmly, briefly — like a friend on the phone. Direct, never cold; " +
-  "occasional 'Classic'/'partner'. Report the truth first, then the path through. " +
-  "Never say 'Copy.' Keep spoken replies short unless asked to go deep.";
+// Her ONE canonical spoken persona (STARGATE = her home; full personality —
+// sexy, friendly, assistant + companion — canon-informed, not recited). Shared
+// with the talking-avatar app. See src/lib/persona.ts.
+const STARRA_INSTRUCTIONS = STARRA_VOICE_PERSONA;
 
 /**
  * Client-side amplitude gate for barge-in, checked against the mic worklet's
@@ -53,8 +54,17 @@ const STARRA_INSTRUCTIONS =
  * 0.01; conversational speech is usually 0.02+), not something tuned against
  * real hardware. Flag for a listening pass — if barge-in is trigger-happy on
  * a noisy mic or a hot input gain, raise this; if it's sluggish, lower it.
+ *
+ * A single over-threshold frame is NOT enough to interrupt STARRA: a cough, a
+ * clipped "mm-hm", or her own audio bleeding into the mic would all cross the
+ * gate for one frame. We require BARGE_IN_CONSECUTIVE_FRAMES over-threshold
+ * frames in a row before firing bargeIn, which reads as intentional speech
+ * while still feeling instant — the worklet emits frames every few
+ * milliseconds, so 3 in a row is well under a tenth of a second. Any frame at
+ * or below the gate resets the streak, so only sustained input counts.
  */
 const BARGE_IN_RMS_THRESHOLD = 0.02;
+const BARGE_IN_CONSECUTIVE_FRAMES = 3;
 
 export type VoiceCallState = "idle" | "connecting" | "listening" | "speaking" | "error";
 
@@ -168,6 +178,19 @@ export function useVoiceCall(): UseVoiceCallResult {
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartRef = useRef(0);
 
+  // Wall-clock start of the live connection, stamped on ws.onopen and consumed
+  // once by cleanupInternal to bill the elapsed minutes to the voice meter.
+  // Null whenever no session is live, so the defensive cleanup at connect()
+  // start and repeated teardown calls never double-count.
+  const callStartRef = useRef<number | null>(null);
+
+  // Count of consecutive over-threshold mic frames seen while STARRA is
+  // speaking. Barge-in fires only once this reaches
+  // BARGE_IN_CONSECUTIVE_FRAMES — see handleMicFrame. Reset to 0 anytime
+  // playback stops or state leaves "speaking" so a stale streak can't fire
+  // into the next response.
+  const bargeStreakRef = useRef(0);
+
   // True once the server has signaled the current response's audio stream
   // is finished (response.done / *.audio.done) — used to decide when the
   // scheduled-playback queue draining should flip state back to
@@ -221,6 +244,9 @@ export function useVoiceCall(): UseVoiceCallResult {
     }
     activeSourcesRef.current.clear();
     nextStartRef.current = 0;
+    // Playback is gone — drop any in-progress barge-in streak so it can't
+    // carry over and false-fire into the next response.
+    bargeStreakRef.current = 0;
   }, []);
 
   // ---- transcript commits -------------------------------------------
@@ -299,7 +325,12 @@ export function useVoiceCall(): UseVoiceCallResult {
             // ignore
           }
           if (activeSourcesRef.current.size === 0 && assistantResponseDoneRef.current) {
-            if (stateRef.current === "speaking") setCallState("listening");
+            if (stateRef.current === "speaking") {
+              // Leaving "speaking" — clear any partial barge-in streak so it
+              // can't carry into the next response and false-fire.
+              bargeStreakRef.current = 0;
+              setCallState("listening");
+            }
           }
         };
 
@@ -319,6 +350,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     (sendCancel: boolean) => {
       const wasPlaying = activeSourcesRef.current.size > 0 || stateRef.current === "speaking";
       stopAllPlayback();
+      bargeStreakRef.current = 0;
       assistantResponseDoneRef.current = true;
       if (stateRef.current === "speaking") setCallState("listening");
 
@@ -341,8 +373,18 @@ export function useVoiceCall(): UseVoiceCallResult {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
       if (!mutedRef.current && stateRef.current === "speaking") {
+        // Require BARGE_IN_CONSECUTIVE_FRAMES over-threshold frames in a row
+        // before cutting STARRA off — a lone spike (cough, "mm-hm", her audio
+        // bleeding into the mic) shouldn't interrupt her. Any quiet frame
+        // resets the streak, so only sustained, intentional speech fires it.
         if (rms(frame) > BARGE_IN_RMS_THRESHOLD) {
-          bargeIn(true);
+          bargeStreakRef.current += 1;
+          if (bargeStreakRef.current >= BARGE_IN_CONSECUTIVE_FRAMES) {
+            bargeStreakRef.current = 0;
+            bargeIn(true);
+          }
+        } else {
+          bargeStreakRef.current = 0;
         }
       }
 
@@ -361,6 +403,13 @@ export function useVoiceCall(): UseVoiceCallResult {
   // ---- fatal error / cleanup -------------------------------------------
 
   const cleanupInternal = useCallback(() => {
+    // Bill the elapsed connection time to the voice meter before teardown —
+    // once per session (callStartRef is nulled so retries/unmount can't
+    // double-count).
+    if (callStartRef.current != null) {
+      addVoiceSeconds((Date.now() - callStartRef.current) / 1000);
+      callStartRef.current = null;
+    }
     try {
       wsRef.current?.close();
     } catch {
@@ -512,6 +561,7 @@ export function useVoiceCall(): UseVoiceCallResult {
         case "response.audio.done":
           assistantResponseDoneRef.current = true;
           if (activeSourcesRef.current.size === 0 && stateRef.current === "speaking") {
+            bargeStreakRef.current = 0;
             setCallState("listening");
           }
           return;
@@ -524,6 +574,7 @@ export function useVoiceCall(): UseVoiceCallResult {
           const fallback = extractResponseTranscript(evt);
           commitAssistant(currentAssistantResponseId(evt), undefined, fallback);
           if (activeSourcesRef.current.size === 0 && stateRef.current === "speaking") {
+            bargeStreakRef.current = 0;
             setCallState("listening");
           }
           return;
@@ -582,14 +633,32 @@ export function useVoiceCall(): UseVoiceCallResult {
         throw new Error("Web Audio is not available in this browser.");
       }
 
-      const stream = await navigator.mediaDevices.getUserMedia({
-        audio: {
-          channelCount: 1,
-          echoCancellation: true,
-          noiseSuppression: true,
-          autoGainControl: true,
-        },
-      });
+      // Get the mic in its OWN try so a permission denial gives a clear,
+      // actionable message — not the generic "Voice link down", which reads
+      // like the xAI service is broken when really the browser/OS blocked the
+      // mic. (Deliberately avoids the word "settings" so pointsToSettings()
+      // doesn't render the xAI-key link for a mic problem.)
+      let stream: MediaStream;
+      try {
+        stream = await navigator.mediaDevices.getUserMedia({
+          audio: {
+            channelCount: 1,
+            echoCancellation: true,
+            noiseSuppression: true,
+            autoGainControl: true,
+          },
+        });
+      } catch (micErr) {
+        const name = micErr instanceof DOMException ? micErr.name : "";
+        const message =
+          name === "NotAllowedError" || name === "SecurityError"
+            ? "Microphone blocked. Click Allow when Chrome asks — or turn on Google Chrome under  → System Preferences → Security & Privacy → Microphone, then reopen the call."
+            : name === "NotFoundError" || name === "OverconstrainedError"
+              ? "No microphone found. Connect one and reopen the call."
+              : `Microphone unavailable: ${micErr instanceof Error ? micErr.message : "unknown error"}`;
+        handleFatalError(message);
+        return;
+      }
       micStreamRef.current = stream;
 
       const micContext = new AudioContextCtor();
@@ -634,6 +703,9 @@ export function useVoiceCall(): UseVoiceCallResult {
       wsRef.current = ws;
 
       ws.onopen = () => {
+        // Connection is live now — start the billing clock (xAI meters Grok
+        // Realtime by connection time).
+        callStartRef.current = Date.now();
         try {
           ws.send(
             JSON.stringify({

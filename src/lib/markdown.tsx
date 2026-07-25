@@ -27,7 +27,10 @@ const INLINE_PATTERNS: { name: string; re: RegExp }[] = [
   { name: "boldu", re: /__([\s\S]+?)__/ },
   { name: "link", re: /\[([^\]]+)\]\(([^)\s]+)\)/ },
   { name: "italic", re: /\*([^*\n]+?)\*/ },
-  { name: "italicu", re: /(?<![A-Za-z0-9])_([^_\n]+?)_(?![A-Za-z0-9])/ },
+  // NOTE: no regex lookbehind — macOS 12 WebKit (the WKWebView) can't parse it and
+  // the whole deck bundle fails to load. The leading boundary is captured (group 1)
+  // instead of a lookbehind; parseInline re-emits it. Lookahead is fine in WebKit.
+  { name: "italicu", re: /(^|[^A-Za-z0-9])_([^_\n]+?)_(?![A-Za-z0-9])/ },
 ];
 
 function parseInline(text: string, keyPrefix: string): ReactNode[] {
@@ -70,8 +73,12 @@ function parseInline(text: string, keyPrefix: string): ReactNode[] {
         out.push(<strong key={key}>{parseInline(bestMatch[1], key)}</strong>);
         break;
       case "italic":
-      case "italicu":
         out.push(<em key={key}>{parseInline(bestMatch[1], key)}</em>);
+        break;
+      case "italicu":
+        // group 1 = captured leading boundary char (or ""), group 2 = content
+        if (bestMatch[1]) out.push(bestMatch[1]);
+        out.push(<em key={key}>{parseInline(bestMatch[2], key)}</em>);
         break;
       case "link": {
         const href = safeUrl(bestMatch[2]);

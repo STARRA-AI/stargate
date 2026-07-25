@@ -1,0 +1,392 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>STARGATE — Holographic Eye</title>
+<style>
+  /* ───────────────────────────────────────────────────────────────────
+     STARGATE HOLOGRAPHIC EYE
+     Pure HTML + CSS + JS. Transparent so it layers over any dark layout.
+
+     Assembly (nested transforms so nothing fights over `transform`):
+       .holo-stage        fixed, transparent, click-through
+         .holo-assembly   JS-driven gentle FLOAT (translate + rotate)
+           .holo-ring     CSS-driven continuous SPIN (independent)
+             img.ring     CSS-driven subtle BREATHE (scale)
+           .holo-eye-track  JS-driven GAZE (translate toward face/cursor)
+             .holo-eye      JS-driven BLINK (scaleY) + parallax tilt
+               img.eye
+     Each behavior owns its own element, so the ring keeps spinning smoothly
+     on the GPU while JS independently drives gaze, blink, and float.
+     ─────────────────────────────────────────────────────────────────── */
+
+  :root {
+    --eye-size: 250px;    /* rendered WIDTH of eye.png (nests inside the ring) */
+    --ring-size: 470px;   /* rendered WIDTH of ring.png (portrait; height follows) */
+    --glow: #b04dfc;      /* purple glow to sell the hologram */
+    --glow-2: #ff5cf0;    /* magenta accent */
+    --spin-seconds: 22s;  /* ring rotation period (spec: 18–25s) */
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; }
+  /* Transparent by default so this composites over your existing UI.
+     The demo background is only here so you can see the effect standalone. */
+  body {
+    background: radial-gradient(circle at 50% 45%, #0a0413 0%, #05020a 60%, #000 100%);
+    font-family: ui-monospace, "SFMono-Regular", Menlo, monospace;
+    color: #c9b8ff;
+    overflow: hidden;
+  }
+
+  /* Full-viewport, transparent, does not block clicks on your app underneath. */
+  .holo-stage {
+    position: fixed; inset: 0; z-index: 40;
+    display: grid; place-items: center;
+    pointer-events: none;      /* click-through; the controls below re-enable */
+    background: transparent;
+  }
+
+  /* Whole assembly: gentle float, driven by JS in the rAF loop. */
+  .holo-assembly {
+    position: relative;
+    width: var(--ring-size); height: var(--ring-size);
+    display: grid; place-items: center;
+    will-change: transform;
+    /* subtle ambient bloom behind the whole thing */
+    filter: drop-shadow(0 0 26px rgba(176, 77, 252, 0.35));
+  }
+
+  /* ── Outer data ring ── continuous, independent spin via CSS keyframes. */
+  /* Both source PNGs are 408×612 (exactly 1 : 1.5). Size each by WIDTH, derive
+     height, and center with left/top:50% + negative margins — centering that
+     uses NO transform, so each element's `transform` stays free for its own
+     animation (spin / gaze / blink / float). Nothing ever conflicts, and both
+     circles land on the exact same center → perfectly concentric. */
+  .holo-ring {
+    position: absolute; left: 50%; top: 50%;
+    width: var(--ring-size);
+    height: calc(var(--ring-size) * 1.5);
+    margin-left: calc(var(--ring-size) / -2);
+    margin-top:  calc(var(--ring-size) * -0.75);
+    transform-origin: 50% 50%;
+    animation: holo-spin var(--spin-seconds) linear infinite;   /* independent spin */
+    will-change: transform;
+  }
+  .holo-ring img {
+    width: 100%; height: 100%; display: block;
+    animation: holo-breathe 7s ease-in-out infinite;  /* scale — a different element than the spin */
+    filter: drop-shadow(0 0 14px rgba(176, 77, 252, 0.55));
+  }
+  @keyframes holo-spin   { from { transform: rotate(0deg); } to { transform: rotate(360deg); } }
+  @keyframes holo-breathe { 0%, 100% { transform: scale(1); opacity: 0.94; } 50% { transform: scale(1.025); opacity: 1; } }
+
+  /* ── Eye ── same margin-centering. JS sets translate (gaze) on the track and
+     rotate + scaleY (tilt + blink) on the inner eye. Smaller than the ring so
+     it nests inside, concentric. */
+  .holo-eye-track {
+    position: absolute; left: 50%; top: 50%;
+    width: var(--eye-size);
+    height: calc(var(--eye-size) * 1.5);
+    margin-left: calc(var(--eye-size) / -2);
+    margin-top:  calc(var(--eye-size) * -0.75);
+    will-change: transform;
+  }
+  .holo-eye {
+    width: 100%; height: 100%;
+    transform-origin: 50% 50%;   /* blink squashes around the eye's center */
+    will-change: transform;
+  }
+  .holo-eye img {
+    width: 100%; height: 100%; display: block;
+    filter: drop-shadow(0 0 18px rgba(176, 77, 252, 0.5));
+  }
+
+  /* Graceful fallback shown until you drop in the real PNGs (see README).
+     JS adds .missing to an <img> that fails to load. */
+  img.missing { opacity: 0; }
+  .holo-ring.fallback::after {
+    content: ""; position: absolute; inset: 4%;
+    border-radius: 50%;
+    border: 10px solid transparent;
+    background:
+      conic-gradient(from 0deg, var(--glow), var(--glow-2), #4b1e8f, var(--glow)) border-box;
+    -webkit-mask: linear-gradient(#000 0 0) padding-box, linear-gradient(#000 0 0);
+    -webkit-mask-composite: xor; mask-composite: exclude;
+    box-shadow: 0 0 30px rgba(176,77,252,0.6);
+  }
+  .holo-eye.fallback::after {
+    content: ""; position: absolute; width: 34%; height: 34%;
+    border-radius: 50%;
+    background: radial-gradient(circle at 50% 45%, #efe6ff 0%, var(--glow) 30%, #2a0d55 70%, #000 100%);
+    box-shadow: 0 0 26px rgba(255,92,240,0.6), inset 0 0 18px rgba(0,0,0,0.7);
+  }
+
+  /* ── Controls (the only interactive part; re-enables pointer events) ── */
+  .holo-controls {
+    position: fixed; left: 50%; bottom: 26px; transform: translateX(-50%);
+    z-index: 41; pointer-events: auto;
+    display: flex; gap: 10px; align-items: center;
+    padding: 8px 10px; border-radius: 12px;
+    background: rgba(10, 4, 22, 0.7);
+    border: 1px solid rgba(176, 77, 252, 0.3);
+    backdrop-filter: blur(8px);
+  }
+  .holo-controls button {
+    font: inherit; font-size: 12px; letter-spacing: 0.12em;
+    padding: 8px 14px; border-radius: 8px; cursor: pointer;
+    color: #e9deff; background: rgba(176, 77, 252, 0.16);
+    border: 1px solid rgba(176, 77, 252, 0.4);
+    transition: background 0.2s, border-color 0.2s, opacity 0.2s;
+  }
+  .holo-controls button:hover { background: rgba(176, 77, 252, 0.3); }
+  .holo-controls button[disabled] { opacity: 0.4; cursor: default; }
+  .holo-status { font-size: 11px; letter-spacing: 0.1em; color: #9a83d8; min-width: 200px; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .holo-ring, .holo-ring img { animation: none; }
+  }
+</style>
+</head>
+<body>
+
+  <!-- ═══════════════ HTML STRUCTURE ═══════════════ -->
+  <div class="holo-stage" id="holoStage" aria-hidden="true">
+    <div class="holo-assembly" id="holoAssembly">
+      <!-- Outer galaxy data ring (ring.png) — spins independently -->
+      <div class="holo-ring" id="holoRing">
+        <img class="ring" id="ringImg" src="./ring.png" alt="" />
+      </div>
+      <!-- The tracking eye (eye.png) -->
+      <div class="holo-eye-track" id="holoEyeTrack">
+        <div class="holo-eye" id="holoEye">
+          <img class="eye" id="eyeImg" src="./eye.png" alt="" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="holo-controls">
+    <button id="camOnBtn">ENABLE CAMERA</button>
+    <button id="camOffBtn" disabled>DISABLE CAMERA</button>
+    <span class="holo-status" id="holoStatus">Mouse tracking · camera off</span>
+  </div>
+
+  <!-- Hidden video: the webcam feed for MediaPipe. Never shown, never recorded. -->
+  <video id="holoVideo" playsinline muted style="position:fixed;width:2px;height:2px;opacity:0;pointer-events:none;left:-10px;top:-10px;"></video>
+
+<!-- ═══════════════ JAVASCRIPT ═══════════════ -->
+<script type="module">
+  /* MediaPipe Tasks Vision — free, from CDN. Bundle + WASM must share a version.
+     If the import ever 404s, bump this one constant to a version that exists. */
+  const MP_VERSION = "0.10.18";
+  const MP_BUNDLE  = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/vision_bundle.mjs`;
+  const MP_WASM    = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${MP_VERSION}/wasm`;
+  /* Face Landmarker model — the exact free model you specified. */
+  const MODEL_URL  = "https://storage.googleapis.com/mediapipe-models/face_landmarker/face_landmarker/float16/1/face_landmarker.task";
+
+  /* ── Tunables ─────────────────────────────────────────────────────── */
+  const GAZE_RANGE_X = 26;   // px the eye can travel horizontally
+  const GAZE_RANGE_X_UP = 26;
+  const GAZE_RANGE_Y = 20;   // px the eye can travel vertically
+  const GAZE_DAMP    = 0.10; // lerp factor — lower = smoother/heavier
+  const TILT_MAX     = 6;    // deg of parallax tilt at full gaze
+  const MIRROR       = true; // selfie mirror: move right → eye looks right
+  const BLINK_MS     = 130;  // half-blink duration (close or open)
+  const BLINK_ON     = 0.55; // blendshape score that starts a blink
+  const BLINK_OFF    = 0.30; // must fall below this before another blink
+  const IDLE_BLINK_MIN = 2600, IDLE_BLINK_MAX = 6200; // ms between idle blinks
+
+  /* ── Elements ─────────────────────────────────────────────────────── */
+  const assembly = document.getElementById("holoAssembly");
+  const eyeTrack = document.getElementById("holoEyeTrack");
+  const eye      = document.getElementById("holoEye");
+  const ring     = document.getElementById("holoRing");
+  const video    = document.getElementById("holoVideo");
+  const statusEl = document.getElementById("holoStatus");
+  const camOnBtn = document.getElementById("camOnBtn");
+  const camOffBtn= document.getElementById("camOffBtn");
+
+  /* Fallback visuals if a PNG isn't present yet — so the motion is testable now. */
+  for (const [imgId, hostEl] of [["ringImg", ring], ["eyeImg", eye]]) {
+    const img = document.getElementById(imgId);
+    img.addEventListener("error", () => { img.classList.add("missing"); hostEl.classList.add("fallback"); });
+  }
+
+  /* ── Shared animation state ───────────────────────────────────────── */
+  const gaze   = { x: 0, y: 0 };          // current (smoothed) eye offset, px
+  const target = { x: 0, y: 0 };          // where the eye wants to be, px
+  let mouse    = { x: null, y: null };    // last cursor position (viewport px)
+  let cameraOn = false;
+
+  // Blink state machine: "open" | "closing" | "opening"
+  let blinkPhase = "open";
+  let blinkT0 = 0;
+  let nextIdleBlink = performance.now() + rand(IDLE_BLINK_MIN, IDLE_BLINK_MAX);
+  let camBlinkLatched = false;            // debounce for webcam blinks
+
+  function rand(a, b) { return a + Math.random() * (b - a); }
+  function clamp(v, lo, hi) { return Math.max(lo, Math.min(hi, v)); }
+
+  function startBlink() {
+    if (blinkPhase === "open") { blinkPhase = "closing"; blinkT0 = performance.now(); }
+  }
+
+  /* ── Mouse fallback (secondary input; always available) ───────────── */
+  window.addEventListener("mousemove", (e) => { mouse = { x: e.clientX, y: e.clientY }; }, { passive: true });
+
+  /* Map the cursor's position (relative to the eye's screen center) to a gaze offset. */
+  function mouseTarget() {
+    if (mouse.x == null) return null;
+    const r = eyeTrack.getBoundingClientRect();
+    const cx = r.left + r.width / 2, cy = r.top + r.height / 2;
+    const dx = clamp((mouse.x - cx) / (window.innerWidth  / 2), -1, 1);
+    const dy = clamp((mouse.y - cy) / (window.innerHeight / 2), -1, 1);
+    return { x: dx * GAZE_RANGE_X, y: dy * GAZE_RANGE_Y };
+  }
+
+  /* ── The one requestAnimationFrame loop: gaze + blink + float ─────── */
+  function loop(now) {
+    /* 1) Decide the gaze target. Camera (when a face was seen recently) wins;
+          otherwise the cursor drives it. Set by the detect loop / mouse. */
+    if (!cameraOn) {
+      const m = mouseTarget();
+      if (m) { target.x = m.x; target.y = m.y; }
+    }
+
+    /* 2) Smooth (lerp) toward the target — the "organic damping". */
+    gaze.x += (target.x - gaze.x) * GAZE_DAMP;
+    gaze.y += (target.y - gaze.y) * GAZE_DAMP;
+
+    /* 3) Parallax tilt for depth, proportional to gaze. */
+    const tilt = (gaze.x / GAZE_RANGE_X) * TILT_MAX;
+
+    /* 4) Blink state machine → a scaleY value. */
+    let blinkScaleY = 1;
+    if (blinkPhase === "closing") {
+      const t = (now - blinkT0) / BLINK_MS;
+      if (t >= 1) { blinkPhase = "opening"; blinkT0 = now; }
+      else blinkScaleY = 1 - ease(t) * 0.92;      // squash to a slit
+    } else if (blinkPhase === "opening") {
+      const t = (now - blinkT0) / BLINK_MS;
+      if (t >= 1) { blinkPhase = "open"; }
+      else blinkScaleY = 1 - ease(1 - t) * 0.92;  // spring back open
+    } else if (!cameraOn && now >= nextIdleBlink) {
+      startBlink();
+      nextIdleBlink = now + rand(IDLE_BLINK_MIN, IDLE_BLINK_MAX);
+    }
+
+    /* 5) Gentle float for the WHOLE assembly (independent of ring spin). */
+    const t = now / 1000;
+    const floatX = Math.sin(t * 0.55) * 8 + Math.sin(t * 0.23) * 4;
+    const floatY = Math.cos(t * 0.42) * 7;
+    const floatR = Math.sin(t * 0.31) * 1.4;
+
+    /* 6) Commit transforms — each on its own element, so nothing conflicts. */
+    assembly.style.transform = `translate(${floatX}px, ${floatY}px) rotate(${floatR}deg)`;
+    eyeTrack.style.transform = `translate(${gaze.x}px, ${gaze.y}px)`;
+    eye.style.transform      = `rotate(${tilt}deg) scaleY(${blinkScaleY})`;
+
+    requestAnimationFrame(loop);
+  }
+  function ease(t) { return t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2; } // easeInOutQuad
+  requestAnimationFrame(loop);
+
+  /* ── MediaPipe Face Landmarker: real face tracking + blink ────────── */
+  let faceLandmarker = null;
+  let stream = null;
+  let detectRAF = 0;
+  let lastFaceAt = 0;
+
+  async function ensureLandmarker() {
+    if (faceLandmarker) return faceLandmarker;
+    setStatus("Loading face model…");
+    const { FaceLandmarker, FilesetResolver } = await import(MP_BUNDLE);
+    const fileset = await FilesetResolver.forVisionTasks(MP_WASM);
+    faceLandmarker = await FaceLandmarker.createFromOptions(fileset, {
+      baseOptions: { modelAssetPath: MODEL_URL, delegate: "GPU" },
+      runningMode: "VIDEO",
+      numFaces: 1,
+      outputFaceBlendshapes: true,   // gives us eyeBlinkLeft / eyeBlinkRight
+    });
+    return faceLandmarker;
+  }
+
+  async function enableCamera() {
+    if (cameraOn) return;
+    try {
+      setStatus("Requesting camera…");
+      stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: "user", width: { ideal: 640 }, height: { ideal: 480 } },
+        audio: false,
+      });
+      video.srcObject = stream;
+      await video.play();
+      await ensureLandmarker();
+      cameraOn = true;
+      camOnBtn.disabled = true; camOffBtn.disabled = false;
+      setStatus("Camera tracking · LOCAL · NOT RECORDED");
+      let lastVideoTime = -1;
+      const detect = () => {
+        if (!cameraOn) return;
+        if (video.currentTime !== lastVideoTime && video.readyState >= 2) {
+          lastVideoTime = video.currentTime;
+          const res = faceLandmarker.detectForVideo(video, performance.now());
+          // --- head/face position → gaze target ---
+          const lm = res.faceLandmarks && res.faceLandmarks[0];
+          if (lm) {
+            lastFaceAt = performance.now();
+            const nose = lm[1] || lm[4]; // nose-tip landmark, normalized [0,1]
+            let nx = (nose.x - 0.5) * 2;  // -1 (left of frame) … +1 (right)
+            let ny = (nose.y - 0.5) * 2;
+            if (MIRROR) nx = -nx;         // selfie: move right → look right
+            target.x = clamp(nx, -1, 1) * GAZE_RANGE_X;
+            target.y = clamp(ny, -1, 1) * GAZE_RANGE_Y;
+          }
+          // --- blink from blendshapes ---
+          const bs = res.faceBlendshapes && res.faceBlendshapes[0];
+          if (bs) {
+            const score = (name) => (bs.categories.find((c) => c.categoryName === name)?.score) || 0;
+            const blink = Math.max(score("eyeBlinkLeft"), score("eyeBlinkRight"));
+            if (!camBlinkLatched && blink > BLINK_ON) { camBlinkLatched = true; startBlink(); }
+            else if (camBlinkLatched && blink < BLINK_OFF) { camBlinkLatched = false; }
+          }
+          // face lost > 1.2s → drift target back toward center (mouse can retake)
+          if (performance.now() - lastFaceAt > 1200) { target.x = 0; target.y = 0; }
+        }
+        detectRAF = requestAnimationFrame(detect);
+      };
+      detectRAF = requestAnimationFrame(detect);
+    } catch (err) {
+      setStatus("Camera unavailable: " + (err?.message || err));
+      cameraOn = false; camOnBtn.disabled = false; camOffBtn.disabled = true;
+    }
+  }
+
+  function disableCamera() {
+    cameraOn = false;
+    cancelAnimationFrame(detectRAF);
+    if (stream) { stream.getTracks().forEach((t) => t.stop()); stream = null; }
+    video.srcObject = null;
+    camBlinkLatched = false;
+    target.x = 0; target.y = 0;   // hand control back to the mouse smoothly
+    camOnBtn.disabled = false; camOffBtn.disabled = true;
+    setStatus("Mouse tracking · camera off");
+  }
+
+  function setStatus(s) { statusEl.textContent = s; }
+
+  /* Buttons + programmatic control (spec: enableCamera() / disableCamera()). */
+  camOnBtn.addEventListener("click", enableCamera);
+  camOffBtn.addEventListener("click", disableCamera);
+  window.enableCamera = enableCamera;
+  window.disableCamera = disableCamera;
+
+  /* Never leave the camera warm: stop it if the tab is hidden or is closing. */
+  document.addEventListener("visibilitychange", () => { if (document.hidden) disableCamera(); });
+  window.addEventListener("pagehide", disableCamera);
+  window.addEventListener("beforeunload", disableCamera);
+</script>
+</body>
+</html>

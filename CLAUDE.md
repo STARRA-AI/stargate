@@ -7,6 +7,11 @@ vendors, or numbers — pull them from Book 2 (Master Doc). Runtime system
 prompt = Book 3.
 
 ## Hard rules
+- **VERIFY, NEVER GUESS.** Do NOT give Classic information that has not been
+  verified from a source (the code, real command output, docs, or a live check).
+  Stop guessing. Stop assuming. Do not claim something works / is fixed / is true
+  unless it has been proven; if it can't be verified, say so explicitly. Foresee
+  side effects before acting, not after.
 - Dark-only. Colors are CSS vars `--void`, `--chrome`, `--purple`, `--magenta`. No shadcn defaults.
 - Operator voice: "Copy." not "Sure!". No emojis in UI copy.
 - Mobile is voice-first, badge is hero. Desktop is command deck.

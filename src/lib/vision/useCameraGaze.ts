@@ -1,5 +1,28 @@
 "use client";
 
+/* ===========================================================================
+ * useCameraGaze — SECURITY INVARIANTS (never-record, never-hacked)
+ * ---------------------------------------------------------------------------
+ * These guarantees are load-bearing. Do not weaken them.
+ *
+ *  1. CONSENT-GATED CAMERA. The camera is armed only on an explicit user
+ *     toggle (start()/toggle()). It is never auto-started on mount/import.
+ *  2. FRAMES STAY LOCAL. Video frames are drawn only into an in-memory
+ *     offscreen <canvas> for on-device detection (MediaPipe BlazeFace) and an
+ *     in-memory getImageData() motion fallback. Pixels never leave the tab.
+ *  3. NOTHING IS RECORDED. There is no MediaRecorder, no captureStream sink,
+ *     no persistence of frames or gaze data.
+ *  4. NOTHING IS UPLOADED. No fetch / XHR / WebSocket / sendBeacon, and no
+ *     canvas.toBlob() / toDataURL() serialization of frame data. Frame bytes
+ *     have no path off the device.
+ *  5. FULLY VENDORED MODEL. WASM + .tflite load from /vendor/mediapipe
+ *     (local origin) — no runtime CDN, so the feature is offline-capable and
+ *     has no third-party network dependency.
+ *  6. BULLETPROOF TEARDOWN. Camera stops on explicit toggle, on component
+ *     unmount, and on tab hide / pagehide / beforeunload. stop() is idempotent
+ *     and releases every MediaStreamTrack.
+ * ========================================================================= */
+
 import { useCallback, useEffect, useRef, useState } from "react";
 
 export type GazeVec = { x: number; y: number };
@@ -38,20 +61,56 @@ async function loadMediaPipeDetector(): Promise<FaceDetectorLike | null> {
       const { FaceDetector, FilesetResolver } = await import(
         "@mediapipe/tasks-vision"
       );
-      const fileset = await FilesetResolver.forVisionTasks(
-        "/vendor/mediapipe/wasm",
-      );
-      const detector = await FaceDetector.createFromOptions(fileset, {
-        baseOptions: {
-          modelAssetPath: "/vendor/mediapipe/blaze_face_short_range.tflite",
-          delegate: "CPU",
-        },
-        // VIDEO mode is the correct running mode for a live camera feed —
-        // IMAGE mode re-initialises the graph on every frame (wasteful, and it
-        // re-logs the XNNPACK delegate line that surfaces as a console error).
-        runningMode: "VIDEO",
-        minDetectionConfidence: 0.4,
-      });
+      // The TFLite/XNNPACK runtime emits "INFO: Created TensorFlow Lite XNNPACK
+      // delegate for CPU." through the Emscripten module's console during init,
+      // which Next.js surfaces as a console error. Install a NARROW, TEMPORARY
+      // filter that drops ONLY that line and delegates everything else to the
+      // real console. It is uninstalled in the finally below — success OR throw
+      // — so it never leaks past initialization.
+      const orig = {
+        log: console.log,
+        info: console.info,
+        warn: console.warn,
+        error: console.error,
+      };
+      const isNoise = (first: unknown) =>
+        /XNNPACK|Created TensorFlow Lite/.test(String(first));
+      let detector;
+      try {
+        console.log = (...args: unknown[]) => {
+          if (!isNoise(args[0])) orig.log(...args);
+        };
+        console.info = (...args: unknown[]) => {
+          if (!isNoise(args[0])) orig.info(...args);
+        };
+        console.warn = (...args: unknown[]) => {
+          if (!isNoise(args[0])) orig.warn(...args);
+        };
+        console.error = (...args: unknown[]) => {
+          if (!isNoise(args[0])) orig.error(...args);
+        };
+
+        const fileset = await FilesetResolver.forVisionTasks(
+          "/vendor/mediapipe/wasm",
+        );
+        detector = await FaceDetector.createFromOptions(fileset, {
+          baseOptions: {
+            modelAssetPath: "/vendor/mediapipe/blaze_face_short_range.tflite",
+            delegate: "CPU",
+          },
+          // VIDEO mode is the correct running mode for a live camera feed —
+          // IMAGE mode re-initialises the graph on every frame (wasteful, and it
+          // re-logs the XNNPACK delegate line that surfaces as a console error).
+          runningMode: "VIDEO",
+          minDetectionConfidence: 0.4,
+        });
+      } finally {
+        // Restore the originals immediately after init, no matter what.
+        console.log = orig.log;
+        console.info = orig.info;
+        console.warn = orig.warn;
+        console.error = orig.error;
+      }
       // detectForVideo needs a strictly-increasing timestamp; performance.now()
       // is monotonic and the tick is throttled to ~150ms, so it always advances.
       let lastTs = 0;
@@ -101,26 +160,60 @@ export function useCameraGaze() {
   const prevRef = useRef<Uint8ClampedArray | null>(null);
   const rafRef = useRef(0);
   const detectorRef = useRef<FaceDetectorLike | null>(null);
-
-  const stop = useCallback(() => {
-    cancelAnimationFrame(rafRef.current);
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-    if (videoRef.current) {
-      videoRef.current.srcObject = null;
-      videoRef.current = null;
-    }
-    prevRef.current = null;
-    gazeRef.current = { x: 0, y: 0 };
-    setActive(false);
-  }, []);
-
   const tickCountRef = useRef(0);
   const lastTickLogRef = useRef(0);
   const sizedRef = useRef(false);
   const lastTickAtRef = useRef(0);
   const lastDetectAtRef = useRef(0);
   const lastFaceRef = useRef<{ x: number; y: number; at: number } | null>(null);
+
+  // Bound lifecycle listeners — stored so removeEventListener targets the exact
+  // same function objects registered in start(). These enforce teardown when
+  // the tab is hidden or the page is navigated away, so the camera can never
+  // stay live in a backgrounded/abandoned tab.
+  const onVisibilityRef = useRef<(() => void) | null>(null);
+  const onPageHideRef = useRef<(() => void) | null>(null);
+  const onBeforeUnloadRef = useRef<(() => void) | null>(null);
+
+  const stop = useCallback(() => {
+    // Idempotent + exhaustive: safe to call twice, releases every resource.
+    cancelAnimationFrame(rafRef.current);
+    rafRef.current = 0;
+
+    // Stop EVERY track on the stream (video only here, but be exhaustive).
+    streamRef.current?.getTracks().forEach((t) => t.stop());
+    streamRef.current = null;
+
+    if (videoRef.current) {
+      videoRef.current.srcObject = null;
+      videoRef.current = null;
+    }
+    canvasRef.current = null;
+    prevRef.current = null;
+    detectorRef.current = null;
+    lastFaceRef.current = null;
+    sizedRef.current = false;
+    gazeRef.current = { x: 0, y: 0 };
+
+    // Remove the lifecycle listeners we registered in start() — using the exact
+    // same bound function objects so removal is guaranteed.
+    if (typeof document !== "undefined" && onVisibilityRef.current) {
+      document.removeEventListener("visibilitychange", onVisibilityRef.current);
+    }
+    if (typeof window !== "undefined") {
+      if (onPageHideRef.current) {
+        window.removeEventListener("pagehide", onPageHideRef.current);
+      }
+      if (onBeforeUnloadRef.current) {
+        window.removeEventListener("beforeunload", onBeforeUnloadRef.current);
+      }
+    }
+    onVisibilityRef.current = null;
+    onPageHideRef.current = null;
+    onBeforeUnloadRef.current = null;
+
+    setActive(false);
+  }, []);
 
   const tick = useCallback(async () => {
     const video = videoRef.current;
@@ -151,6 +244,12 @@ export function useCameraGaze() {
       return;
     }
 
+    // ---- NO network / NO recording boundary ------------------------------
+    // From here down, raw camera frame data is handled. It is ONLY drawn into
+    // this in-memory offscreen canvas and read via getImageData()/detect() for
+    // on-device analysis. It is NEVER serialized (no toBlob/toDataURL), NEVER
+    // recorded (no MediaRecorder), and NEVER sent anywhere (no fetch/XHR/WS).
+    // ----------------------------------------------------------------------
     // Mirror so operator motion matches iris direction
     ctx.save();
     ctx.translate(w, 0);
@@ -165,7 +264,7 @@ export function useCameraGaze() {
       // Real detector present: throttle inference to ~150ms (~6-7fps) — the
       // hardware budget on a dual-core i5. The gaze lerp below still runs every
       // tick, so detection at 6-7fps + lerp = smooth pursuit, no jitter.
-      if (now - lastDetectAtRef.current >= 150) {
+      if (now - lastDetectAtRef.current >= 90) {
         lastDetectAtRef.current = now;
         try {
           const faces = await detectorRef.current.detect(canvas);
@@ -226,8 +325,8 @@ export function useCameraGaze() {
     nx = Math.max(-1, Math.min(1, nx));
     ny = Math.max(-1, Math.min(1, ny));
     const g = gazeRef.current;
-    g.x += (nx - g.x) * 0.18;
-    g.y += (ny - g.y) * 0.18;
+    g.x += (nx - g.x) * 0.5;
+    g.y += (ny - g.y) * 0.5;
 
     tickCountRef.current += 1;
     if (now - lastTickLogRef.current > 2000) {
@@ -270,6 +369,23 @@ export function useCameraGaze() {
       videoRef.current = video;
       canvasRef.current = document.createElement("canvas");
       setActive(true);
+
+      // Register bulletproof teardown listeners AFTER the camera is live. Any
+      // of these firing calls stop(), which releases the camera and removes
+      // these very listeners — so the camera can never linger in a hidden or
+      // abandoned tab. Bound refs are stored so removal targets these exact fns.
+      const onVisibility = () => {
+        if (document.hidden) stop();
+      };
+      const onPageHide = () => stop();
+      const onBeforeUnload = () => stop();
+      onVisibilityRef.current = onVisibility;
+      onPageHideRef.current = onPageHide;
+      onBeforeUnloadRef.current = onBeforeUnload;
+      document.addEventListener("visibilitychange", onVisibility);
+      window.addEventListener("pagehide", onPageHide);
+      window.addEventListener("beforeunload", onBeforeUnload);
+
       rafRef.current = requestAnimationFrame(() => void tick());
     } catch (err) {
       const msg =
@@ -277,7 +393,7 @@ export function useCameraGaze() {
       setError(msg);
       setActive(false);
     }
-  }, [tick]);
+  }, [tick, stop]);
 
   const toggle = useCallback(() => {
     if (active) stop();

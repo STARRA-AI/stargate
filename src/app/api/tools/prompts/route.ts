@@ -41,11 +41,19 @@ export async function POST() {
   const { spawn } = await import("child_process");
   const root = process.cwd();
 
+  // Build the script path at runtime (path.join, not a bare string literal) so
+  // Turbopack doesn't statically try to resolve it as a module — that was the
+  // "Module not found: Can't resolve 'scripts/distill-prompt-patterns.mjs'" build error.
+  const script = path.join(root, "scripts", "distill-prompt-patterns.mjs");
   const code = await new Promise<number>((resolve) => {
-    const child = spawn("node", ["scripts/distill-prompt-patterns.mjs"], {
+    const child = spawn("node", [script], {
       cwd: root,
       stdio: "inherit",
     });
+    // No 'error' listener → a spawn failure (node missing / ENOENT) throws an
+    // uncaught exception and 500s the route; resolve it as a failed exit code so
+    // the handler returns { ok:false, error } instead of crashing.
+    child.on("error", () => resolve(1));
     child.on("close", (c) => resolve(c ?? 1));
   });
 

@@ -20,6 +20,12 @@ function run(cmd: string, args: string[], cwd: string): Promise<{ code: number; 
     let stderr = "";
     child.stdout.on("data", (d) => (stdout += d.toString()));
     child.stderr.on("data", (d) => (stderr += d.toString()));
+    // Without an 'error' listener a spawn failure (e.g. binary not on PATH →
+    // ENOENT) is thrown as an uncaught exception and 500s the whole route.
+    // Resolve it as a non-zero exit so runRepomix returns { ok:false } instead.
+    child.on("error", (err) =>
+      resolve({ code: 1, stdout, stderr: stderr || String(err) }),
+    );
     child.on("close", (code) => resolve({ code: code ?? 1, stdout, stderr }));
   });
 }

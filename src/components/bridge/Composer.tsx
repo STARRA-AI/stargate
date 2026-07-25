@@ -2,24 +2,6 @@
 
 import { useEffect, useRef, type KeyboardEvent } from "react";
 
-function MicIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-      aria-hidden
-    >
-      <rect x="9" y="3" width="6" height="11" rx="3" />
-      <path d="M5 11a7 7 0 0 0 14 0" />
-      <line x1="12" y1="18" x2="12" y2="21" />
-    </svg>
-  );
-}
-
 function SendIcon() {
   return (
     <svg
@@ -59,15 +41,15 @@ function CallWaveIcon() {
 }
 
 /**
- * Pill composer: mic button + auto-growing textarea + send button.
- * Enter submits, Shift+Enter inserts a newline. Presentation only — `onSubmit`
- * and `onMic` carry the existing DeckConsole behavior.
+ * Pill composer: one call button (left) + auto-growing textarea + send button.
+ * Enter submits, Shift+Enter inserts a newline. There is a SINGLE voice entry —
+ * the call button — which opens the full-screen call with her face (`onCall`).
+ * The old redundant "mic" launcher was removed (it duplicated the call button).
  */
 export function Composer({
   value,
   onChange,
   onSubmit,
-  onMic,
   onCall,
   recording,
   placeholder,
@@ -75,7 +57,6 @@ export function Composer({
   value: string;
   onChange: (v: string) => void;
   onSubmit: () => void;
-  onMic?: () => void;
   onCall?: () => void;
   recording?: boolean;
   placeholder?: string;
@@ -106,12 +87,12 @@ export function Composer({
     >
       <button
         type="button"
-        className={`mic-btn${recording ? " recording" : ""}`}
-        title="Voice input"
-        onClick={onMic}
-        aria-label="Microphone"
+        className={`call-btn${recording ? " recording" : ""}`}
+        title="Call STARRA"
+        onClick={onCall}
+        aria-label="Call STARRA"
       >
-        <MicIcon />
+        <CallWaveIcon />
       </button>
       <textarea
         ref={taRef}
@@ -126,15 +107,6 @@ export function Composer({
       />
       <button type="submit" className="send-btn" aria-label="Send">
         <SendIcon />
-      </button>
-      <button
-        type="button"
-        className="call-btn"
-        title="Start voice call"
-        onClick={onCall}
-        aria-label="Start voice call"
-      >
-        <CallWaveIcon />
       </button>
     </form>
   );

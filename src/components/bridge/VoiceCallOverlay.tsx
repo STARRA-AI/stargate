@@ -1,7 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useVoiceCall, type VoiceCallState } from "@/lib/voice/useVoiceCall";
+import { getVoiceUsage, VOICE_USAGE_EVENT } from "@/lib/voice/voiceCost";
 
 function CloseIcon() {
   return (
@@ -65,6 +66,16 @@ export function VoiceCallOverlay({
     muted,
     toggleMute,
   } = useVoiceCall();
+
+  // Month-to-date voice spend (client-side estimate). Refreshes when a call
+  // ends and flushes its minutes, and on every call-state transition.
+  const [usage, setUsage] = useState(getVoiceUsage);
+  useEffect(() => {
+    const refresh = () => setUsage(getVoiceUsage());
+    refresh();
+    window.addEventListener(VOICE_USAGE_EVENT, refresh);
+    return () => window.removeEventListener(VOICE_USAGE_EVENT, refresh);
+  }, [state]);
 
   const panelRef = useRef<HTMLDivElement>(null);
   const closeBtnRef = useRef<HTMLButtonElement>(null);
@@ -153,6 +164,17 @@ export function VoiceCallOverlay({
     el.scrollTo({ top: el.scrollHeight });
   }, [transcript, liveUser, liveAssistant]);
 
+  // Only decode her talking clip while she's actually speaking — on an older
+  // Intel Mac, decoding both portrait videos for the whole call is wasted CPU
+  // during a live xAI session. Idle clip always loops; talk clip plays on cue.
+  const talkVideoRef = useRef<HTMLVideoElement>(null);
+  useEffect(() => {
+    const v = talkVideoRef.current;
+    if (!v) return;
+    if (state === "speaking") void v.play().catch(() => {});
+    else v.pause();
+  }, [state]);
+
   const settingsLink = useMemo(
     () => (error && pointsToSettings(error) ? "/settings#link-apis" : null),
     [error],
@@ -193,12 +215,37 @@ export function VoiceCallOverlay({
             className={`call-status${state === "error" ? " is-error" : ""}`}
             aria-live="polite"
           >
-            {statusCopy(state)}
+            {state === "error" && /microphone/i.test(error || "")
+              ? "Microphone blocked"
+              : statusCopy(state)}
           </span>
         </div>
 
-        <div className="call-orb-stage">
-          <div className={`call-orb call-orb-${orbState}`} aria-hidden />
+        <div className={`call-face-stage call-face-${orbState}`}>
+          {/* Her face, in-browser: idle (breathing) when listening/connecting,
+              her warm talking loop when she speaks. Crossfaded on state — no
+              native window, no lip-sync render lag. Both silent; the voice is
+              the live xAI audio. */}
+          <video
+            className="call-face-video call-face-idle"
+            src="/avatar/starra-idle.mp4"
+            autoPlay
+            loop
+            muted
+            playsInline
+            aria-hidden
+          />
+          <video
+            ref={talkVideoRef}
+            className="call-face-video call-face-talk"
+            src="/avatar/starra-talking.mp4"
+            loop
+            muted
+            playsInline
+            aria-hidden
+          />
+          {/* speaking pulse — a single "breathe/pulse" verb, magenta glow */}
+          <div className="call-face-glow" aria-hidden />
         </div>
 
         {state === "error" && error ? (
@@ -249,6 +296,13 @@ export function VoiceCallOverlay({
               ) : null}
             </>
           )}
+        </div>
+
+        <div className="call-meter">
+          <span className="call-meter-label">VOICE · THIS MONTH</span>
+          <span className="call-meter-value">
+            ≈ ${usage.dollars.toFixed(2)} · {usage.minutes.toFixed(1)} min
+          </span>
         </div>
 
         <div className="call-controls">

@@ -244,6 +244,42 @@ async function maybeToolReply(lastUser: string): Promise<string | null> {
   return null;
 }
 
+/**
+ * Explicit operator shell path — works on ANY provider (Kimi/Grok/Ollama), no
+ * LLM tool-calling required. Triggers: `run: <cmd>`, `exec: <cmd>`, `$ <cmd>`,
+ * or `confirm <token>` (to approve a destructive command the gate held).
+ * LOCALHOST ONLY — refuses when the deck is reached over the LAN/phone, so an
+ * exposed deck can never be used to run commands remotely.
+ */
+async function maybeShellReply(
+  lastUser: string,
+  req: Request,
+): Promise<string | null> {
+  const confirmM = lastUser.match(/^\s*confirm\s+([0-9a-fA-F]{4,})\s*$/);
+  const prefixM = lastUser.match(/^\s*(?:run:|exec:)\s*([\s\S]+)$/i);
+  const dollarM = /^\s*\$\s+/.test(lastUser)
+    ? lastUser.replace(/^\s*\$\s+/, "")
+    : null;
+  if (!confirmM && !prefixM && !dollarM) return null;
+
+  // Localhost-only guard — never execute for a request that came over the LAN.
+  const host = (req.headers.get("host") || "").toLowerCase();
+  const isLocal =
+    host === "" ||
+    host.startsWith("localhost") ||
+    host.startsWith("127.0.0.1") ||
+    host.startsWith("[::1]") ||
+    host.startsWith("::1");
+  if (!isLocal) {
+    return "Shell execution is disabled over the network for safety. Open the deck on this Mac (localhost) to run commands.";
+  }
+
+  const { runShellCommand, confirmAndRun } = await import("@/lib/tools/shell");
+  if (confirmM) return confirmAndRun(confirmM[1]);
+  const cmd = (prefixM ? prefixM[1] : dollarM) ?? "";
+  return runShellCommand(cmd.trim());
+}
+
 export async function POST(req: Request) {
   const body = (await req.json()) as {
     messages?: ChatMessage[];
@@ -327,6 +363,7 @@ export async function POST(req: Request) {
       | "kimi"
       | "grok";
 
+  const shellReply = lastUser ? await maybeShellReply(lastUser, req) : null;
   const toolReply = lastUser ? await maybeToolReply(lastUser) : null;
   const useAgentTools =
     body.agentTools === true || process.env.STARRA_AGENT_TOOLS === "1";
@@ -340,7 +377,9 @@ export async function POST(req: Request) {
       };
 
       try {
-        if (toolReply) {
+        if (shellReply) {
+          for await (const chunk of stubStream(shellReply)) push(chunk);
+        } else if (toolReply) {
           for await (const chunk of stubStream(toolReply)) push(chunk);
         } else {
           const { up: ollamaUp, hasModel } = await ollamaStatus();

@@ -5,9 +5,14 @@ import { useStargate, useStargateStream } from "@/lib/stargate-context";
 import { useEffect, useRef, useState } from "react";
 import { Composer } from "./Composer";
 import { MessageColumn } from "./MessageColumn";
-import { VoiceCallOverlay } from "./VoiceCallOverlay";
 
-export function DeckConsole({ onMic }: { onMic?: () => void }) {
+export function DeckConsole({
+  onCall,
+  callActive,
+}: {
+  onCall?: () => void;
+  callActive?: boolean;
+}) {
   // Split on purpose: hudState/lastReply come from the main context (stable
   // outside of real HUD transitions); history/streaming/sendMessage come
   // from the stream-only context, which updates on every SSE token. Only
@@ -16,7 +21,6 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
   const { hudState, lastReply } = useStargate();
   const { history, streaming, sendMessage } = useStargateStream();
   const [input, setInput] = useState("");
-  const [callOpen, setCallOpen] = useState(false);
   const logRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -84,13 +88,11 @@ export function DeckConsole({ onMic }: { onMic?: () => void }) {
           value={input}
           onChange={setInput}
           onSubmit={() => submit(input)}
-          onMic={onMic}
-          onCall={() => setCallOpen(true)}
+          onCall={onCall}
+          recording={callActive}
           placeholder='> "GIVE ME THE BRIEF."'
         />
       </div>
-
-      <VoiceCallOverlay open={callOpen} onClose={() => setCallOpen(false)} />
     </div>
   );
 }
