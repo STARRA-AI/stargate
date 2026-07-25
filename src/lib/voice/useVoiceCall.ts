@@ -59,14 +59,32 @@ const STARRA_INSTRUCTIONS = STARRA_VOICE_PERSONA;
  * clipped "mm-hm", or her own audio bleeding into the mic would all cross the
  * gate for one frame. We require BARGE_IN_CONSECUTIVE_FRAMES over-threshold
  * frames in a row before firing bargeIn, which reads as intentional speech
- * while still feeling instant — the worklet emits frames every few
- * milliseconds, so 3 in a row is well under a tenth of a second. Any frame at
- * or below the gate resets the streak, so only sustained input counts.
+ * while still feeling instant. Any frame at or below the gate resets the streak,
+ * so only sustained input counts.
+ *
+ * TUNED (was 0.02 / 3 frames / no grace — too trigger-happy: her own audio
+ * bleed and background noise cut her off, and it couldn't tell voices apart).
+ * Now it takes a clearly-louder, sustained utterance to interrupt her, and NO
+ * barge-in fires in the first BARGE_IN_GRACE_MS after she starts speaking (so
+ * her own onset / the echo tail never trips it). xAI's server_vad remains the
+ * smart backstop for real turn-taking; this local gate is only the instant-cut.
  */
-const BARGE_IN_RMS_THRESHOLD = 0.02;
-const BARGE_IN_CONSECUTIVE_FRAMES = 3;
+const BARGE_IN_RMS_THRESHOLD = 0.05;
+const BARGE_IN_CONSECUTIVE_FRAMES = 7;
+const BARGE_IN_GRACE_MS = 450;
 
-export type VoiceCallState = "idle" | "connecting" | "listening" | "speaking" | "error";
+export type VoiceCallState =
+  | "idle"
+  | "connecting"
+  | "reconnecting"
+  | "listening"
+  | "speaking"
+  | "error";
+
+// The call survives transient socket drops (token expiry, idle timeouts, blips)
+// by re-minting a fresh token and re-opening, instead of dying with an error.
+// It only gives up after this many consecutive failed attempts.
+const MAX_RECONNECT_ATTEMPTS = 5;
 
 export interface VoiceCallTranscriptLine {
   role: "user" | "assistant";
@@ -83,6 +101,9 @@ export interface UseVoiceCallResult {
   disconnect: () => void;
   muted: boolean;
   toggleMute: () => void;
+  /** Live loudness (0..1) of her audio right now — 0 unless she's speaking.
+   * rAF-poll this to drive the audio-reactive face (no re-render per frame). */
+  getAssistantLevel: () => number;
 }
 
 type RealtimeTokenResponse = {
@@ -178,6 +199,12 @@ export function useVoiceCall(): UseVoiceCallResult {
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartRef = useRef(0);
 
+  // Live loudness (0..1) of her currently-playing audio, for the audio-reactive
+  // face. Quick attack, gradual decay so her on-screen animation tracks what she
+  // is actually saying. Read via getAssistantLevel() (rAF-polled by the UI — no
+  // re-render per audio frame).
+  const assistantLevelRef = useRef(0);
+
   // Wall-clock start of the live connection, stamped on ws.onopen and consumed
   // once by cleanupInternal to bill the elapsed minutes to the voice meter.
   // Null whenever no session is live, so the defensive cleanup at connect()
@@ -190,6 +217,25 @@ export function useVoiceCall(): UseVoiceCallResult {
   // playback stops or state leaves "speaking" so a stale streak can't fire
   // into the next response.
   const bargeStreakRef = useRef(0);
+
+  // Wall-clock (ms) when the current assistant turn began speaking. Barge-in is
+  // suppressed for BARGE_IN_GRACE_MS after this so her own onset / echo tail
+  // can't interrupt her (see handleMicFrame).
+  const speakingStartedAtRef = useRef(0);
+
+  // Auto-reconnect bookkeeping. reconnectAttemptsRef counts consecutive failed
+  // reconnects (reset to 0 once a session goes live again); reconnectTimerRef
+  // holds the pending backoff timer; connectRef always points at the latest
+  // connect() so the ws.onclose handler can restart the call without capturing
+  // a stale closure.
+  const reconnectAttemptsRef = useRef(0);
+  const reconnectTimerRef = useRef<number | null>(null);
+  const connectRef = useRef<(() => Promise<void>) | null>(null);
+  // Only a session that stays live past this dwell counts as "healthy" enough to
+  // refill the reconnect budget. Without it, a connection that flaps AFTER the
+  // handshake (briefly acks, then drops) would reset the budget every cycle and
+  // reconnect forever, hammering /api/realtime. See stableTimerRef.
+  const stableTimerRef = useRef<number | null>(null);
 
   // True once the server has signaled the current response's audio stream
   // is finished (response.done / *.audio.done) — used to decide when the
@@ -244,6 +290,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     }
     activeSourcesRef.current.clear();
     nextStartRef.current = 0;
+    assistantLevelRef.current = 0; // she's not audible — face falls back to calm
     // Playback is gone — drop any in-progress barge-in streak so it can't
     // carry over and false-fire into the next response.
     bargeStreakRef.current = 0;
@@ -295,6 +342,11 @@ export function useVoiceCall(): UseVoiceCallResult {
       }
       if (samples.length === 0) return;
 
+      // Live assistant loudness (0..1) for the audio-reactive face — quick
+      // attack, gradual decay so her animation tracks her actual voice.
+      const level = Math.min(1, rms(samples) * 6);
+      assistantLevelRef.current = Math.max(level, assistantLevelRef.current * 0.7);
+
       // The operator's own turn is over the moment the assistant starts
       // talking back — commit any still-pending live user line now. There's
       // no confirmed "user transcription finalized" event in this protocol,
@@ -302,7 +354,10 @@ export function useVoiceCall(): UseVoiceCallResult {
       commitUser();
 
       assistantResponseDoneRef.current = false;
-      if (stateRef.current !== "speaking") setCallState("speaking");
+      if (stateRef.current !== "speaking") {
+        speakingStartedAtRef.current = Date.now(); // start the barge-in grace window
+        setCallState("speaking");
+      }
 
       try {
         const buffer = ctx.createBuffer(1, samples.length, REALTIME_SAMPLE_RATE);
@@ -373,11 +428,15 @@ export function useVoiceCall(): UseVoiceCallResult {
       if (!ws || ws.readyState !== WebSocket.OPEN) return;
 
       if (!mutedRef.current && stateRef.current === "speaking") {
-        // Require BARGE_IN_CONSECUTIVE_FRAMES over-threshold frames in a row
-        // before cutting STARRA off — a lone spike (cough, "mm-hm", her audio
-        // bleeding into the mic) shouldn't interrupt her. Any quiet frame
-        // resets the streak, so only sustained, intentional speech fires it.
-        if (rms(frame) > BARGE_IN_RMS_THRESHOLD) {
+        // Suppress barge-in for the first BARGE_IN_GRACE_MS of her turn so her
+        // own onset / the echo tail can't trip it (this is the "cuts herself
+        // off" bug). After the grace window, require BARGE_IN_CONSECUTIVE_FRAMES
+        // clearly-loud frames in a row — a lone spike (cough, background noise,
+        // bleed) won't interrupt her; only a sustained, intentional utterance.
+        const inGrace = Date.now() - speakingStartedAtRef.current < BARGE_IN_GRACE_MS;
+        if (inGrace) {
+          bargeStreakRef.current = 0;
+        } else if (rms(frame) > BARGE_IN_RMS_THRESHOLD) {
           bargeStreakRef.current += 1;
           if (bargeStreakRef.current >= BARGE_IN_CONSECUTIVE_FRAMES) {
             bargeStreakRef.current = 0;
@@ -403,6 +462,20 @@ export function useVoiceCall(): UseVoiceCallResult {
   // ---- fatal error / cleanup -------------------------------------------
 
   const cleanupInternal = useCallback(() => {
+    // Cancel any pending reconnect so a teardown (end call / unmount) can't be
+    // undone by a timer firing after cleanup. Note: this does NOT reset the
+    // reconnect ATTEMPT counter — connect() runs cleanupInternal at its start,
+    // and a reconnect-triggered connect must keep the accumulated budget.
+    if (reconnectTimerRef.current != null) {
+      window.clearTimeout(reconnectTimerRef.current);
+      reconnectTimerRef.current = null;
+    }
+    // Cancel the pending "healthy dwell" — if the session drops before the dwell
+    // elapses, it was NOT healthy, so the budget must not be refilled.
+    if (stableTimerRef.current != null) {
+      window.clearTimeout(stableTimerRef.current);
+      stableTimerRef.current = null;
+    }
     // Bill the elapsed connection time to the voice meter before teardown —
     // once per session (callStartRef is nulled so retries/unmount can't
     // double-count).
@@ -467,6 +540,7 @@ export function useVoiceCall(): UseVoiceCallResult {
   const handleFatalError = useCallback(
     (message: string) => {
       intentionalDisconnectRef.current = true;
+      reconnectAttemptsRef.current = 0; // give the next call/RETRY a fresh budget
       cleanupInternal();
       setCallState("error");
       setError(message);
@@ -500,9 +574,21 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         case "session.updated":
           // No explicit "ready" event is confirmed in this protocol —
-          // session.updated (server ack of our session.update config) is
-          // the best available signal that the call is live.
-          if (stateRef.current === "connecting") setCallState("listening");
+          // session.updated (server ack of our session.update config) is the
+          // best available signal that the call is live, so leave the
+          // (re)connecting state. But do NOT refill the reconnect budget yet: a
+          // flapping connection acks then immediately drops, and resetting here
+          // would loop forever. Only refill after the session survives a dwell
+          // window (cleared by cleanupInternal on any drop).
+          if (stateRef.current === "connecting" || stateRef.current === "reconnecting") {
+            setCallState("listening");
+          }
+          if (stableTimerRef.current == null) {
+            stableTimerRef.current = window.setTimeout(() => {
+              stableTimerRef.current = null;
+              reconnectAttemptsRef.current = 0; // survived long enough → healthy
+            }, 10_000);
+          }
           return;
 
         case "input_audio_buffer.speech_started":
@@ -581,17 +667,35 @@ export function useVoiceCall(): UseVoiceCallResult {
         }
 
         default: {
-          if (type === "error" || type.endsWith(".error")) {
+          if (type === "error") {
+            // Session-level error. Don't sit in a zombie ("live" but silent) if
+            // the socket doesn't close itself — drop it so ws.onclose drives the
+            // reconnect (which recovers a transient fault, or ends the call for a
+            // truly fatal one like a bad/expired credential after the retries).
             const errRecord = asRecord(evt.error);
             const message =
-              asString(errRecord?.message) ?? asString(evt.message) ?? "Realtime session error.";
-            handleFatalError(message);
+              asString(errRecord?.message) ?? asString(evt.message) ?? "Realtime error.";
+            console.warn("[voice] realtime session error → reconnecting:", message);
+            try {
+              wsRef.current?.close();
+            } catch {
+              /* onclose will still fire */
+            }
+          } else if (type.endsWith(".error")) {
+            // Sub-event error (e.g. a single failed response) — recoverable.
+            // Log and keep the call alive; this was the "keeps shutting down
+            // mid-conversation" bug (every error used to be fatal).
+            const errRecord = asRecord(evt.error);
+            console.warn(
+              "[voice] realtime error event:",
+              asString(errRecord?.message) ?? asString(evt.message) ?? type,
+            );
           }
           // Any other undocumented/unhandled xAI event is ignored by design.
         }
       }
     },
-    [bargeIn, commitAssistant, commitUser, handleFatalError, schedulePlayback, setCallState, setLiveAssistantBoth, setLiveUserBoth],
+    [bargeIn, commitAssistant, commitUser, schedulePlayback, setCallState, setLiveAssistantBoth, setLiveUserBoth],
   );
 
   // ---- connect / disconnect -------------------------------------------
@@ -739,20 +843,48 @@ export function useVoiceCall(): UseVoiceCallResult {
       ws.onmessage = (ev) => handleServerEvent(ev.data);
 
       ws.onerror = () => {
-        handleFatalError("Voice link connection error.");
+        // Don't end the call here — the socket closes right after an error and
+        // ws.onclose drives the reconnect. Logging only.
+        console.warn("[voice] websocket error");
       };
 
       ws.onclose = (ev) => {
         if (intentionalDisconnectRef.current) return;
-        handleFatalError(`Voice link closed${ev.reason ? `: ${ev.reason}` : "."}`);
+        wsRef.current = null;
+        // Unexpected drop — bring the call back instead of dying. This survives
+        // token expiry, idle timeouts, and transient network blips (the "keeps
+        // shutting down mid-conversation" bug). Reconnect opens a fresh xAI
+        // session (immediate context resets) but the call stays up — far better
+        // than an error screen. Give up only after MAX_RECONNECT_ATTEMPTS.
+        if (reconnectAttemptsRef.current >= MAX_RECONNECT_ATTEMPTS) {
+          handleFatalError(`Voice link lost${ev.reason ? `: ${ev.reason}` : "."}`);
+          return;
+        }
+        reconnectAttemptsRef.current += 1;
+        stopAllPlayback();
+        if (stateRef.current !== "reconnecting") setCallState("reconnecting");
+        const backoff = Math.min(4000, 400 * 2 ** (reconnectAttemptsRef.current - 1));
+        if (reconnectTimerRef.current != null) window.clearTimeout(reconnectTimerRef.current);
+        reconnectTimerRef.current = window.setTimeout(() => {
+          reconnectTimerRef.current = null;
+          if (intentionalDisconnectRef.current) return; // user ended it during backoff
+          void connectRef.current?.();
+        }, backoff);
       };
     } catch (e) {
       handleFatalError(e instanceof Error ? e.message : "Failed to start voice call.");
     }
-  }, [cleanupInternal, handleFatalError, handleMicFrame, handleServerEvent, setCallState, setLiveAssistantBoth, setLiveUserBoth]);
+  }, [cleanupInternal, handleFatalError, handleMicFrame, handleServerEvent, setCallState, setLiveAssistantBoth, setLiveUserBoth, stopAllPlayback]);
+
+  // Keep connectRef pointed at the latest connect() so ws.onclose can restart
+  // the call (reconnect) without capturing a stale closure.
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
 
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
+    reconnectAttemptsRef.current = 0; // clean exit — next call starts fresh
     cleanupInternal();
     setCallState("idle");
     setError(null);
@@ -764,6 +896,13 @@ export function useVoiceCall(): UseVoiceCallResult {
     mutedRef.current = !mutedRef.current;
     setMuted(mutedRef.current);
   }, []);
+
+  // 0 unless she's actively speaking, so a lingering last-frame value can't keep
+  // the face "talking" after she's done — the UI reads this every animation frame.
+  const getAssistantLevel = useCallback(
+    () => (stateRef.current === "speaking" ? assistantLevelRef.current : 0),
+    [],
+  );
 
   // Cleanup on unmount, in case the caller navigates away mid-call without
   // calling disconnect() explicitly.
@@ -784,5 +923,6 @@ export function useVoiceCall(): UseVoiceCallResult {
     disconnect,
     muted,
     toggleMute,
+    getAssistantLevel,
   };
 }

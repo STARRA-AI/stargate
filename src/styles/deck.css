@@ -1085,56 +1085,77 @@ body.low-power .star-ring { animation: none; }
 @keyframes call-breathe { 0%, 100% { transform: scale(1); opacity: 0.92; } 50% { transform: scale(1.06); opacity: 1; } }
 @keyframes call-ripple { 0% { transform: scale(0.9); opacity: 0.6; } 100% { transform: scale(1.55); opacity: 0; } }
 
-/* ── HER FACE (the call hero) ──
-   Two silent portrait videos crossfaded on call-state: her breathing idle when
-   listening/connecting, her warm talking loop when she speaks. The voice is the
-   live xAI audio; this is just the living face. No native window, no lip-sync
-   render lag. */
-.call-face-stage {
-  position: relative; align-self: center;
-  height: min(380px, 44vh); aspect-ratio: 832 / 1248; width: auto;
-  border-radius: 18px; overflow: hidden;
-  border: 1px solid var(--border); background: var(--void);
-  box-shadow:
-    inset 0 0 0 1px color-mix(in oklab, var(--chrome) 5%, transparent),
-    0 0 30px color-mix(in oklab, var(--purple) 22%, transparent);
+/* ── HER FACE — full-screen FaceTime call ──
+   Three silent portrait clips crossfaded on call-state: calm idle, an attentive
+   LISTENING face while you talk, her TALKING loop while she speaks. Her face
+   fills the screen; the glow strength + a subtle scale ride her live voice
+   (--starra-level, 0..1, set every animation frame by the overlay). No
+   transcript — just her, like a real call. */
+.call-facetime { padding: 0; background: var(--void); }
+.call-facetime .call-face-stage {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border: none; border-radius: 0; overflow: hidden;
+  background: var(--void);
+  --starra-level: 0;
 }
 .call-face-video {
   position: absolute; inset: 0; width: 100%; height: 100%;
-  object-fit: cover; opacity: 0; transition: opacity 220ms ease;
+  object-fit: cover; object-position: center 28%; /* keep her face framed on wide screens */
+  opacity: 0; transition: opacity 260ms ease;
 }
-/* default states (connecting / listening / idle): her idle face */
+/* base = calm idle; listening / speaking crossfade their own clip in */
 .call-face-idle { opacity: 1; }
-/* speaking: crossfade to her talking loop */
+.call-face-listening .call-face-idle { opacity: 0; }
+.call-face-listening .call-face-listen { opacity: 1; }
 .call-face-speaking .call-face-idle { opacity: 0; }
-.call-face-speaking .call-face-talk { opacity: 1; }
-
-/* speaking pulse — one "pulse/breathe" verb, magenta, on her frame edge */
-.call-face-glow {
-  position: absolute; inset: 0; border-radius: inherit; pointer-events: none;
-  opacity: 0; transition: opacity 220ms ease;
-}
-.call-face-speaking .call-face-glow {
+.call-face-speaking .call-face-talk {
   opacity: 1;
-  box-shadow:
-    inset 0 0 26px color-mix(in oklab, var(--magenta) 45%, transparent),
-    0 0 28px color-mix(in oklab, var(--magenta) 40%, transparent);
-  animation: call-face-pulse 1.4s ease-in-out infinite;
+  /* she visibly moves with what she's saying (live amplitude) */
+  transform: scale(calc(1 + var(--starra-level, 0) * 0.018));
+  transform-origin: center 30%;
 }
-@keyframes call-face-pulse { 0%, 100% { opacity: 0.5; } 50% { opacity: 1; } }
-/* connecting: subtle overall dim while the line opens */
-.call-face-connecting { animation: call-dim 1.8s ease-in-out infinite; }
-/* error: red frame */
-.call-face-error { border-color: color-mix(in oklab, var(--bad) 55%, var(--border)); }
 
-/* Reduced-motion / low-power: keep her face (her presence) but freeze the added
-   glow pulse + connecting dim to a steady state. */
-@media (prefers-reduced-motion: reduce) {
-  .call-face-speaking .call-face-glow { animation: none; opacity: 0.7; }
-  .call-face-connecting { animation: none; }
+/* speaking glow — magenta vignette whose strength rides her live loudness */
+.call-face-glow {
+  position: absolute; inset: 0; pointer-events: none;
+  opacity: 0; transition: opacity 140ms ease;
+  box-shadow:
+    inset 0 0 70px color-mix(in oklab, var(--magenta) 40%, transparent),
+    inset 0 0 170px color-mix(in oklab, var(--purple) 20%, transparent);
 }
-body.low-power .call-face-speaking .call-face-glow { animation: none; opacity: 0.6; }
-body.low-power .call-face-connecting { animation: none; }
+.call-face-speaking .call-face-glow { opacity: calc(0.28 + var(--starra-level, 0) * 0.72); }
+
+/* readability scrim (top + bottom) so status/controls sit on her cleanly */
+.call-face-scrim {
+  position: absolute; inset: 0; pointer-events: none;
+  background:
+    linear-gradient(180deg, rgba(5,2,10,0.55) 0%, transparent 22%),
+    linear-gradient(0deg, rgba(5,2,10,0.7) 0%, transparent 27%);
+}
+
+/* status (top) + controls (bottom) float over her face */
+.call-ft-top {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 2;
+  display: flex; flex-direction: column; align-items: center; gap: 3px;
+  padding: max(22px, env(safe-area-inset-top)) 16px 0; text-align: center;
+}
+.call-ft-controls {
+  position: absolute; left: 0; right: 0; bottom: 0; z-index: 2;
+  display: flex; align-items: center; justify-content: center; gap: 12px;
+  padding: 0 16px max(30px, env(safe-area-inset-bottom)); flex-wrap: wrap;
+}
+.call-ft-error {
+  position: absolute; left: 50%; bottom: 100px; transform: translateX(-50%);
+  z-index: 3; max-width: min(420px, 90vw);
+}
+
+/* Reduced-motion / low-power: keep her face (her presence) but drop the live
+   scale + hold the glow steady. */
+@media (prefers-reduced-motion: reduce) {
+  .call-face-speaking .call-face-talk { transform: none; }
+  .call-face-speaking .call-face-glow { opacity: 0.5; }
+}
+body.low-power .call-face-speaking .call-face-talk { transform: none; }
 
 .call-error-box {
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;

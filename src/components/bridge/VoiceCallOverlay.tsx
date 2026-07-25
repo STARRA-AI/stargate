@@ -1,24 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
 import { useVoiceCall, type VoiceCallState } from "@/lib/voice/useVoiceCall";
-import { getVoiceUsage, VOICE_USAGE_EVENT } from "@/lib/voice/voiceCost";
-
-function CloseIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      aria-hidden
-    >
-      <line x1="6" y1="6" x2="18" y2="18" />
-      <line x1="18" y1="6" x2="6" y2="18" />
-    </svg>
-  );
-}
 
 function statusCopy(state: VoiceCallState): string {
   switch (state) {
@@ -26,6 +9,8 @@ function statusCopy(state: VoiceCallState): string {
       return "Listening…";
     case "speaking":
       return "STARRA is speaking…";
+    case "reconnecting":
+      return "Reconnecting…";
     case "error":
       return "Voice link down.";
     case "connecting":
@@ -37,16 +22,19 @@ function statusCopy(state: VoiceCallState): string {
 
 /** True when connect()'s surfaced error is the "no xAI key linked" stub-mode
  * message from /api/realtime (its stub copy reads "...link the xAI key in
- * Settings → Link APIs") — used to show a direct link instead of a bare
- * error string. */
+ * Settings → Link APIs"). The mic-blocked message deliberately says "System
+ * Preferences", not "Settings", so it never matches here. */
 function pointsToSettings(message: string): boolean {
   return /settings/i.test(message);
 }
 
 /**
- * Grok-style full-duplex voice call overlay. Presentation only — all call
- * state/audio plumbing lives in useVoiceCall(); this component just drives
- * connect()/disconnect() off the `open` prop and renders the engine's state.
+ * FaceTime-style full-screen voice call with STARRA. Her face fills the screen;
+ * it switches clips on call state (idle ⇄ attentive-listening ⇄ talking) and its
+ * intensity tracks her live voice amplitude (getAssistantLevel, rAF-polled into
+ * the --starra-level CSS var). No transcript — just her, like a real call. All
+ * call/audio plumbing lives in useVoiceCall(); this drives connect()/disconnect()
+ * off the `open` prop and renders the engine's state.
  */
 export function VoiceCallOverlay({
   open,
@@ -58,33 +46,24 @@ export function VoiceCallOverlay({
   const {
     state,
     error,
-    transcript,
-    liveUser,
-    liveAssistant,
     connect,
     disconnect,
     muted,
     toggleMute,
+    getAssistantLevel,
   } = useVoiceCall();
 
-  // Month-to-date voice spend (client-side estimate). Refreshes when a call
-  // ends and flushes its minutes, and on every call-state transition.
-  const [usage, setUsage] = useState(getVoiceUsage);
-  useEffect(() => {
-    const refresh = () => setUsage(getVoiceUsage());
-    refresh();
-    window.addEventListener(VOICE_USAGE_EVENT, refresh);
-    return () => window.removeEventListener(VOICE_USAGE_EVENT, refresh);
-  }, [state]);
-
   const panelRef = useRef<HTMLDivElement>(null);
-  const closeBtnRef = useRef<HTMLButtonElement>(null);
+  const endBtnRef = useRef<HTMLButtonElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const faceStageRef = useRef<HTMLDivElement>(null);
+  const idleVideoRef = useRef<HTMLVideoElement>(null);
+  const talkVideoRef = useRef<HTMLVideoElement>(null);
+  const listenVideoRef = useRef<HTMLVideoElement>(null);
 
-  // Mirror connect/disconnect in refs so the open/close effect below reacts
-  // only to `open` itself, not to callback identity churn as the engine
-  // advances through connecting -> listening -> speaking — reacting to that
-  // churn would tear the call down mid-conversation.
+  // Mirror connect/disconnect in refs so the open/close effect reacts only to
+  // `open` itself, not to callback identity churn as the engine advances
+  // through its states — reacting to that churn would tear the call down.
   const connectRef = useRef(connect);
   const disconnectRef = useRef(disconnect);
   useEffect(() => {
@@ -103,26 +82,67 @@ export function VoiceCallOverlay({
     }
   }, [open]);
 
-  // Belt-and-suspenders: tear the engine down if this ever unmounts while a
-  // call is live (e.g. the deck itself unmounts mid-call).
+  // Belt-and-suspenders: tear the engine down if this unmounts mid-call.
   useEffect(() => {
     return () => {
       disconnectRef.current();
     };
   }, []);
 
-  // Focus management for the modal: move focus into the panel on open, trap
-  // Tab within it while open, and restore whatever had focus before the
-  // overlay opened once it closes. `aria-modal` alone doesn't do any of this
-  // — it's just a hint to assistive tech, the browser enforces none of it.
+  // Only decode the clip that's actually on screen — idle always loops; the
+  // talking clip plays only while she speaks, the listening clip only while she
+  // listens. Keeps two portrait videos from decoding at once on an older Mac.
+  useEffect(() => {
+    const idle = idleVideoRef.current;
+    const talk = talkVideoRef.current;
+    const listen = listenVideoRef.current;
+    const onScreenClip = state === "speaking" ? "talk" : state === "listening" ? "listen" : "idle";
+    // Only the on-screen clip decodes; the other two are paused. Idle is the base
+    // layer for connecting/reconnecting/idle/error.
+    if (talk) {
+      if (onScreenClip === "talk") void talk.play().catch(() => {});
+      else talk.pause();
+    }
+    if (listen) {
+      if (onScreenClip === "listen") void listen.play().catch(() => {});
+      else listen.pause();
+    }
+    if (idle) {
+      if (onScreenClip === "idle") void idle.play().catch(() => {});
+      else idle.pause();
+    }
+  }, [state]);
+
+  // Audio-reactive face: push her live loudness (0..1) into a CSS var every
+  // animation frame so her glow/scale track what she's actually saying. rAF, no
+  // re-render per audio frame. getAssistantLevel is stable, so this runs once
+  // per open.
+  useEffect(() => {
+    if (!open || typeof window === "undefined") return;
+    const el = faceStageRef.current;
+    // Only drive the reactive var while she's actually speaking — no 60fps DOM
+    // writes when she's idle/listening (that's wasted CPU on an older Mac).
+    if (state !== "speaking") {
+      el?.style.setProperty("--starra-level", "0");
+      return;
+    }
+    let raf = 0;
+    const tick = () => {
+      faceStageRef.current?.style.setProperty("--starra-level", getAssistantLevel().toFixed(3));
+      raf = window.requestAnimationFrame(tick);
+    };
+    raf = window.requestAnimationFrame(tick);
+    return () => window.cancelAnimationFrame(raf);
+  }, [open, state, getAssistantLevel]);
+
+  // Focus management: move focus into the call on open, trap Tab, restore on
+  // close. aria-modal is only a hint — the browser enforces none of this.
   useEffect(() => {
     if (typeof window === "undefined" || !open) return;
 
     previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
-    // Defer one tick so the panel (which only renders once `open` is true)
-    // has mounted before we try to move focus into it.
     const focusTimer = window.setTimeout(() => {
-      (closeBtnRef.current ?? panelRef.current)?.focus();
+      (endBtnRef.current ?? panelRef.current)?.focus();
     }, 0);
 
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -157,24 +177,6 @@ export function VoiceCallOverlay({
     };
   }, [open]);
 
-  const transcriptRef = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    const el = transcriptRef.current;
-    if (!el) return;
-    el.scrollTo({ top: el.scrollHeight });
-  }, [transcript, liveUser, liveAssistant]);
-
-  // Only decode her talking clip while she's actually speaking — on an older
-  // Intel Mac, decoding both portrait videos for the whole call is wasted CPU
-  // during a live xAI session. Idle clip always loops; talk clip plays on cue.
-  const talkVideoRef = useRef<HTMLVideoElement>(null);
-  useEffect(() => {
-    const v = talkVideoRef.current;
-    if (!v) return;
-    if (state === "speaking") void v.play().catch(() => {});
-    else v.pause();
-  }, [state]);
-
   const settingsLink = useMemo(
     () => (error && pointsToSettings(error) ? "/settings#link-apis" : null),
     [error],
@@ -187,144 +189,100 @@ export function VoiceCallOverlay({
     onClose();
   }
 
-  const orbState = state === "idle" ? "connecting" : state;
-  const isEmpty = transcript.length === 0 && !liveUser && !liveAssistant;
+  // Which face clip is showing: her talking loop, her attentive-listening face,
+  // or the calm idle (connecting / reconnecting / error all fall back to idle).
+  const faceMode =
+    state === "speaking" ? "speaking" : state === "listening" ? "listening" : "idle";
+  const statusText =
+    state === "error" && /microphone/i.test(error || "")
+      ? "Microphone blocked"
+      : statusCopy(state);
 
   return (
     <div
-      className="call-overlay"
+      className="call-overlay call-facetime"
       role="dialog"
       aria-modal="true"
       aria-label="Voice call with STARRA"
+      ref={panelRef}
+      tabIndex={-1}
     >
-      <div className="call-panel" ref={panelRef} tabIndex={-1}>
+      {/* Full-bleed face — she fills the screen like a FaceTime call. */}
+      <div className={`call-face-stage call-face-${faceMode}`} ref={faceStageRef}>
+        <video
+          ref={idleVideoRef}
+          className="call-face-video call-face-idle"
+          src="/avatar/starra-idle.mp4"
+          autoPlay
+          loop
+          muted
+          playsInline
+          aria-hidden
+        />
+        <video
+          ref={listenVideoRef}
+          className="call-face-video call-face-listen"
+          src="/avatar/starra-listening.mp4"
+          loop
+          muted
+          playsInline
+          aria-hidden
+        />
+        <video
+          ref={talkVideoRef}
+          className="call-face-video call-face-talk"
+          src="/avatar/starra-talking.mp4"
+          loop
+          muted
+          playsInline
+          aria-hidden
+        />
+        {/* speaking glow — intensity rides her live voice (--starra-level) */}
+        <div className="call-face-glow" aria-hidden />
+        {/* readability scrim behind the top status + bottom controls */}
+        <div className="call-face-scrim" aria-hidden />
+      </div>
+
+      <div className="call-ft-top">
+        <span className="call-kicker">STARRA</span>
+        <span
+          className={`call-status${state === "error" ? " is-error" : ""}`}
+          aria-live="polite"
+        >
+          {statusText}
+        </span>
+      </div>
+
+      {state === "error" && error ? (
+        <div className="call-error-box call-ft-error" role="alert">
+          <span className="call-error-text">{error}</span>
+          {settingsLink ? (
+            <a className="call-error-link" href={settingsLink}>
+              Open Settings → Link APIs
+            </a>
+          ) : null}
+        </div>
+      ) : null}
+
+      <div className="call-ft-controls">
         <button
           type="button"
-          ref={closeBtnRef}
-          className="call-close-btn"
-          onClick={endCall}
-          aria-label="End call and close"
-          title="Close"
+          className={`call-mute-btn${muted ? " is-muted" : ""}`}
+          onClick={toggleMute}
+          aria-pressed={muted}
         >
-          <CloseIcon />
+          {muted ? "UNMUTE" : "MUTE"}
         </button>
 
-        <div className="call-head">
-          <span className="call-kicker">STARRA VOICE LINK</span>
-          <span
-            className={`call-status${state === "error" ? " is-error" : ""}`}
-            aria-live="polite"
-          >
-            {state === "error" && /microphone/i.test(error || "")
-              ? "Microphone blocked"
-              : statusCopy(state)}
-          </span>
-        </div>
-
-        <div className={`call-face-stage call-face-${orbState}`}>
-          {/* Her face, in-browser: idle (breathing) when listening/connecting,
-              her warm talking loop when she speaks. Crossfaded on state — no
-              native window, no lip-sync render lag. Both silent; the voice is
-              the live xAI audio. */}
-          <video
-            className="call-face-video call-face-idle"
-            src="/avatar/starra-idle.mp4"
-            autoPlay
-            loop
-            muted
-            playsInline
-            aria-hidden
-          />
-          <video
-            ref={talkVideoRef}
-            className="call-face-video call-face-talk"
-            src="/avatar/starra-talking.mp4"
-            loop
-            muted
-            playsInline
-            aria-hidden
-          />
-          {/* speaking pulse — a single "breathe/pulse" verb, magenta glow */}
-          <div className="call-face-glow" aria-hidden />
-        </div>
-
-        {state === "error" && error ? (
-          <div className="call-error-box" role="alert">
-            <span className="call-error-text">{error}</span>
-            {settingsLink ? (
-              <a className="call-error-link" href={settingsLink}>
-                Open Settings → Link APIs
-              </a>
-            ) : null}
-          </div>
+        {state === "error" ? (
+          <button type="button" className="call-retry-btn" onClick={() => void connect()}>
+            RETRY
+          </button>
         ) : null}
 
-        <div className="call-transcript" ref={transcriptRef}>
-          {isEmpty ? (
-            <span className="call-transcript-empty">
-              {state === "error"
-                ? "No line yet."
-                : state === "connecting" || state === "idle"
-                  ? "Opening the line…"
-                  : "Say something — STARRA is on the line."}
-            </span>
-          ) : (
-            <>
-              {transcript.map((line, i) => (
-                <div key={`${line.role}-${i}`} className={`call-turn call-turn-${line.role}`}>
-                  <span className="call-turn-label">
-                    {line.role === "user" ? "YOU" : "STARRA"}
-                  </span>
-                  {line.role === "user" ? (
-                    <span className="call-bubble-user">{line.text}</span>
-                  ) : (
-                    <span className="call-line-assistant">{line.text}</span>
-                  )}
-                </div>
-              ))}
-              {liveUser ? (
-                <div className="call-turn call-turn-user">
-                  <span className="call-turn-label">YOU</span>
-                  <span className="call-bubble-user is-live">{liveUser}</span>
-                </div>
-              ) : null}
-              {liveAssistant ? (
-                <div className="call-turn call-turn-assistant">
-                  <span className="call-turn-label">STARRA</span>
-                  <span className="call-line-assistant is-live">{liveAssistant}</span>
-                </div>
-              ) : null}
-            </>
-          )}
-        </div>
-
-        <div className="call-meter">
-          <span className="call-meter-label">VOICE · THIS MONTH</span>
-          <span className="call-meter-value">
-            ≈ ${usage.dollars.toFixed(2)} · {usage.minutes.toFixed(1)} min
-          </span>
-        </div>
-
-        <div className="call-controls">
-          <button
-            type="button"
-            className={`call-mute-btn${muted ? " is-muted" : ""}`}
-            onClick={toggleMute}
-            aria-pressed={muted}
-          >
-            {muted ? "UNMUTE" : "MUTE"}
-          </button>
-
-          {state === "error" ? (
-            <button type="button" className="call-retry-btn" onClick={() => void connect()}>
-              RETRY
-            </button>
-          ) : null}
-
-          <button type="button" className="call-end-btn" onClick={endCall}>
-            END CALL
-          </button>
-        </div>
+        <button type="button" className="call-end-btn" onClick={endCall} ref={endBtnRef}>
+          END CALL
+        </button>
       </div>
     </div>
   );
