@@ -668,18 +668,29 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         default: {
           if (type === "error") {
-            // Session-level error. Don't sit in a zombie ("live" but silent) if
-            // the socket doesn't close itself — drop it so ws.onclose drives the
-            // reconnect (which recovers a transient fault, or ends the call for a
-            // truly fatal one like a bad/expired credential after the retries).
+            // Only a clearly session-FATAL error (bad/expired credential, invalid
+            // session) drops the socket to reconnect. EVERYTHING ELSE is treated
+            // as recoverable: log and keep the SAME session alive, so a transient
+            // hiccup never wipes the conversation. (This was the "erroring and
+            // restarting the whole conversation" bug — every error used to force a
+            // fresh session and lose all context.) A genuinely dead session still
+            // surfaces as a socket close, which ws.onclose handles.
             const errRecord = asRecord(evt.error);
             const message =
               asString(errRecord?.message) ?? asString(evt.message) ?? "Realtime error.";
-            console.warn("[voice] realtime session error → reconnecting:", message);
-            try {
-              wsRef.current?.close();
-            } catch {
-              /* onclose will still fire */
+            const code = (asString(errRecord?.code) ?? asString(errRecord?.type) ?? "").toLowerCase();
+            const fatal = /auth|credential|expired|invalid[_ ]?session|unauthorized|forbidden|\btoken\b/.test(
+              `${code} ${message}`.toLowerCase(),
+            );
+            if (fatal) {
+              console.warn("[voice] FATAL realtime error → reconnecting:", message);
+              try {
+                wsRef.current?.close();
+              } catch {
+                /* onclose will still fire */
+              }
+            } else {
+              console.warn("[voice] realtime error (session kept alive):", message);
             }
           } else if (type.endsWith(".error")) {
             // Sub-event error (e.g. a single failed response) — recoverable.

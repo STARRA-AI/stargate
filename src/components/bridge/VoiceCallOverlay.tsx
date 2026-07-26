@@ -114,19 +114,22 @@ export function VoiceCallOverlay({
     }
   }, [state]);
 
-  // Ringback: her song plays softly while the line is connecting (like calling a
-  // real person), then fades out the moment she picks up (listening/speaking).
-  // Muted-video autoplay is always allowed; audio autoplay needs the call-button
-  // click's transient activation, which we have. Fails silent if blocked.
+  // Ringback: her song plays EXACTLY ONCE per summon — on the first connect —
+  // then fades out when she picks up. It never replays on a reconnect and never
+  // loops; it only plays again when the call is closed and re-summoned (the
+  // ringbackDoneRef resets when `open` goes false, below).
+  const ringbackDoneRef = useRef(false);
   useEffect(() => {
     const a = ringbackRef.current;
     if (!a) return;
-    const connecting = state === "connecting" || state === "idle";
-    if (connecting) {
+    const opening = state === "connecting" || state === "idle";
+    if (opening && !ringbackDoneRef.current) {
+      ringbackDoneRef.current = true; // one play per summon — reconnects won't replay
       a.volume = 0.35;
+      a.currentTime = 0;
       void a.play().catch(() => {});
-    } else {
-      // fade out over ~600ms, then pause (she's on the line now)
+    } else if (state === "listening" || state === "speaking") {
+      // she picked up — fade the song out over ~600ms, then stop
       const start = a.volume;
       const t0 = typeof performance !== "undefined" ? performance.now() : 0;
       const fade = () => {
@@ -140,6 +143,16 @@ export function VoiceCallOverlay({
       requestAnimationFrame(fade);
     }
   }, [state]);
+
+  // Reset the one-play latch + stop the song when the call closes, so re-summoning
+  // plays it fresh (once).
+  useEffect(() => {
+    if (!open) {
+      ringbackDoneRef.current = false;
+      const a = ringbackRef.current;
+      if (a) { a.pause(); a.currentTime = 0; }
+    }
+  }, [open]);
 
   // Audio-reactive face: push her live loudness (0..1) into a CSS var every
   // animation frame so her glow/scale track what she's actually saying. rAF, no
@@ -236,7 +249,7 @@ export function VoiceCallOverlay({
       tabIndex={-1}
     >
       {/* Her song as the ringback while the line connects (fades out on pickup). */}
-      <audio ref={ringbackRef} src="/avatar/starra-ringback.mp3" loop preload="auto" aria-hidden />
+      <audio ref={ringbackRef} src="/avatar/starra-ringback.mp3" preload="auto" aria-hidden />
 
       {/* Full-screen face — she's shown head-down (contain), with a soft blurred
           copy of her filling the screen behind (FaceTime/iOS portrait framing),
