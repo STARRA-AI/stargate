@@ -60,6 +60,7 @@ export function VoiceCallOverlay({
   const idleVideoRef = useRef<HTMLVideoElement>(null);
   const talkVideoRef = useRef<HTMLVideoElement>(null);
   const listenVideoRef = useRef<HTMLVideoElement>(null);
+  const ringbackRef = useRef<HTMLAudioElement>(null);
 
   // Mirror connect/disconnect in refs so the open/close effect reacts only to
   // `open` itself, not to callback identity churn as the engine advances
@@ -110,6 +111,33 @@ export function VoiceCallOverlay({
     if (idle) {
       if (onScreenClip === "idle") void idle.play().catch(() => {});
       else idle.pause();
+    }
+  }, [state]);
+
+  // Ringback: her song plays softly while the line is connecting (like calling a
+  // real person), then fades out the moment she picks up (listening/speaking).
+  // Muted-video autoplay is always allowed; audio autoplay needs the call-button
+  // click's transient activation, which we have. Fails silent if blocked.
+  useEffect(() => {
+    const a = ringbackRef.current;
+    if (!a) return;
+    const connecting = state === "connecting" || state === "idle";
+    if (connecting) {
+      a.volume = 0.35;
+      void a.play().catch(() => {});
+    } else {
+      // fade out over ~600ms, then pause (she's on the line now)
+      const start = a.volume;
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+      const fade = () => {
+        const el = ringbackRef.current;
+        if (!el) return;
+        const p = Math.min(1, ((typeof performance !== "undefined" ? performance.now() : 0) - t0) / 600);
+        el.volume = start * (1 - p);
+        if (p < 1) requestAnimationFrame(fade);
+        else { el.pause(); el.currentTime = 0; }
+      };
+      requestAnimationFrame(fade);
     }
   }, [state]);
 
@@ -207,6 +235,9 @@ export function VoiceCallOverlay({
       ref={panelRef}
       tabIndex={-1}
     >
+      {/* Her song as the ringback while the line connects (fades out on pickup). */}
+      <audio ref={ringbackRef} src="/avatar/starra-ringback.mp3" loop preload="auto" aria-hidden />
+
       {/* Full-screen face — she's shown head-down (contain), with a soft blurred
           copy of her filling the screen behind (FaceTime/iOS portrait framing),
           so nothing is cropped close and there are no black bars. */}

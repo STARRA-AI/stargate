@@ -23,7 +23,7 @@ function resolvePython(): string {
 }
 
 /**
- * Launch the STARRA talking-avatar desktop app (~/Projects/starra-avatar).
+ * Launch the STARRA talking-avatar desktop app (~/Desktop/STARGATE/starra-avatar).
  * The deck server runs on this Mac, so it spawns the Python app locally and
  * hands it the deck's env (XAI_API_KEY flows through automatically). Localhost
  * only — a LAN/phone client can never spawn desktop processes on the Mac.
@@ -45,7 +45,7 @@ export async function POST(req: Request) {
 
   // Build the path at runtime (path.join, not a static literal) so Turbopack
   // never tries to resolve it as a module.
-  const dir = path.join(os.homedir(), "Projects", "starra-avatar");
+  const dir = path.join(os.homedir(), "Desktop", "STARGATE", "starra-avatar");
   const script = path.join(dir, "main.py");
   const python = resolvePython();
 

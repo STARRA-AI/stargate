@@ -8,7 +8,7 @@ export const config = {
   // Run on everything EXCEPT Next internals and static assets, so the login
   // page and brand assets always load even when the deck is gated.
   matcher: [
-    "/((?!_next/|brand/|favicon|manifest|.*\\.(?:webp|png|jpg|jpeg|svg|ico|gif|webm|mp4|js|css|map|woff2?|ttf|json)$).*)",
+    "/((?!_next/|brand/|favicon|manifest|.*\\.(?:webp|png|jpg|jpeg|svg|ico|gif|webm|mp4|mp3|wav|m4a|ogg|js|css|map|woff2?|ttf|json)$).*)",
   ],
 };
 
