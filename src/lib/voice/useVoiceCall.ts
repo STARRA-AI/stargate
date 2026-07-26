@@ -192,6 +192,7 @@ export function useVoiceCall(): UseVoiceCallResult {
   const [lipSyncClip, setLipSyncClip] = useState<string | null>(null);
   const [lipSyncRendering, setLipSyncRendering] = useState(false);
   const turnPcmRef = useRef<Int16Array[]>([]);
+  const lipsyncWarmedRef = useRef(false); // fire the GPU warm-up once per call
 
   // Refs mirror the state above for use inside long-lived callbacks
   // (ws.onmessage / worklet.port.onmessage are assigned once per connect()
@@ -596,6 +597,16 @@ export function useVoiceCall(): UseVoiceCallResult {
           if (stateRef.current === "connecting" || stateRef.current === "reconnecting") {
             setCallState("listening");
           }
+          // Warm the lip-sync GPU now (once per call) so her FIRST reply renders
+          // in ~9s instead of ~55s cold. Fire-and-forget; ignore the result.
+          if (LIPSYNC_ENABLED && !lipsyncWarmedRef.current) {
+            lipsyncWarmedRef.current = true;
+            void fetch("/api/lipsync", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ warm: true }),
+            }).catch(() => {});
+          }
           if (stableTimerRef.current == null) {
             stableTimerRef.current = window.setTimeout(() => {
               stableTimerRef.current = null;
@@ -946,6 +957,9 @@ export function useVoiceCall(): UseVoiceCallResult {
   const disconnect = useCallback(() => {
     intentionalDisconnectRef.current = true;
     reconnectAttemptsRef.current = 0; // clean exit — next call starts fresh
+    lipsyncWarmedRef.current = false; // next call re-warms the lip-sync GPU
+    turnPcmRef.current = [];
+    setLipSyncClip(null);
     cleanupInternal();
     setCallState("idle");
     setError(null);
