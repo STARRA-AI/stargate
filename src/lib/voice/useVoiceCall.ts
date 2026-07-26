@@ -9,6 +9,8 @@ import {
 } from "@/lib/voice/pcm-audio";
 import { addVoiceSeconds } from "@/lib/voice/voiceCost";
 import { STARRA_VOICE_PERSONA } from "@/lib/persona";
+import { pcm16ToWavBase64 } from "@/lib/voice/wav";
+import { renderLipSync, LIPSYNC_ENABLED } from "@/lib/voice/lipsync";
 
 /**
  * Client engine for a full-duplex voice call against xAI's Realtime API.
@@ -104,6 +106,11 @@ export interface UseVoiceCallResult {
   /** Live loudness (0..1) of her audio right now — 0 unless she's speaking.
    * rAF-poll this to drive the audio-reactive face (no re-render per frame). */
   getAssistantLevel: () => number;
+  /** Lip-sync (flag-gated): a rendered word-matched talking-clip URL to play,
+   * or null. `lipSyncRendering` is true while a clip is being generated. */
+  lipSyncClip: string | null;
+  lipSyncRendering: boolean;
+  clearLipSyncClip: () => void;
 }
 
 type RealtimeTokenResponse = {
@@ -179,6 +186,12 @@ export function useVoiceCall(): UseVoiceCallResult {
   const [liveUser, setLiveUser] = useState("");
   const [liveAssistant, setLiveAssistant] = useState("");
   const [muted, setMuted] = useState(false);
+  // Lip-sync (flag-gated): when on, we DON'T play her live audio — we buffer the
+  // turn's PCM, render a word-matched talking clip (Replicate), and expose its
+  // URL for the overlay to play. lipSyncRendering drives a "one sec…" state.
+  const [lipSyncClip, setLipSyncClip] = useState<string | null>(null);
+  const [lipSyncRendering, setLipSyncRendering] = useState(false);
+  const turnPcmRef = useRef<Int16Array[]>([]);
 
   // Refs mirror the state above for use inside long-lived callbacks
   // (ws.onmessage / worklet.port.onmessage are assigned once per connect()
@@ -639,7 +652,19 @@ export function useVoiceCall(): UseVoiceCallResult {
         case "response.output_audio.delta":
         case "response.audio.delta": {
           const delta = asString(evt.delta);
-          if (delta) schedulePlayback(delta);
+          if (!delta) return;
+          if (LIPSYNC_ENABLED) {
+            // Buffer her audio instead of playing it live — we'll render a
+            // word-matched talking clip from the whole turn on response.done.
+            const bin = atob(delta);
+            const bytes = new Uint8Array(bin.length);
+            for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+            turnPcmRef.current.push(
+              new Int16Array(bytes.buffer, 0, Math.floor(bytes.byteLength / 2)),
+            );
+            return;
+          }
+          schedulePlayback(delta);
           return;
         }
 
@@ -659,6 +684,31 @@ export function useVoiceCall(): UseVoiceCallResult {
           // response's line.
           const fallback = extractResponseTranscript(evt);
           commitAssistant(currentAssistantResponseId(evt), undefined, fallback);
+
+          // Lip-sync: turn's audio is fully buffered — render a word-matched
+          // talking clip and hand its URL to the overlay to play.
+          if (LIPSYNC_ENABLED && turnPcmRef.current.length > 0) {
+            const chunks = turnPcmRef.current;
+            turnPcmRef.current = [];
+            const total = chunks.reduce((n, c) => n + c.length, 0);
+            const all = new Int16Array(total);
+            let off = 0;
+            for (const c of chunks) {
+              all.set(c, off);
+              off += c.length;
+            }
+            const wavB64 = pcm16ToWavBase64(all, REALTIME_SAMPLE_RATE);
+            setLipSyncRendering(true);
+            void renderLipSync(wavB64)
+              .then((clip) => {
+                setLipSyncRendering(false);
+                if (clip) setLipSyncClip(clip); // overlay plays it (carries audio)
+                // clip == null -> render failed; she's silent this turn (rare on
+                // the cheap tier). The call stays up; next turn tries again.
+              })
+              .catch(() => setLipSyncRendering(false));
+          }
+
           if (activeSourcesRef.current.size === 0 && stateRef.current === "speaking") {
             bargeStreakRef.current = 0;
             setCallState("listening");
@@ -915,6 +965,8 @@ export function useVoiceCall(): UseVoiceCallResult {
     [],
   );
 
+  const clearLipSyncClip = useCallback(() => setLipSyncClip(null), []);
+
   // Cleanup on unmount, in case the caller navigates away mid-call without
   // calling disconnect() explicitly.
   useEffect(() => {
@@ -935,5 +987,8 @@ export function useVoiceCall(): UseVoiceCallResult {
     muted,
     toggleMute,
     getAssistantLevel,
+    lipSyncClip,
+    lipSyncRendering,
+    clearLipSyncClip,
   };
 }

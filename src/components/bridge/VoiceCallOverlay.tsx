@@ -51,6 +51,9 @@ export function VoiceCallOverlay({
     muted,
     toggleMute,
     getAssistantLevel,
+    lipSyncClip,
+    lipSyncRendering,
+    clearLipSyncClip,
   } = useVoiceCall();
 
   const panelRef = useRef<HTMLDivElement>(null);
@@ -237,7 +240,9 @@ export function VoiceCallOverlay({
   const statusText =
     state === "error" && /microphone/i.test(error || "")
       ? "Microphone blocked"
-      : statusCopy(state);
+      : lipSyncRendering
+        ? "STARRA is putting her face on…"
+        : statusCopy(state);
 
   return (
     <div
@@ -292,6 +297,20 @@ export function VoiceCallOverlay({
           playsInline
           aria-hidden
         />
+        {/* Lip-sync (flag-gated): her rendered word-matched talking clip. When a
+            clip URL arrives it plays full-screen ON TOP with its own audio, then
+            clears when finished — she's back to the idle/reactive face. */}
+        {lipSyncClip ? (
+          <video
+            className="call-face-video call-face-lipsync"
+            src={lipSyncClip}
+            autoPlay
+            playsInline
+            onEnded={clearLipSyncClip}
+            onError={clearLipSyncClip}
+            style={{ opacity: 1, zIndex: 2 }}
+          />
+        ) : null}
         {/* speaking glow — intensity rides her live voice (--starra-level) */}
         <div className="call-face-glow" aria-hidden />
         {/* readability scrim behind the top status + bottom controls */}

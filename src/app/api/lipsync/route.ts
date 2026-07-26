@@ -1,28 +1,33 @@
 import { NextResponse } from "next/server";
+import fs from "fs";
+import path from "path";
 
 export const runtime = "nodejs";
 
-const colabUrl = () => (process.env.COLAB_LIPSYNC_URL || "").trim().replace(/\/$/, "");
-// gradio api_name the Colab notebook exposes (proven pattern: "/render").
-const RENDER_API = process.env.COLAB_LIPSYNC_API || "/render";
+// Replicate hosts the talking-head model on THEIR GPU (Charles's Mac has no
+// NVIDIA GPU, and this needs one) — no Colab, no notebook. The token stays
+// server-side (like the xAI key). Default model = cjwbw/sadtalker (~$0.03/run);
+// override REPLICATE_LIPSYNC_MODEL to upgrade (e.g. bytedance/omni-human).
+const token = () => (process.env.REPLICATE_API_TOKEN || "").trim();
+const MODEL = process.env.REPLICATE_LIPSYNC_MODEL || "cjwbw/sadtalker";
+
+/** Her fixed portrait, sent as the lip-sync source, as a data URI. */
+function portraitDataURI(): string {
+  const p = path.join(process.cwd(), "public", "avatar", "starra-portrait.jpg");
+  const b64 = fs.readFileSync(p).toString("base64");
+  return `data:image/jpeg;base64,${b64}`;
+}
 
 /**
- * Proxy her spoken-turn WAV to the Colab Pro / MuseTalk renderer and return the
- * talking-clip URL. Keeps COLAB_LIPSYNC_URL server-side — never reaches the
- * browser — exactly as /api/realtime keeps the xAI key server-side.
- *
- * Contract, grounded in the proven python `lipsync/colab_engine.py` which calls
- * gradio `predict(..., api_name="/render")`: the Colab notebook registers her
- * MuseTalk avatar once, then this endpoint sends only her turn AUDIO and gets
- * back a photoreal video whose whole face is locked to that audio. Set
- * COLAB_LIPSYNC_API if the notebook's api_name differs.
- *
- * NOTE: the gradio HTTP flow below (upload -> /call -> poll) matches gradio 4/5;
- * it is UNVERIFIED against a live endpoint — align once the Colab Pro URL is set.
+ * Render her spoken-turn audio → a talking-head video with lips matched to the
+ * words, via Replicate. Takes { wav: base64 } (her exact xAI turn audio); sends
+ * her portrait + that audio to the hosted model; polls the prediction; returns
+ * { mode:"live", video: url }. { mode:"off" } when no token is set (caller falls
+ * back to the reactive face). Turn-based: ~30-60s render on the host GPU.
  */
 export async function POST(req: Request) {
-  const base = colabUrl();
-  if (!base) return NextResponse.json({ mode: "off" });
+  const key = token();
+  if (!key) return NextResponse.json({ mode: "off" });
 
   let wav: string | undefined;
   try {
@@ -34,48 +39,96 @@ export async function POST(req: Request) {
     return NextResponse.json({ mode: "error", message: "no audio" }, { status: 400 });
   }
 
+  // A real User-Agent is REQUIRED — Replicate sits behind Cloudflare, which
+  // 403s (error 1010) a default/absent UA. Verified: the same call 403s without
+  // this header and succeeds with it.
+  const headers = {
+    Authorization: `Bearer ${key}`,
+    "Content-Type": "application/json",
+    "User-Agent": "STARGATE/1.0",
+  };
+
   try {
-    // 1) upload the WAV to gradio's file store
-    const bytes = Buffer.from(wav, "base64");
-    const form = new FormData();
-    form.append("files", new Blob([bytes], { type: "audio/wav" }), "turn.wav");
-    const up = await fetch(`${base}/upload`, {
-      method: "POST",
-      body: form,
-      signal: AbortSignal.timeout(60_000),
+    // 1a) resolve the model's latest version (verified path; the bare model
+    // endpoint 404'd behind Cloudflare).
+    const modelRes = await fetch(`https://api.replicate.com/v1/models/${MODEL}`, {
+      headers,
+      signal: AbortSignal.timeout(30_000),
     });
-    if (!up.ok) throw new Error(`upload ${up.status}`);
-    const uploaded = (await up.json()) as string[];
-    const filePath = uploaded[0];
-    if (!filePath) throw new Error("upload returned no path");
+    if (!modelRes.ok) {
+      return NextResponse.json(
+        { mode: "error", message: `model ${modelRes.status}` },
+        { status: 502 },
+      );
+    }
+    const model = (await modelRes.json()) as { latest_version?: { id?: string } };
+    const version = model.latest_version?.id;
+    if (!version) {
+      return NextResponse.json({ mode: "error", message: "no model version" }, { status: 502 });
+    }
 
-    // 2) invoke the render endpoint with the uploaded file ref
-    const call = await fetch(`${base}/call${RENDER_API}`, {
+    // 1b) create the prediction with that version
+    const create = await fetch(`https://api.replicate.com/v1/predictions`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify({
-        data: [{ path: filePath, meta: { _type: "gradio.FileData" } }],
+        version,
+        input: {
+          source_image: portraitDataURI(),
+          driven_audio: `data:audio/wav;base64,${wav}`,
+        },
       }),
-      signal: AbortSignal.timeout(60_000),
+      signal: AbortSignal.timeout(30_000),
     });
-    if (!call.ok) throw new Error(`call ${call.status}`);
-    const { event_id: eventId } = (await call.json()) as { event_id?: string };
-    if (!eventId) throw new Error("no event id");
+    if (!create.ok) {
+      const detail = await create.text();
+      return NextResponse.json(
+        { mode: "error", message: `create ${create.status}: ${detail.slice(0, 300)}` },
+        { status: 502 },
+      );
+    }
+    const pred = (await create.json()) as {
+      id?: string;
+      status?: string;
+      output?: unknown;
+      error?: string;
+      urls?: { get?: string };
+    };
 
-    // 3) poll the SSE result stream for the completed video
-    const stream = await fetch(`${base}/call${RENDER_API}/${eventId}`, {
-      signal: AbortSignal.timeout(120_000),
-    });
-    const text = await stream.text();
-    const dataLine = text
-      .split("\n")
-      .reverse()
-      .find((l) => l.startsWith("data:"));
-    const payload = dataLine ? JSON.parse(dataLine.slice(5).trim()) : null;
-    const first = Array.isArray(payload) ? payload[0] : payload;
+    // 2) poll until terminal (sadtalker ~30-60s; cap ~4 min)
+    const getUrl = pred.urls?.get;
+    let state = pred;
+    const deadline = Date.now() + 240_000;
+    while (
+      getUrl &&
+      (state.status === "starting" || state.status === "processing") &&
+      Date.now() < deadline
+    ) {
+      await new Promise((r) => setTimeout(r, 2500));
+      const poll = await fetch(getUrl, { headers, signal: AbortSignal.timeout(30_000) });
+      if (!poll.ok) break;
+      state = (await poll.json()) as typeof pred;
+    }
+
+    if (state.status !== "succeeded") {
+      return NextResponse.json(
+        { mode: "error", message: state.error || `status ${state.status || "timeout"}` },
+        { status: 502 },
+      );
+    }
+
+    // 3) extract the video URL (sadtalker returns a string; other models an array/obj)
+    const out = state.output;
     const url =
-      typeof first === "string" ? first : first?.url ?? first?.video ?? first?.path;
-    if (!url || typeof url !== "string") throw new Error("no video in result");
+      typeof out === "string"
+        ? out
+        : Array.isArray(out)
+          ? (out[out.length - 1] as string)
+          : (out as { video?: string; url?: string })?.video ??
+            (out as { url?: string })?.url;
+    if (!url || typeof url !== "string") {
+      return NextResponse.json({ mode: "error", message: "no video in result" }, { status: 502 });
+    }
 
     return NextResponse.json({ mode: "live", video: url });
   } catch (e) {
