@@ -266,6 +266,29 @@ starra — wake STARGATE
 EOF
 }
 
+# lipsync <gradio-url> — point her lip-sync at a fresh Colab JoyVASA endpoint.
+# Colab links are ephemeral (die when the session times out), so re-running the
+# notebook prints a NEW url; this is the one-line way to refresh it + enable
+# lip-sync + restart the deck so it takes effect. `starra lipsync off` disables.
+cmd_lipsync() {
+  local url="${1:-}"
+  local env="$PROJ/.env.local"
+  touch "$env"
+  # strip any existing COLAB_LIPSYNC_URL / NEXT_PUBLIC_LIPSYNC lines
+  grep -vE '^(COLAB_LIPSYNC_URL|NEXT_PUBLIC_LIPSYNC)=' "$env" > "$env.tmp" 2>/dev/null || true
+  mv "$env.tmp" "$env"
+  if [[ -z "$url" || "$url" == "off" ]]; then
+    printf 'COLAB_LIPSYNC_URL=\nNEXT_PUBLIC_LIPSYNC=0\n' >> "$env"
+    echo "lip-sync OFF (using her fluid clips)."
+  else
+    printf 'COLAB_LIPSYNC_URL=%s\nNEXT_PUBLIC_LIPSYNC=1\n' "$url" >> "$env"
+    echo "lip-sync ON -> $url"
+  fi
+  echo "restarting the deck so it picks up the change…"
+  cmd_stop >/dev/null 2>&1 || true
+  cmd_up
+}
+
 main() {
   local cmd="${1:-}"
   case "$cmd" in
@@ -274,6 +297,7 @@ main() {
     stop|down) cmd_stop ;;
     status|st) cmd_status ;;
     install) cmd_install ;;
+    lipsync) shift; cmd_lipsync "${1:-}" ;;
     -h|--help|help) usage ;;
     *)
       echo "Unknown: $cmd"
