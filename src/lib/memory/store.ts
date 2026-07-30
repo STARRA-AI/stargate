@@ -53,6 +53,16 @@ export async function saveMemory(store: MemoryStore): Promise<MemoryStore> {
   return store;
 }
 
+/**
+ * How many raw exchanges stay verbatim in working memory. RAISED 10 → 24
+ * (2026-07-30, Classic: "she can't recall things") — the last-10 window was
+ * the measured cause of shallow recall on every surface. 24 is safe everywhere
+ * it is read: the Kimi/Groq chat prompt clips itself to budget downstream
+ * (api/chat clampToBudget), the call digest clips at 4000 chars in
+ * useVoiceCall, and Grok/Anthropic take it whole.
+ */
+export const WORKING_WINDOW = 24;
+
 export async function recordExchange(
   role: "user" | "assistant",
   content: string,
@@ -64,9 +74,9 @@ export async function recordExchange(
     at: new Date().toISOString(),
   });
 
-  // Keep last ~10 raw exchanges in working; roll older into summary every 30
-  if (store.working.length > 10) {
-    const overflow = store.working.splice(0, store.working.length - 10);
+  // Keep the last WORKING_WINDOW raw exchanges verbatim; roll older into archival
+  if (store.working.length > WORKING_WINDOW) {
+    const overflow = store.working.splice(0, store.working.length - WORKING_WINDOW);
     const blob = overflow.map((e) => `${e.role}: ${e.content}`).join(" | ");
     store.archival.push({
       id: `arc-${Date.now()}`,
@@ -77,9 +87,9 @@ export async function recordExchange(
 
   const totalMsgs =
     store.working.length + store.summaries.length * 30 + store.archival.length;
-  if (totalMsgs > 0 && store.working.length === 10 && store.working.length % 2 === 0) {
+  if (totalMsgs > 0 && store.working.length === WORKING_WINDOW) {
     // Lightweight rolling summary without requiring LLM
-    if (store.working.length >= 10 && store.summaries.length < Math.floor(store.archival.length / 3) + 1) {
+    if (store.summaries.length < Math.floor(store.archival.length / 3) + 1) {
       const para = store.working
         .map((e) => e.content)
         .join(" ")
@@ -98,10 +108,17 @@ export function memoryForPrompt(store: MemoryStore, query: string): string {
   const hits = store.archival
     .filter((a) => a.text.toLowerCase().includes(q.slice(0, 24)) || q.length < 3)
     .slice(-5);
+  // Working is rendered NEWEST FIRST on purpose: both consumers truncate this
+  // block from the tail (api/chat clips the system prompt to budget; the call
+  // digest slices at 4000 chars), so whatever gets cut must be the OLDEST
+  // exchanges, never the most recent ones.
   return [
     "MEMORY TIERS",
-    `Working (${store.working.length}): ${store.working.map((e) => `${e.role}: ${e.content}`).join(" || ") || "empty"}`,
-    `Summaries (${store.summaries.length}): ${store.summaries.slice(-3).join(" || ") || "empty"}`,
+    `Working (${store.working.length}, newest first): ${[...store.working]
+      .reverse()
+      .map((e) => `${e.role}: ${e.content}`)
+      .join(" || ") || "empty"}`,
+    `Summaries (${store.summaries.length}): ${store.summaries.slice(-5).join(" || ") || "empty"}`,
     `Archival hits (${hits.length}): ${hits.map((h) => h.text).join(" || ") || "none"}`,
   ].join("\n");
 }

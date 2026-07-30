@@ -98,6 +98,46 @@ describe("one session — typed messages ride the live call", () => {
   });
 });
 
+describe("recall depth — the store carries enough to actually remember", () => {
+  it("the working window is at least 20 exchanges (was 10 — the shallow-recall bug)", async () => {
+    const { WORKING_WINDOW } = await import("../src/lib/memory/store");
+    assert.ok(
+      WORKING_WINDOW >= 20,
+      `WORKING_WINDOW is ${WORKING_WINDOW} — shrinking it below 20 reintroduces "she can't recall things"`,
+    );
+  });
+
+  it("memoryForPrompt renders working NEWEST first, so truncation drops the oldest", async () => {
+    const { memoryForPrompt } = await import("../src/lib/memory/store");
+    const store = {
+      working: [
+        { role: "user" as const, content: "OLDEST-MARKER", at: "t0" },
+        { role: "assistant" as const, content: "middle", at: "t1" },
+        { role: "user" as const, content: "NEWEST-MARKER", at: "t2" },
+      ],
+      summaries: [],
+      archival: [],
+    };
+    const block = memoryForPrompt(store, "");
+    const newestAt = block.indexOf("NEWEST-MARKER");
+    const oldestAt = block.indexOf("OLDEST-MARKER");
+    assert.ok(newestAt > 0 && oldestAt > 0, "both markers must render");
+    assert.ok(
+      newestAt < oldestAt,
+      "newest exchange must come first — both consumers truncate from the tail",
+    );
+  });
+
+  it("recordExchange rolls overflow at WORKING_WINDOW, not a stale hardcoded 10", () => {
+    const src = read("src/lib/memory/store.ts");
+    assert.match(src, /store\.working\.length > WORKING_WINDOW/);
+    assert.ok(
+      !/working\.length > 10\b/.test(src),
+      "hardcoded window survived the WORKING_WINDOW extraction",
+    );
+  });
+});
+
 describe("the locked rules actually load", () => {
   it("STARRA_PERSONALITY.md fits the brain's clip budget", () => {
     const size = Buffer.byteLength(read("STARRA_PERSONALITY.md"), "utf8");
