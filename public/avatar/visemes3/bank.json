@@ -1,26 +1,26 @@
 {
  "version": 4,
- "builder": "scripts/build-viseme-bank-3.py",
+ "builder": "scripts/build-viseme-bank-3.py --v4",
  "source": "/avatar/body/base_loop.mp4",
- "sourceFootage": "e heavy.mp4 (768x1168 @24fps, 361 frames) \u2014 the SAME clip the base is cut from, so the mouth matches the body by construction",
- "width": 128,
- "height": 91,
+ "sourceFootage": "e heavy.mp4 (768x1168 @24fps, 361 frames) via bit-exact FFV1 recovery \u2014 the SAME take the base loop derives from",
+ "width": 131,
+ "height": 78,
  "fps": 24.0,
  "poseFloor": 0.93,
  "axes": {
-  "openness": "0 = lips shut, 1 = the widest real aperture. From MEASURED vertical aperture in px: 0 at the 6px shut floor (the dark lip seam), 1 at 48px. Not a discriminant \u2014 a real distance.",
+  "openness": "0 = lips shut, 1 = the widest real aperture. From MEASURED vertical aperture in px: 0 at the 6px shut floor (the dark lip seam), 1 at 48px.",
   "roundness": "1 = rounded/narrow (oo, w), 0 = spread/wide (ee). From MEASURED corner-to-corner lip width: 87px -> 0, 65px -> 1.",
-  "independence": "corr(width, aperture) = +0.146 on this footage. Near zero, so the two axes are genuinely independent and the 2-D lookup carries information a 1-D ladder cannot."
+  "independence": "corr(width, aperture) = +0.146 on this footage."
  },
- "closedId": "m01",
+ "closedId": "m_closed",
  "coverage": {
   "framesMeasured": 361,
   "poseEligible": 356,
   "requestedCells": 15,
-  "distinctRealFrames": 15,
-  "approximatedCells": 2,
+  "distinctRealFrames": 16,
+  "approximatedCells": 0,
   "emptyCells": 0,
-  "note": "HONEST COVERAGE. Every entry is a pure ffmpeg crop of one real frame of her footage; nothing is interpolated, inpainted or synthesised. Cells further than 0.14 from their request in the 2-D plane are flagged `approximation: true` and resolve to the nearest REAL frame. 'ooo heavy.mp4' was measured and DELIBERATELY NOT USED: it passes the pose gate on only 54/361 frames and its lip-width range (58..79px) is strictly narrower than e heavy's (59..91px), so it fills 5 of 9 grid cells and none of them uniquely.",
+  "note": "HONEST COVERAGE. Every entry is a crop of one real frame of her footage, INTER_AREA-downscaled ONCE to base scale; nothing interpolated, inpainted or synthesised. FIVE roundness columns (was 3) so the smoothed audio roundness axis lands on real intermediate shapes.",
   "cells": [
    {
     "requestedOpenness": 0.0,
@@ -35,12 +35,34 @@
    },
    {
     "requestedOpenness": 0.0,
+    "requestedRoundness": 0.275,
+    "requestedLabel": "semi-spread",
+    "resolvedFrame": 96,
+    "trueOpenness": 0.0,
+    "trueRoundness": 0.2685,
+    "distance": 0.0065,
+    "approximation": false,
+    "empty": false
+   },
+   {
+    "requestedOpenness": 0.0,
     "requestedRoundness": 0.5,
     "requestedLabel": "neutral",
     "resolvedFrame": 2,
     "trueOpenness": 0.0,
     "trueRoundness": 0.4922,
     "distance": 0.0078,
+    "approximation": false,
+    "empty": false
+   },
+   {
+    "requestedOpenness": 0.0,
+    "requestedRoundness": 0.725,
+    "requestedLabel": "semi-round",
+    "resolvedFrame": 54,
+    "trueOpenness": 0.0,
+    "trueRoundness": 0.7159,
+    "distance": 0.0091,
     "approximation": false,
     "empty": false
    },
@@ -68,12 +90,34 @@
    },
    {
     "requestedOpenness": 0.25,
+    "requestedRoundness": 0.275,
+    "requestedLabel": "semi-spread",
+    "resolvedFrame": 84,
+    "trueOpenness": 0.2857,
+    "trueRoundness": 0.3132,
+    "distance": 0.0523,
+    "approximation": false,
+    "empty": false
+   },
+   {
+    "requestedOpenness": 0.25,
     "requestedRoundness": 0.5,
     "requestedLabel": "neutral",
     "resolvedFrame": 13,
     "trueOpenness": 0.2381,
     "trueRoundness": 0.5369,
     "distance": 0.0388,
+    "approximation": false,
+    "empty": false
+   },
+   {
+    "requestedOpenness": 0.25,
+    "requestedRoundness": 0.725,
+    "requestedLabel": "semi-round",
+    "resolvedFrame": 195,
+    "trueOpenness": 0.2619,
+    "trueRoundness": 0.8054,
+    "distance": 0.0812,
     "approximation": false,
     "empty": false
    },
@@ -101,12 +145,34 @@
    },
    {
     "requestedOpenness": 0.5,
+    "requestedRoundness": 0.275,
+    "requestedLabel": "semi-spread",
+    "resolvedFrame": 72,
+    "trueOpenness": 0.5,
+    "trueRoundness": 0.2685,
+    "distance": 0.0065,
+    "approximation": false,
+    "empty": false
+   },
+   {
+    "requestedOpenness": 0.5,
     "requestedRoundness": 0.5,
     "requestedLabel": "neutral",
-    "resolvedFrame": 268,
-    "trueOpenness": 0.4762,
-    "trueRoundness": 0.4474,
-    "distance": 0.0577,
+    "resolvedFrame": 62,
+    "trueOpenness": 0.5,
+    "trueRoundness": 0.5369,
+    "distance": 0.0369,
+    "approximation": false,
+    "empty": false
+   },
+   {
+    "requestedOpenness": 0.5,
+    "requestedRoundness": 0.725,
+    "requestedLabel": "semi-round",
+    "resolvedFrame": 67,
+    "trueOpenness": 0.5238,
+    "trueRoundness": 0.6264,
+    "distance": 0.1014,
     "approximation": false,
     "empty": false
    },
@@ -120,72 +186,6 @@
     "distance": 0.05,
     "approximation": false,
     "empty": false
-   },
-   {
-    "requestedOpenness": 0.75,
-    "requestedRoundness": 0.05,
-    "requestedLabel": "spread",
-    "resolvedFrame": 35,
-    "trueOpenness": 0.7619,
-    "trueRoundness": 0.0895,
-    "distance": 0.0412,
-    "approximation": false,
-    "empty": false
-   },
-   {
-    "requestedOpenness": 0.75,
-    "requestedRoundness": 0.5,
-    "requestedLabel": "neutral",
-    "resolvedFrame": 155,
-    "trueOpenness": 0.7381,
-    "trueRoundness": 0.4027,
-    "distance": 0.098,
-    "approximation": false,
-    "empty": false
-   },
-   {
-    "requestedOpenness": 0.75,
-    "requestedRoundness": 0.95,
-    "requestedLabel": "rounded",
-    "resolvedFrame": 176,
-    "trueOpenness": 0.7381,
-    "trueRoundness": 0.9396,
-    "distance": 0.0158,
-    "approximation": false,
-    "empty": false
-   },
-   {
-    "requestedOpenness": 1.0,
-    "requestedRoundness": 0.05,
-    "requestedLabel": "spread",
-    "resolvedFrame": 26,
-    "trueOpenness": 1.0,
-    "trueRoundness": 0.1342,
-    "distance": 0.0842,
-    "approximation": false,
-    "empty": false
-   },
-   {
-    "requestedOpenness": 1.0,
-    "requestedRoundness": 0.5,
-    "requestedLabel": "neutral",
-    "resolvedFrame": 58,
-    "trueOpenness": 0.9524,
-    "trueRoundness": 0.2685,
-    "distance": 0.2364,
-    "approximation": true,
-    "empty": false
-   },
-   {
-    "requestedOpenness": 1.0,
-    "requestedRoundness": 0.95,
-    "requestedLabel": "rounded",
-    "resolvedFrame": 176,
-    "trueOpenness": 0.7381,
-    "trueRoundness": 0.9396,
-    "distance": 0.2621,
-    "approximation": true,
-    "empty": false
    }
   ]
  },
@@ -196,30 +196,30 @@
    "openness": 0.0,
    "roundness": 0.8949,
    "sourceFrame": 206,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9613,
    "label": "closed",
    "aperturePx": 2.0,
    "widthPx": 67.0,
    "lipsTouchingFrac": 0.909,
    "box": {
-    "x": 290,
-    "y": 340,
-    "w": 192,
-    "h": 137
+    "x": 284,
+    "y": 369,
+    "w": 205,
+    "h": 122
    },
-   "sourceScale": 1.0,
+   "sourceScale": 0.98,
    "scaleMatchesBase": false,
    "approximation": false,
-   "note": "Dedicated bilabial /m/ /b/ /p/. GENUINELY SHUT, proven not asserted: aperture 2px (the shut floor is the 6px dark lip seam) and the lip mask is a single unbroken run in 91% of centre-band columns. The previous bank's floor was 0.0814 openness \u2014 it had nothing fully closed.",
+   "note": "Dedicated bilabial /m/ /b/ /p/: aperture 2px, width 67px (neutral, so a closure never puckers), lips touching in 91% of centre-band columns.",
    "baseBox": {
-    "x": 213,
-    "y": 215,
-    "w": 128,
-    "h": 91
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
    },
-   "registration": 0.8701,
-   "targetScale": 0.67
+   "registration": 0.7887,
+   "targetScale": 0.625
   },
   {
    "id": "m00",
@@ -227,50 +227,83 @@
    "openness": 0.0,
    "roundness": 1.0,
    "sourceFrame": 199,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.939,
    "label": "closed-oo",
    "aperturePx": 6.0,
    "widthPx": 64.0,
    "lipsTouchingFrac": 0.212,
    "box": {
-    "x": 293,
-    "y": 338,
-    "w": 188,
-    "h": 134
+    "x": 287,
+    "y": 367,
+    "w": 201,
+    "h": 120
    },
-   "sourceScale": 1.0,
+   "sourceScale": 0.96,
    "scaleMatchesBase": false,
    "requestedOpenness": 0.0,
    "requestedRoundness": 0.95,
    "cellDistance": 0.05,
    "approximation": false,
    "baseBox": {
-    "x": 213,
-    "y": 216,
-    "w": 125,
-    "h": 89
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
    },
-   "registration": 0.8326,
-   "targetScale": 0.67
+   "registration": 0.7633,
+   "targetScale": 0.625
   },
   {
    "id": "m01",
    "file": "/avatar/visemes3/m01.png",
    "openness": 0.0,
+   "roundness": 0.7159,
+   "sourceFrame": 54,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.934,
+   "label": "closed-oo",
+   "aperturePx": 5.0,
+   "widthPx": 71.0,
+   "lipsTouchingFrac": 0.333,
+   "box": {
+    "x": 285,
+    "y": 371,
+    "w": 205,
+    "h": 122
+   },
+   "sourceScale": 0.98,
+   "scaleMatchesBase": false,
+   "requestedOpenness": 0.0,
+   "requestedRoundness": 0.725,
+   "cellDistance": 0.0091,
+   "approximation": false,
+   "baseBox": {
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
+   },
+   "registration": 0.8806,
+   "targetScale": 0.625
+  },
+  {
+   "id": "m02",
+   "file": "/avatar/visemes3/m02.png",
+   "openness": 0.0,
    "roundness": 0.4922,
    "sourceFrame": 2,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9962,
    "label": "closed",
    "aperturePx": 6.0,
    "widthPx": 76.0,
    "lipsTouchingFrac": 0.121,
    "box": {
-    "x": 288,
-    "y": 358,
-    "w": 196,
-    "h": 140
+    "x": 282,
+    "y": 388,
+    "w": 209,
+    "h": 125
    },
    "sourceScale": 1.0,
    "scaleMatchesBase": true,
@@ -280,30 +313,63 @@
    "approximation": false,
    "baseBox": {
     "x": 212,
-    "y": 220,
+    "y": 242,
     "w": 131,
-    "h": 93
+    "h": 78
    },
-   "registration": 0.9582,
-   "targetScale": 0.67
+   "registration": 0.9823,
+   "targetScale": 0.625
   },
   {
-   "id": "m02",
-   "file": "/avatar/visemes3/m02.png",
+   "id": "m03",
+   "file": "/avatar/visemes3/m03.png",
+   "openness": 0.0,
+   "roundness": 0.2685,
+   "sourceFrame": 96,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.9881,
+   "label": "closed",
+   "aperturePx": 6.0,
+   "widthPx": 81.0,
+   "lipsTouchingFrac": 0.0,
+   "box": {
+    "x": 281,
+    "y": 388,
+    "w": 209,
+    "h": 125
+   },
+   "sourceScale": 1.0,
+   "scaleMatchesBase": true,
+   "requestedOpenness": 0.0,
+   "requestedRoundness": 0.275,
+   "cellDistance": 0.0065,
+   "approximation": false,
+   "baseBox": {
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
+   },
+   "registration": 0.9828,
+   "targetScale": 0.625
+  },
+  {
+   "id": "m04",
+   "file": "/avatar/visemes3/m04.png",
    "openness": 0.0,
    "roundness": 0.1342,
    "sourceFrame": 95,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9876,
    "label": "closed",
    "aperturePx": 6.0,
    "widthPx": 84.0,
    "lipsTouchingFrac": 0.0,
    "box": {
-    "x": 288,
-    "y": 358,
-    "w": 196,
-    "h": 140
+    "x": 282,
+    "y": 388,
+    "w": 209,
+    "h": 125
    },
    "sourceScale": 1.0,
    "scaleMatchesBase": true,
@@ -313,30 +379,30 @@
    "approximation": false,
    "baseBox": {
     "x": 212,
-    "y": 221,
+    "y": 242,
     "w": 131,
-    "h": 93
+    "h": 78
    },
-   "registration": 0.9521,
-   "targetScale": 0.67
+   "registration": 0.9811,
+   "targetScale": 0.625
   },
   {
-   "id": "m03",
-   "file": "/avatar/visemes3/m03.png",
+   "id": "m05",
+   "file": "/avatar/visemes3/m05.png",
    "openness": 0.1905,
    "roundness": 0.0447,
    "sourceFrame": 270,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9827,
    "label": "ee",
    "aperturePx": 14.0,
    "widthPx": 86.0,
    "lipsTouchingFrac": 0.0,
    "box": {
-    "x": 289,
-    "y": 355,
-    "w": 196,
-    "h": 140
+    "x": 283,
+    "y": 385,
+    "w": 209,
+    "h": 125
    },
    "sourceScale": 1.0,
    "scaleMatchesBase": true,
@@ -345,31 +411,31 @@
    "cellDistance": 0.0598,
    "approximation": false,
    "baseBox": {
-    "x": 211,
-    "y": 219,
+    "x": 212,
+    "y": 242,
     "w": 131,
-    "h": 93
+    "h": 78
    },
-   "registration": 0.8779,
-   "targetScale": 0.67
+   "registration": 0.9301,
+   "targetScale": 0.625
   },
   {
-   "id": "m04",
-   "file": "/avatar/visemes3/m04.png",
+   "id": "m06",
+   "file": "/avatar/visemes3/m06.png",
    "openness": 0.2381,
    "roundness": 0.5369,
    "sourceFrame": 13,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9939,
    "label": "eh",
    "aperturePx": 16.0,
    "widthPx": 75.0,
    "lipsTouchingFrac": 0.0,
    "box": {
-    "x": 288,
-    "y": 354,
-    "w": 196,
-    "h": 140
+    "x": 282,
+    "y": 384,
+    "w": 209,
+    "h": 125
    },
    "sourceScale": 1.0,
    "scaleMatchesBase": true,
@@ -379,129 +445,228 @@
    "approximation": false,
    "baseBox": {
     "x": 212,
-    "y": 218,
+    "y": 242,
     "w": 131,
-    "h": 93
+    "h": 78
    },
-   "registration": 0.867,
-   "targetScale": 0.67
+   "registration": 0.8886,
+   "targetScale": 0.625
   },
   {
-   "id": "m05",
-   "file": "/avatar/visemes3/m05.png",
+   "id": "m07",
+   "file": "/avatar/visemes3/m07.png",
    "openness": 0.2619,
    "roundness": 0.9843,
    "sourceFrame": 202,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9529,
    "label": "oo-small",
    "aperturePx": 17.0,
    "widthPx": 65.0,
    "lipsTouchingFrac": 0.152,
    "box": {
-    "x": 292,
-    "y": 338,
-    "w": 188,
-    "h": 134
+    "x": 286,
+    "y": 367,
+    "w": 201,
+    "h": 120
    },
-   "sourceScale": 1.0,
+   "sourceScale": 0.96,
    "scaleMatchesBase": false,
    "requestedOpenness": 0.25,
    "requestedRoundness": 0.95,
    "cellDistance": 0.0363,
    "approximation": false,
    "baseBox": {
-    "x": 213,
-    "y": 209,
-    "w": 125,
-    "h": 89
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
    },
-   "registration": 0.7764,
-   "targetScale": 0.67
+   "registration": 0.6755,
+   "targetScale": 0.625
   },
   {
-   "id": "m06",
-   "file": "/avatar/visemes3/m06.png",
-   "openness": 0.4762,
-   "roundness": 0.4474,
-   "sourceFrame": 268,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
-   "poseConfidence": 0.978,
-   "label": "ah",
-   "aperturePx": 26.0,
-   "widthPx": 77.0,
-   "lipsTouchingFrac": 0.0,
+   "id": "m08",
+   "file": "/avatar/visemes3/m08.png",
+   "openness": 0.2619,
+   "roundness": 0.8054,
+   "sourceFrame": 195,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.9465,
+   "label": "oo-small",
+   "aperturePx": 17.0,
+   "widthPx": 69.0,
+   "lipsTouchingFrac": 0.152,
    "box": {
-    "x": 289,
-    "y": 354,
-    "w": 196,
-    "h": 140
+    "x": 287,
+    "y": 366,
+    "w": 201,
+    "h": 120
    },
-   "sourceScale": 1.0,
-   "scaleMatchesBase": true,
-   "requestedOpenness": 0.5,
-   "requestedRoundness": 0.5,
-   "cellDistance": 0.0577,
+   "sourceScale": 0.96,
+   "scaleMatchesBase": false,
+   "requestedOpenness": 0.25,
+   "requestedRoundness": 0.725,
+   "cellDistance": 0.0812,
    "approximation": false,
    "baseBox": {
     "x": 212,
-    "y": 222,
+    "y": 242,
     "w": 131,
-    "h": 93
+    "h": 78
    },
-   "registration": 0.7867,
-   "targetScale": 0.67
+   "registration": 0.7044,
+   "targetScale": 0.625
   },
   {
-   "id": "m07",
-   "file": "/avatar/visemes3/m07.png",
+   "id": "m09",
+   "file": "/avatar/visemes3/m09.png",
+   "openness": 0.2857,
+   "roundness": 0.3132,
+   "sourceFrame": 84,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.976,
+   "label": "ee",
+   "aperturePx": 18.0,
+   "widthPx": 80.0,
+   "lipsTouchingFrac": 0.0,
+   "box": {
+    "x": 282,
+    "y": 386,
+    "w": 209,
+    "h": 125
+   },
+   "sourceScale": 1.0,
+   "scaleMatchesBase": true,
+   "requestedOpenness": 0.25,
+   "requestedRoundness": 0.275,
+   "cellDistance": 0.0523,
+   "approximation": false,
+   "baseBox": {
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
+   },
+   "registration": 0.8927,
+   "targetScale": 0.625
+  },
+  {
+   "id": "m10",
+   "file": "/avatar/visemes3/m10.png",
    "openness": 0.5,
    "roundness": 1.0,
    "sourceFrame": 166,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.944,
    "label": "oo",
    "aperturePx": 27.0,
    "widthPx": 63.0,
    "lipsTouchingFrac": 0.061,
    "box": {
-    "x": 293,
-    "y": 337,
-    "w": 188,
-    "h": 134
+    "x": 287,
+    "y": 366,
+    "w": 201,
+    "h": 120
    },
-   "sourceScale": 1.0,
+   "sourceScale": 0.96,
    "scaleMatchesBase": false,
    "requestedOpenness": 0.5,
    "requestedRoundness": 0.95,
    "cellDistance": 0.05,
    "approximation": false,
    "baseBox": {
-    "x": 213,
-    "y": 205,
-    "w": 125,
-    "h": 89
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
    },
-   "registration": 0.7459,
-   "targetScale": 0.67
+   "registration": 0.6704,
+   "targetScale": 0.625
   },
   {
-   "id": "m08",
-   "file": "/avatar/visemes3/m08.png",
+   "id": "m11",
+   "file": "/avatar/visemes3/m11.png",
+   "openness": 0.5,
+   "roundness": 0.5369,
+   "sourceFrame": 62,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.9498,
+   "label": "ah",
+   "aperturePx": 27.0,
+   "widthPx": 75.0,
+   "lipsTouchingFrac": 0.0,
+   "box": {
+    "x": 284,
+    "y": 370,
+    "w": 205,
+    "h": 122
+   },
+   "sourceScale": 0.98,
+   "scaleMatchesBase": false,
+   "requestedOpenness": 0.5,
+   "requestedRoundness": 0.5,
+   "cellDistance": 0.0369,
+   "approximation": false,
+   "baseBox": {
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
+   },
+   "registration": 0.7416,
+   "targetScale": 0.625
+  },
+  {
+   "id": "m12",
+   "file": "/avatar/visemes3/m12.png",
+   "openness": 0.5,
+   "roundness": 0.2685,
+   "sourceFrame": 72,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.9749,
+   "label": "ee-open",
+   "aperturePx": 27.0,
+   "widthPx": 81.0,
+   "lipsTouchingFrac": 0.0,
+   "box": {
+    "x": 284,
+    "y": 374,
+    "w": 205,
+    "h": 122
+   },
+   "sourceScale": 0.98,
+   "scaleMatchesBase": false,
+   "requestedOpenness": 0.5,
+   "requestedRoundness": 0.275,
+   "cellDistance": 0.0065,
+   "approximation": false,
+   "baseBox": {
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
+   },
+   "registration": 0.7454,
+   "targetScale": 0.625
+  },
+  {
+   "id": "m13",
+   "file": "/avatar/visemes3/m13.png",
    "openness": 0.5,
    "roundness": 0.0895,
    "sourceFrame": 28,
-   "sourceClip": "/avatar/clips/base_speak.mp4 source: e heavy.mp4",
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
    "poseConfidence": 0.9419,
    "label": "ee-open",
    "aperturePx": 27.0,
    "widthPx": 85.0,
    "lipsTouchingFrac": 0.0,
    "box": {
-    "x": 289,
-    "y": 336,
-    "w": 196,
-    "h": 140
+    "x": 283,
+    "y": 366,
+    "w": 209,
+    "h": 125
    },
    "sourceScale": 1.0,
    "scaleMatchesBase": true,
@@ -510,18 +675,49 @@
    "cellDistance": 0.0395,
    "approximation": false,
    "baseBox": {
-    "x": 211,
-    "y": 210,
+    "x": 212,
+    "y": 242,
     "w": 131,
-    "h": 93
+    "h": 78
    },
-   "registration": 0.6988,
-   "targetScale": 0.67
+   "registration": 0.706,
+   "targetScale": 0.625
+  },
+  {
+   "id": "m14",
+   "file": "/avatar/visemes3/m14.png",
+   "openness": 0.5238,
+   "roundness": 0.6264,
+   "sourceFrame": 67,
+   "sourceClip": "e heavy.mp4 (768x1168 @24fps, 361 frames; via the bit-exact FFV1 recovery)",
+   "poseConfidence": 0.9823,
+   "label": "ah",
+   "aperturePx": 28.0,
+   "widthPx": 73.0,
+   "lipsTouchingFrac": 0.0,
+   "box": {
+    "x": 282,
+    "y": 374,
+    "w": 209,
+    "h": 125
+   },
+   "sourceScale": 1.0,
+   "scaleMatchesBase": true,
+   "requestedOpenness": 0.5,
+   "requestedRoundness": 0.725,
+   "cellDistance": 0.1014,
+   "approximation": false,
+   "baseBox": {
+    "x": 212,
+    "y": 242,
+    "w": 131,
+    "h": 78
+   },
+   "registration": 0.7851,
+   "targetScale": 0.625
   }
  ],
  "base": "/avatar/body/base_loop.mp4",
  "opennessCeiling": 0.55,
- "note": "Rescaled to base_loop scale (0.670x, AREA downscale from the e-heavy source crops \u2014 one resample of real pixels, never an upscale, nothing synthesised). Entries above openness 0.55 were DROPPED: a full gape read as a shout when composited, verified visually. Registration is each patch template-matched into base_loop frame 0.",
- "closedNote": "closedId changed from m_closed to m01 (2026-07-30). Verified by eye on a composite: m_closed (roundness 0.89) reads as a PUCKER, not lips-together \u2014 wrong for a bilabial. m01 (roundness 0.49 = neutral width) is a true closure AND has the highest registration in the bank (0.958 vs 0.870).",
- "sourceNote": "source corrected 2026-07-30: it was inherited verbatim from the v3 bank ('/avatar/clips/base_speak.mp4'), which is wrong for v4. Every baseBox in this file was measured by template-matching its patch into /avatar/body/base_loop.mp4 FRAME 0, so that clip is this bank's true source. StarraClipFace gates the patch on the visible layer matching bank.source, so a stale value here silently disables the mouth entirely."
+ "placementNote": "UNIFORM baseBox for every entry, placed by ONE rigid e-heavy->base_loop nose-template mapping (scale 0.625, NCC 0.9822) \u2014 NOT by per-entry template re-registration, which slid the oo/pucker crops ~11-15px up into her nose (measured by scripts/measure_mouth_alignment.py). Box top y=242 clears the measured drift-relative nose baseline (238..241) on all 266 base frames by construction. `registration` is each patch's NCC against base frame 0 at the shared box \u2014 metadata, not a placement input."
 }

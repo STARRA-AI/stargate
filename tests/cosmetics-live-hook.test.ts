@@ -330,7 +330,12 @@ describe("client-bundle safety and voice safety, proven on the source", () => {
     // loadMouthSyncAssets -> loadMouthPatchAssets when the v4 fallback chain
     // landed (2026-07-30), and a guard this load-bearing must not silently stop
     // guarding because a symbol was renamed. It asserts the bound was found.
-    const end = FACE.search(/void\s+loadMouth\w*Assets\(/);
+    // Searched AFTER `start` on purpose: the mount-time prime effect (item C,
+    // 2026-07-30) added an EARLIER `void loadMouthPatchAssets()` call above the
+    // tick to warm the bank at call-open, so the first match in the whole file
+    // no longer bounds the tick — the first match after the tick still does.
+    const endRel = FACE.slice(start).search(/void\s+loadMouth\w*Assets\(/);
+    const end = endRel < 0 ? -1 : start + endRel;
     assert.ok(end > start, "could not bound the tick body");
     const tick = code(FACE.slice(start, end));
     assert.ok(!/\bawait\b/.test(tick), "an await entered the rAF tick");

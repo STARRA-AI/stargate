@@ -667,28 +667,54 @@ export const ROUNDNESS_AXIS_WEIGHT = 1;
 export const ROUNDNESS_TAU_MS = 120;
 
 /**
- * F2-proxy calibration. `f2ratio` is mid-band / (low-band + mid-band) energy:
- * rounded vowels (u/o) put F2 LOW (~700-1100Hz), spread vowels (i/e) put it HIGH
- * (~1800-2800Hz), so the ratio rises as the lips spread.
+ * Roundness calibration — RECALIBRATED 2026-07-30, measured not assumed.
  *
- * MEASURED, not assumed. On labelled speech from two offline `say` voices:
- *   Samantha  rounded 0.6078 (sd 0.0417)   spread 0.6412 (sd 0.0172)  d=+1.05
- *   Alex      rounded 0.6147 (sd 0.0233)   spread 0.6422 (sd 0.0171)  d=+1.35
- * Best single thresholds landed at 0.6250 and 0.6300, so the neutral point is
- * their midpoint. F2_SPAN 0.06 maps those class means to roughly 0.78 rounded /
- * 0.26 spread — a usable swing without saturating.
+ * THE DEFECT THE OLD NUMBERS CARRIED (root-caused with synthetic spectra through
+ * this exact function, then confirmed on recorded speech): every voiced vowel
+ * puts its F1 (300-900Hz) inside the low band, and an open "ah" puts its F2
+ * (~1100-1300Hz) in NEITHER band, so AH/OH/OO all collapsed to f2ratio far below
+ * neutral -> roundness saturated at 1.0 -> the pick path returned the "oo" pucker
+ * for every back/central vowel. End-to-end: AH selected m05 "oo-small". That is
+ * the measured mechanism of "every sound looks like an O". A second bias: the
+ * bands were SUMMED, and the mid band holds ~2x the bins of the low band, so a
+ * flat (fricative/noise) spectrum read as strongly spread purely from bin count.
  *
- * HONEST LIMIT: this separates ROUNDED from SPREAD. It does NOT separate "ah"
- * from "ee" (measured "ah" sits at 0.615-0.620, i.e. mid-scale). Openness is what
- * distinguishes those two, which is exactly why it is the dominant axis.
+ * THE FIX, each part forced by a measurement (offline `say` voices Samantha +
+ * Alex, AnalyserNode byte spectra reproduced exactly: Blackman window, dB in
+ * [-100,-30] -> bytes, 0.8 temporal smoothing):
+ *   1. Band MEANS, not sums — a flat spectrum's f2ratio now scores exactly 0.5
+ *      (the final roundness for broadband noise lands spread-side, which is the
+ *      right direction for fricatives; true SILENCE still returns neutral 0.5
+ *      through the zero-total guard).
+ *   2. F2 term recentred: class means f2ratio rounded 0.363-0.383 / spread
+ *      0.438-0.449, so neutral is 0.42 and span 0.13 maps the classes to roughly
+ *      0.77 rounded / 0.27 spread without saturating.
+ *   3. An F1 OPENNESS PENALTY — the part the F2 proxy fundamentally cannot do.
+ *      /a/ has HIGH F1 (600-1000Hz), /u,o,i,e/ have LOW F1 (250-550Hz). Measured
+ *      f1open = mean(600-1000)/(mean(250-550)+mean(600-1000)):
+ *        ah 0.4610/0.5167   rounded 0.4129/0.4031   spread 0.3966/0.3929
+ *      Subtracting F1_OPEN_GAIN * max(0, f1open - F1_OPEN_THRESHOLD) pulls the
+ *      open vowel off the rounded end while leaving true rounding intact.
+ * RESULT on the recorded corpora (median smoothed-free roundness):
+ *   Samantha  rounded 0.875  spread 0.234  ah 0.450
+ *   Alex      rounded 0.764  spread 0.208  ah 0.508
+ * "ah" now lands CENTRAL (the m06/"ah" column), not on the pucker.
  */
-export const F2_NEUTRAL = 0.6275;
-export const F2_SPAN = 0.06;
+export const F2_NEUTRAL = 0.42;
+export const F2_SPAN = 0.13;
 /** Band edges in Hz: F1 + rounded F2, versus spread F2. */
 export const F2_LOW_HZ = 250;
 export const F2_LOW_HI_HZ = 1100;
 export const F2_MID_HZ = 1600;
 export const F2_MID_HI_HZ = 3200;
+/** F1 bands for the open-vowel penalty: close-vowel F1 vs open-vowel F1. */
+export const F1_CLOSE_HZ = 250;
+export const F1_CLOSE_HI_HZ = 550;
+export const F1_OPEN_HZ = 600;
+export const F1_OPEN_HI_HZ = 1000;
+/** Penalty knee + slope, fitted on the measured class means above. */
+export const F1_OPEN_THRESHOLD = 0.43;
+export const F1_OPEN_GAIN = 5.5;
 
 /** Validate a parsed bank2.json. Returns null for ANYTHING malformed. */
 export function parseVisemeBank2(raw: unknown): VisemeBank2 | null {
@@ -766,18 +792,52 @@ export function roundnessFromAudio(
   const nyquist = sr / 2;
   const hzPerBin = nyquist / freq.length;
   if (!(hzPerBin > 0)) return 0.5;
+  // Band MEANS (see the calibration note above): sums biased the ratio by pure
+  // bin count — the mid band holds ~2x the low band's bins, so flat noise read
+  // as strongly spread. Means make a flat spectrum score exactly 0.5.
   let lo = 0;
+  let nLo = 0;
   let mid = 0;
+  let nMid = 0;
+  let f1c = 0;
+  let nF1c = 0;
+  let f1o = 0;
+  let nF1o = 0;
   for (let i = 0; i < freq.length; i++) {
     const hz = i * hzPerBin;
-    if (hz >= F2_LOW_HZ && hz < F2_LOW_HI_HZ) lo += freq[i];
-    else if (hz >= F2_MID_HZ && hz < F2_MID_HI_HZ) mid += freq[i];
+    if (hz >= F2_LOW_HZ && hz < F2_LOW_HI_HZ) {
+      lo += freq[i];
+      nLo++;
+    } else if (hz >= F2_MID_HZ && hz < F2_MID_HI_HZ) {
+      mid += freq[i];
+      nMid++;
+    }
+    if (hz >= F1_CLOSE_HZ && hz < F1_CLOSE_HI_HZ) {
+      f1c += freq[i];
+      nF1c++;
+    } else if (hz >= F1_OPEN_HZ && hz < F1_OPEN_HI_HZ) {
+      f1o += freq[i];
+      nF1o++;
+    }
   }
-  const total = lo + mid;
-  if (total <= 0) return 0.5;
-  const f2ratio = mid / total;
+  const loMean = nLo > 0 ? lo / nLo : 0;
+  const midMean = nMid > 0 ? mid / nMid : 0;
+  const f2total = loMean + midMean;
+  if (f2total <= 0) return 0.5; // nothing to measure -> NEUTRAL, never a claim
+  const f2ratio = midMean / f2total;
   // centred on the measured decision boundary; rises as the lips ROUND
-  const r = 0.5 + (F2_NEUTRAL - f2ratio) / F2_SPAN;
+  let r = 0.5 + (F2_NEUTRAL - f2ratio) / F2_SPAN;
+  // The open-vowel (high-F1) penalty: /a/ shares its LOW F2 with /u,o/, so the
+  // F2 term alone reads it rounded. High F1 is what tells them apart (measured
+  // class means in the calibration note). Only applied when the F1 bands carry
+  // energy — silence must stay neutral.
+  const f1cMean = nF1c > 0 ? f1c / nF1c : 0;
+  const f1oMean = nF1o > 0 ? f1o / nF1o : 0;
+  const f1total = f1cMean + f1oMean;
+  if (f1total > 0) {
+    const f1open = f1oMean / f1total;
+    if (f1open > F1_OPEN_THRESHOLD) r -= F1_OPEN_GAIN * (f1open - F1_OPEN_THRESHOLD);
+  }
   return Number.isFinite(r) ? clamp01(r) : 0.5;
 }
 
@@ -877,19 +937,21 @@ export function createRoundnessSmoother(tauMs: number = ROUNDNESS_TAU_MS): Mouth
 //
 // WHAT IS DIFFERENT FROM v2, per entry:
 //   baseBox      {x,y,w,h} — the paste box in BASE_LOOP's OWN 552x720 pixel
-//                space, measured by template-matching the patch into base_loop
-//                frame 0. Absolute, so no anchor track is needed.
-//   registration 0.699..0.958, that template match's NCC. REPRODUCED HERE
-//                2026-07-30: matching each shipped PNG into base_loop frame 0 at
-//                scale 1.0 returns the bank's exact baseBox and its exact
-//                registration for all 10 entries. The bank's numbers are honest.
-// And top-level: `base`, `opennessCeiling` (0.55) and `closedId` ("m01").
+//                space. REBUILT 2026-07-30: every entry now shares ONE UNIFORM
+//                box placed by a single rigid e-heavy->base_loop nose-template
+//                mapping (NCC 0.9822), not per-entry template re-registration —
+//                the old per-entry matching slid the "oo" crops 11-15px up into
+//                her nose (measured by scripts/measure_mouth_alignment.py). The
+//                box top (y=242) clears the measured nose baseline (238..241
+//                drift-relative) on all 266 frames by construction.
+//   registration each patch's NCC against base frame 0 at the shared box.
+//                Metadata only — never a placement input.
+// And top-level: `base`, `opennessCeiling` (0.55) and `closedId` ("m_closed").
 //
 // SCALE — THE RUNTIME MUST NOT RESCALE. Each PNG's pixel size EQUALS its own
-// baseBox w/h (verified for all 10 entries, and asserted in
-// tests/anatomy-v4-bank.test.ts). They were resampled ONCE, offline, from the
-// e-heavy source crops. Any further scaling here would be a second resample of
-// an already-resampled image.
+// baseBox w/h (asserted in tests/anatomy-v4-bank.test.ts). They were resampled
+// ONCE, offline, from the e-heavy source crops. Any further scaling here would
+// be a second resample of an already-resampled image.
 //
 // THE CEILING IS NOT A TUNABLE. openness spans 0.00..0.50 only; entries above
 // 0.55 were DELIBERATELY dropped because a full gape composited as a visible
@@ -1140,12 +1202,13 @@ export function pickVisemeFrame4(
 /**
  * The canvas size that fits EVERY entry: the largest baseBox in the bank.
  *
- * WHY ONE SHARED SIZE. The shipped bank has two crop sizes (131x93 and 125x89 —
- * the "oo" entries came from a slightly smaller source crop). Re-sizing the
- * canvas per frame would reallocate its backing store whenever the pick flips
- * between the two groups, which roundness wobble can do frame to frame. So the
- * canvas is sized ONCE to the maximum and each patch is drawn CENTRED in it (see
- * patchPlacement), which also keeps the feathered mask centred on the patch.
+ * WHY ONE SHARED SIZE. Re-sizing the canvas per frame would reallocate its
+ * backing store whenever the pick flips between size groups, which roundness
+ * wobble can do frame to frame. So the canvas is sized ONCE to the maximum and
+ * each patch is drawn CENTRED in it (see patchPlacement), which also keeps the
+ * feathered mask centred on the patch. The rebuilt bank's boxes are UNIFORM
+ * (131x78, all identical — asserted in tests/anatomy-v4-bank.test.ts), so today
+ * this is the identity; the machinery stays for any future mixed-size bank.
  */
 export function bankPatchExtent(
   frames: readonly { baseBox: VisemeBaseBox }[] | null | undefined,

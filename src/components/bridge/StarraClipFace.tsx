@@ -149,19 +149,30 @@ export function nextBodyRetryDelay(attempt: number): number {
 /**
  * The v4 patch mask — the feather that hides the rectangle seam.
  *
- * MEASURED, not styled by eye. It is the CSS reproduction of the mask I
- * composited and LOOKED at against real base_loop frames (2026-07-30): an ellipse
- * with semi-axes 0.46w x 0.42h, its alpha solid to 66% of that radius and then
- * feathered to zero over the outer 34% — the stops below are smoothstep sampled at
- * quarter points (0.844 / 0.5 / 0.156), because CSS gradients interpolate linearly
- * and a straight ramp has a faintly visible onset.
+ * MEASURED, not styled by eye — REDERIVED 2026-07-30 for the rebuilt uniform
+ * bank (131x78 canvas, every baseBox identical at (212,242), box top BELOW the
+ * measured nose baseline 238..241 by construction — scripts/
+ * measure_mouth_alignment.py). Geometry solved from the measured lip union of
+ * all 16 patches (canvas y 0..58, x 33..94) + the base's own lips:
+ *   - centre at 50% 39.6%: cy/ry = 0.745, so alpha at the canvas TOP edge is
+ *     ~0.84 — high, because the patch's upper lip starts at canvas row 0 on the
+ *     widest mouths and must read; the nose is safe not because of alpha but
+ *     because NO patch pixel exists above the box top (row 242 > baseline 241).
+ *   - ry 53.2% (41.5px): solid (66% stop) spans canvas y 3.5..58.3, holding the
+ *     deepest measured lip bottom (m10 "oo", y 58) inside full alpha; zero at
+ *     y 72.4, fully faded 6px before the canvas bottom.
+ *   - rx 42.7% (56px): solid spans x 28.5..102.5, holding the widest measured
+ *     lip corners (33..94) with margin; zero 9.5px inside each side edge.
+ * Stops remain smoothstep sampled at quarter points (0.844 / 0.5 / 0.156),
+ * because CSS gradients interpolate linearly and a straight ramp has a faintly
+ * visible onset.
  *
  * Kept separate from `patchMask` (the legacy default in the JSX) so the fallback
  * path's appearance is untouched. Applied via setProperty with the -webkit- prefix
  * first, for the macOS 12 WKWebView.
  */
 const V4_PATCH_MASK =
-  "radial-gradient(ellipse 46% 42% at 50% 50%, rgba(0,0,0,1) 66%," +
+  "radial-gradient(ellipse 42.7% 53.2% at 50% 39.6%, rgba(0,0,0,1) 66%," +
   " rgba(0,0,0,0.844) 74.5%, rgba(0,0,0,0.5) 83%, rgba(0,0,0,0.156) 91.5%," +
   " rgba(0,0,0,0) 100%)";
 
@@ -410,6 +421,13 @@ export function StarraClipFace({
   // this element is never displayed and never plays.
   useEffect(() => {
     if (!active || typeof document === "undefined") return;
+    // ALSO warm the mouth bank here (2026-07-30). loadMouthPatchAssets used to
+    // fire first inside the mouth-sync effect, i.e. at the FIRST ENGINE START —
+    // so her first spoken words raced ~100-200ms of bank.json + 16 PNG fetch +
+    // decode. It memoizes its promise (one flight per page, every failure is a
+    // silent null), so invoking it early is free and the engine's own call
+    // resolves instantly from the same promise.
+    void loadMouthPatchAssets();
     let pre: HTMLVideoElement | null = null;
     try {
       pre = document.createElement("video");
@@ -770,8 +788,9 @@ export function StarraClipFace({
           }
           const src = tonedPatch(pick.id, img, box.w, box.h);
           draw2d.clearRect(0, 0, canvas.width, canvas.height);
-          // Centred in the shared canvas (see patchPlacement) so the feathered
-          // ellipse stays centred on the patch even for the smaller "oo" crops.
+          // Centred in the shared canvas (see patchPlacement). The rebuilt bank's
+          // boxes are uniform, so this is the identity today; it stays for any
+          // future mixed-size bank.
           draw2d.drawImage(src ?? img, place.drawX, place.drawY);
           canvas.style.transform =
             `translate(${rect.left + place.originX * rect.scale}px, ` +

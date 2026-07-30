@@ -120,16 +120,30 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_E = "/Users/work/Desktop/e heavy.mp4"
+# The original was deleted from the Desktop by something outside the build
+# (documented in scripts/build-anatomy-assets.py); its exact pixels survive as a
+# bit-exact FFV1/RGB recovery (max abs diff 0 on read-back, per that file's
+# provenance notes). Prefer the original, fall back to the recovery.
+SRC_E_RECOVERY = (
+    "/private/tmp/claude-502/-Users-work/43e3aa80-c7d5-43ee-8ad8-63cd7f5c1ba8/"
+    "scratchpad/anatomy/recovered/eheavy_RECOVERED_ffv1_rgb.mkv"
+)
 CLIPS_DIR = os.path.join(ROOT, "public/avatar/clips")
+BASE_LOOP = os.path.join(ROOT, "public/avatar/body/base_loop.mp4")
 
 WRITE = "--write" in sys.argv
+# --v4: rebuild public/avatar/visemes3/ (the v4 bank composited onto base_loop)
+# with UNIFORM baseBoxes placed by ONE rigid e-heavy->base_loop mapping, instead
+# of per-entry template re-registration. See the V4 REBUILD section at the end.
+V4 = "--v4" in sys.argv
 
 
 def arg(name, dflt):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else dflt
 
 
-OUT_DIR = os.path.abspath(os.path.join(ROOT, arg("--out", "public/avatar/visemes2")))
+OUT_DIR = os.path.abspath(os.path.join(
+    ROOT, arg("--out", "public/avatar/visemes3" if V4 else "public/avatar/visemes2")))
 
 # ── safety rails ──────────────────────────────────────────────────────────────
 if not OUT_DIR.startswith(ROOT + os.sep):
@@ -138,7 +152,10 @@ for bad in ("public/avatar/clips", "public/avatar/visemes/"):
     if bad in (OUT_DIR.replace("\\", "/") + "/"):
         sys.exit(f"refusing: --out must never point into {bad} (read-only / live)")
 if not os.path.exists(SRC_E):
-    sys.exit(f"refusing: source footage not found: {SRC_E}")
+    if os.path.exists(SRC_E_RECOVERY):
+        SRC_E = SRC_E_RECOVERY
+    else:
+        sys.exit(f"refusing: source footage not found: {SRC_E} (and no recovery)")
 
 # ── reference geometry, MEASURED on e heavy frame 0 (full-frame px) ────────────
 W, H = 768, 1168
@@ -196,8 +213,16 @@ def probe(path):
         capture_output=True, check=True).stdout.decode()
     d = dict(l.split("=", 1) for l in out.strip().splitlines())
     n, den = d["r_frame_rate"].split("/")
+
+    # mkv (the FFV1 recovery) reports nb_frames/duration as 'N/A'
+    def num_or_zero(v, cast):
+        try:
+            return cast(v)
+        except (TypeError, ValueError):
+            return cast(0)
+
     return (int(d["width"]), int(d["height"]), int(n) / int(den),
-            int(d.get("nb_frames") or 0), float(d.get("duration") or 0))
+            num_or_zero(d.get("nb_frames"), int), num_or_zero(d.get("duration"), float))
 
 
 def decode(path, w, h):
@@ -538,6 +563,242 @@ def label_for(o, r):
     if r < 0.35:
         return "ee-open"
     return "ah"
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# V4 REBUILD (--v4) — the bank composited onto public/avatar/body/base_loop.mp4.
+#
+# WHY THE SHIPPED v4 BANK WAS WRONG, measured 2026-07-30 with
+# scripts/measure_mouth_alignment.py against the footage itself:
+#   - base_loop's nose baseline (bottom of the nostril mass) sits at drift-
+#     relative y 238..241; its lips at y 242..284, x 247..305 (552x720 coords).
+#   - EVERY shipped entry's baseBox top sat 19-36px ABOVE that baseline, and the
+#     mask's solid-alpha region reached up to 17.3px above it (m07) on 266/266
+#     frames — the patch visibly cut into her nose.
+#   - the two "oo" entries were the worst because each entry was REGISTERED
+#     INDIVIDUALLY by template-matching its own crop into base frame 0; a pucker
+#     crop matches the nose (its dominant contrast), so m05/m07 slid ~11-15px UP
+#     (their own lips landed at rel y 232, above the nose baseline) and their
+#     REAL lips fell into the mask feather (alpha 0.69 / 0.28).
+#
+# THE FIX: ONE rigid e-heavy -> base_loop mapping, measured on the nose template
+# (which speech cannot deform), places a UNIFORM base window for every entry.
+# Every patch is the SAME box in base coordinates — the box top sits BELOW the
+# measured nose baseline by construction, and lips land where her lips are.
+#
+#   V4_BOX = (212, 242, 131, 78): x/w keep the shipped horizontal extent (lips
+#   span x 247..305, margins 35/38px for the feather). y=242 clears the measured
+#   worst-case baseline (241) on all 266 frames; h=78 reaches y 320, which holds
+#   the measured lip bottoms (base 284; patch own-lips 293) + feather room.
+#
+# ROUNDNESS COLUMNS: FIVE, not three. The audio roundness axis was recalibrated
+# the same session (see roundnessFromAudio in viseme-sync.ts): real smoothed
+# speech lives at ~0.2-0.9, and the 120ms lip smoother compresses excursions
+# toward 0.5, so with only 3 columns a short "oo" (smoothed r~0.7) fell BETWEEN
+# neutral and pucker. Intermediate real frames give it a real target.
+V4_BOX = (212, 242, 131, 78)
+V4_OPEN_RUNGS = [0.00, 0.25, 0.50]
+V4_ROUND_COLS = [("spread", 0.05), ("semi-spread", 0.275), ("neutral", 0.50),
+                 ("semi-round", 0.725), ("rounded", 0.95)]
+V4_CEILING = 0.55
+
+
+def v4_rebuild():
+    bx, by, bw4, bh4 = V4_BOX
+    base0 = first_frame(BASE_LOOP, 552, 720)
+    base_gray = cv2.cvtColor(base0, cv2.COLOR_BGR2GRAY)
+
+    # ── the ONE rigid mapping: e-heavy nose template into base frame 0 ────────
+    tg = cv2.cvtColor(ref[NOSE[1]:NOSE[1] + NOSE[3], NOSE[0]:NOSE[0] + NOSE[2]],
+                      cv2.COLOR_BGR2GRAY)
+    best = (-2.0, 0.0, 0.0, 1.0)
+    for s in np.arange(0.55, 0.801, 0.005):
+        tw, th = int(round(NOSE[2] * s)), int(round(NOSE[3] * s))
+        t = cv2.resize(tg, (tw, th), interpolation=cv2.INTER_AREA)
+        r = cv2.matchTemplate(base_gray, t, cv2.TM_CCOEFF_NORMED)
+        _, mx, _, ml = cv2.minMaxLoc(r)
+        if mx > best[0]:
+            best = (float(mx), ml[0] + tw / 2.0, ml[1] + th / 2.0, float(s))
+    ncc0, bnx, bny, s0 = best
+    print(f"\n  V4 rigid mapping e-heavy -> base_loop frame 0: scale {s0:.3f}, "
+          f"nose centre ({bnx:.1f},{bny:.1f}), NCC {ncc0:.4f}")
+    if ncc0 < 0.85:
+        sys.exit("refusing: e-heavy nose template does not match base_loop "
+                 f"(NCC {ncc0:.4f} < 0.85) — the mapping would be a guess")
+
+    # ── cells: pick one real frame per (openness x roundness) request ─────────
+    cells4 = []
+    for orq in V4_OPEN_RUNGS:
+        for lbl, rrq in V4_ROUND_COLS:
+            d = np.hypot(2.0 * (openness - orq), roundness - rrq)
+            d = np.where(ok, d, d + 1.0)
+            f = int(np.argmin(d))
+            true_d = float(np.hypot(openness[f] - orq, roundness[f] - rrq))
+            cells4.append(dict(reqOpen=orq, reqRound=rrq, reqLabel=lbl, frame=f,
+                               dist=true_d, approx=bool(true_d > APPROX_TOL)))
+    best4 = {}
+    for c in cells4:
+        k = c["frame"]
+        if k not in best4 or c["dist"] < best4[k]["dist"]:
+            best4[k] = c
+
+    chosen = [closed_f] + [f for f in sorted(best4) if f != closed_f]
+    over = [f for f in chosen if openness[f] > V4_CEILING]
+    if over:
+        print(f"  dropping {len(over)} frame(s) above the {V4_CEILING} ceiling: {over}")
+        chosen = [f for f in chosen if openness[f] <= V4_CEILING]
+
+    # ── crop each chosen frame through the rigid mapping, ONE resample ────────
+    # base point p maps to frame-f point: (s_f/s0)*(p - bn) + c_f  (both
+    # transforms share the nose-template reference, so they compose rigidly).
+    crops = {}
+    srcbox = {}
+    need = set(chosen)
+    fi = 0
+    for fr in decode(SRC_E, vw, vh):
+        if fi in need:
+            s_f, cfx, cfy = T[fi, 3], T[fi, 1], T[fi, 2]
+            k = s_f / s0
+            x0 = int(round(k * (bx - bnx) + cfx))
+            y0 = int(round(k * (by - bny) + cfy))
+            x1 = int(round(k * (bx + bw4 - bnx) + cfx))
+            y1 = int(round(k * (by + bh4 - bny) + cfy))
+            x0c, y0c = max(0, x0), max(0, y0)
+            x1c, y1c = min(vw, x1), min(vh, y1)
+            crop = fr[y0c:y1c, x0c:x1c]
+            # INTER_AREA downscale (k ~ 1.5 -> this is the single resample of
+            # the ORIGINAL pixels; the recovery is bit-exact, so no chain).
+            crops[fi] = cv2.resize(crop, (bw4, bh4), interpolation=cv2.INTER_AREA)
+            srcbox[fi] = dict(x=x0c, y=y0c, w=x1c - x0c, h=y1c - y0c)
+        fi += 1
+        # no early break: abandoning decode() mid-stream leaves ffmpeg writing
+        # into a closed pipe (see first_frame's docstring)
+
+    base_win = base_gray[by:by + bh4, bx:bx + bw4].astype(np.float32)
+
+    def registration_of(patch):
+        g = cv2.cvtColor(patch, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        return float(cv2.matchTemplate(base_win, g, cv2.TM_CCOEFF_NORMED)[0, 0])
+
+    if WRITE:
+        os.makedirs(OUT_DIR, exist_ok=True)
+
+    v4_entries = []
+
+    def emit4(f, ident, label, req=None, approx=False, dist=0.0, note=""):
+        reg = registration_of(crops[f])
+        fn = f"{ident}.png"
+        if WRITE:
+            cv2.imwrite(os.path.join(OUT_DIR, fn), crops[f])
+        e = dict(id=ident, file=f"/avatar/visemes3/{fn}",
+                 openness=round(float(openness[f]), 4),
+                 roundness=round(float(roundness[f]), 4),
+                 sourceFrame=int(f),
+                 sourceClip="e heavy.mp4 (768x1168 @24fps, 361 frames; via the "
+                            "bit-exact FFV1 recovery)",
+                 poseConfidence=round(float(conf[f]), 4), label=label,
+                 aperturePx=round(float(hgt[f]), 1), widthPx=round(float(wid[f]), 1),
+                 lipsTouchingFrac=round(float(touch[f]), 3),
+                 box=srcbox[f], sourceScale=round(float(T[f, 3]), 3),
+                 scaleMatchesBase=bool(round(float(T[f, 3]), 3) == 1.0))
+        if req is not None:
+            e["requestedOpenness"] = req[0]
+            e["requestedRoundness"] = req[1]
+            e["cellDistance"] = round(dist, 4)
+        e["approximation"] = bool(approx)
+        if note:
+            e["note"] = note
+        e["baseBox"] = dict(x=bx, y=by, w=bw4, h=bh4)
+        e["registration"] = round(reg, 4)
+        e["targetScale"] = round(float(s0), 4)
+        v4_entries.append(e)
+
+    emit4(closed_f, "m_closed", "closed",
+          note=f"Dedicated bilabial /m/ /b/ /p/: aperture {hgt[closed_f]:.0f}px, "
+               f"width {wid[closed_f]:.0f}px (neutral, so a closure never puckers), "
+               f"lips touching in {touch[closed_f]*100:.0f}% of centre-band columns.")
+    i = 0
+    for f in sorted((f for f in chosen if f != closed_f),
+                    key=lambda f: (openness[f], -roundness[f])):
+        c = best4[f]
+        emit4(f, f"m{i:02d}", label_for(openness[f], roundness[f]),
+              req=(c["reqOpen"], c["reqRound"]), approx=c["approx"], dist=c["dist"],
+              note=("No real frame lies near this requested cell — her footage does "
+                    "not contain this mouth shape. The nearest REAL frame is used and "
+                    "flagged; no pixels were synthesised.") if c["approx"] else "")
+        i += 1
+
+    cov4 = [dict(requestedOpenness=c["reqOpen"], requestedRoundness=c["reqRound"],
+                 requestedLabel=c["reqLabel"], resolvedFrame=int(c["frame"]),
+                 trueOpenness=round(float(openness[c["frame"]]), 4),
+                 trueRoundness=round(float(roundness[c["frame"]]), 4),
+                 distance=round(c["dist"], 4), approximation=bool(c["approx"]),
+                 empty=False) for c in cells4]
+
+    bank4 = dict(
+        version=4,
+        builder="scripts/build-viseme-bank-3.py --v4",
+        source="/avatar/body/base_loop.mp4",
+        sourceFootage="e heavy.mp4 (768x1168 @24fps, 361 frames) via bit-exact "
+                      "FFV1 recovery — the SAME take the base loop derives from",
+        width=bw4, height=bh4, fps=FPS,
+        poseFloor=POSE_FLOOR,
+        axes=dict(
+            openness="0 = lips shut, 1 = the widest real aperture. From MEASURED "
+                     f"vertical aperture in px: 0 at the {SHUT_FLOOR:.0f}px shut floor "
+                     f"(the dark lip seam), 1 at {H_MAX:.0f}px.",
+            roundness="1 = rounded/narrow (oo, w), 0 = spread/wide (ee). From "
+                      f"MEASURED corner-to-corner lip width: {W_HI:.0f}px -> 0, "
+                      f"{W_LO:.0f}px -> 1.",
+            independence=f"corr(width, aperture) = {corr_wh:+.3f} on this footage.",
+        ),
+        closedId="m_closed",
+        coverage=dict(
+            framesMeasured=int(N), poseEligible=int(ok.sum()),
+            requestedCells=len(cells4), distinctRealFrames=len(v4_entries),
+            approximatedCells=sum(1 for c in cells4 if c["approx"]),
+            emptyCells=0,
+            note="HONEST COVERAGE. Every entry is a crop of one real frame of her "
+                 "footage, INTER_AREA-downscaled ONCE to base scale; nothing "
+                 "interpolated, inpainted or synthesised. FIVE roundness columns "
+                 "(was 3) so the smoothed audio roundness axis lands on real "
+                 "intermediate shapes.",
+            cells=cov4,
+        ),
+        frames=v4_entries,
+        base="/avatar/body/base_loop.mp4",
+        opennessCeiling=V4_CEILING,
+        placementNote=(
+            "UNIFORM baseBox for every entry, placed by ONE rigid e-heavy->"
+            f"base_loop nose-template mapping (scale {s0:.3f}, NCC {ncc0:.4f}) — "
+            "NOT by per-entry template re-registration, which slid the oo/pucker "
+            "crops ~11-15px up into her nose (measured by "
+            "scripts/measure_mouth_alignment.py). Box top y=242 clears the "
+            "measured drift-relative nose baseline (238..241) on all 266 base "
+            "frames by construction. `registration` is each patch's NCC against "
+            "base frame 0 at the shared box — metadata, not a placement input."),
+    )
+
+    print(f"\n  V4 bank: {len(v4_entries)} entries from {len(cells4)} requested "
+          f"cells; uniform baseBox ({bx},{by},{bw4},{bh4})")
+    for e in v4_entries:
+        print(f"    {e['id']:9s} o={e['openness']:.3f} r={e['roundness']:.3f} "
+              f"ap={e['aperturePx']:4.0f}px w={e['widthPx']:3.0f}px "
+              f"src=f{e['sourceFrame']:3d} reg={e['registration']:.3f} "
+              f"{e['label']:11s}{'  APPROX' if e['approximation'] else ''}")
+
+    if WRITE:
+        with open(os.path.join(OUT_DIR, "bank.json"), "w") as fh:
+            fh.write(json.dumps(bank4, indent=1) + "\n")
+        print(f"\n  wrote {os.path.relpath(OUT_DIR, ROOT)}/bank.json and "
+              f"{len(v4_entries)} PNGs")
+    else:
+        print("\n  V4 DRY RUN — nothing written. Re-run with --v4 --write.")
+
+
+if V4:
+    v4_rebuild()
+    sys.exit(0)
 
 
 entries = []
