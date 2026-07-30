@@ -140,8 +140,9 @@ function VoicePicker() {
         STARRA voice
       </h2>
       <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        ● Ara (xAI TTS) — primary voice. Piper Cori and Web Speech are fallback
-        only, used offline or when Ara is unreachable.{" "}
+        ● Eve (xAI TTS) — her one voice, the same British voice as the live
+        call. Piper Cori and Web Speech are fallback only, used offline or when
+        xAI is unreachable.{" "}
         {piperReady === null
           ? "Checking Piper model…"
           : piperReady
@@ -149,8 +150,8 @@ function VoicePicker() {
             : "Piper offline — run: npm run voice:download."}
       </p>
       <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        Pick a specific Web Speech voice to override Ara. AUTO prefers British
-        English female, then Japanese female — current auto pick: {autoName}.
+        Pick a specific Web Speech voice to override her. AUTO prefers British
+        English female — current auto pick: {autoName}.
       </p>
       <select
         value={selected}
@@ -158,7 +159,7 @@ function VoicePicker() {
         className="focus-magenta w-full border border-[var(--border)] bg-[var(--void)] px-2 py-2 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
         aria-label="STARRA voice"
       >
-        <option value="ara">Ara (xAI) — primary</option>
+        <option value="ara">Eve (xAI) — her voice, same as the call</option>
         <option value="auto">AUTO — Web Speech picks</option>
         {voices.map((v) => (
           <option key={v.voiceURI} value={v.voiceURI}>

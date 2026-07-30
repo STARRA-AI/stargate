@@ -86,7 +86,15 @@ export function VoiceCallOverlay({
 
   // Shared brain stream — the fallback answer path when no live call can
   // carry a typed message, and the source of the deck-chat half of the column.
-  const { history, streaming, sendMessage } = useStargateStream();
+  const { history, streaming, sendMessage, resyncHistory } = useStargateStream();
+  // ONE TRANSCRIPT: when the call closes, fold its recorded turns from the
+  // shared store into the visible deck history — she "remembers" the call in
+  // the chat column immediately, no reload.
+  const wasOpenRef = useRef(false);
+  useEffect(() => {
+    if (wasOpenRef.current && !open) void resyncHistory();
+    wasOpenRef.current = open;
+  }, [open, resyncHistory]);
   // ONE VOICE (Classic's order, 2026-07-30): while her call is LIVE, typing to
   // her goes INTO the call — the same realtime session answers aloud as eve,
   // same persona, same context. Only when no open call can carry it does the

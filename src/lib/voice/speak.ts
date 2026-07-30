@@ -763,13 +763,26 @@ export async function speakStarra(
     window.speechSynthesis.resume();
   }
 
-  // Ara (xAI) is the default/primary voice. It runs first UNLESS the operator
-  // explicitly picked a Web Speech voice or AUTO in Settings. Piper/Web Speech
-  // remain the fallback below (offline / Ara unreachable).
+  // Ara (xAI) is the default/primary voice — HER voice, eve, the same one as
+  // the live call. It runs first UNLESS the operator explicitly picked a Web
+  // Speech voice or AUTO in Settings. Piper/Web Speech remain the fallback
+  // below (offline / Ara unreachable).
+  //
+  // ONE VOICE (Classic's order, 2026-07-30): a single transient Ara failure
+  // must not put a DIFFERENT woman's voice in the room — that is how "multiple
+  // voices" (and her rationalizing them) reached him. So Ara gets ONE retry
+  // before any fallback engine may speak; the fallbacks now cover real
+  // outages, not blips.
   if (isAraSelected() && !signal?.aborted) {
     const araOk = await speakAra(text, signal, generation);
     if (araOk && !signal?.aborted) {
       return "ara";
+    }
+    if (!signal?.aborted) {
+      const araRetryOk = await speakAra(text, signal, generation);
+      if (araRetryOk && !signal?.aborted) {
+        return "ara";
+      }
     }
   }
 

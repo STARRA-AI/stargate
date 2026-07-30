@@ -97,6 +97,9 @@ type StargateStreamContextValue = {
   streaming: string;
   sendMessage: (text: string) => Promise<void>;
   stopSpeaking: () => void;
+  /** Fold turns from the shared memory store into the visible history (e.g.
+   *  call turns after a call ends). Appends only entries not already shown. */
+  resyncHistory: () => Promise<void>;
 };
 
 const StargateContext = createContext<StargateContextValue | null>(null);
@@ -349,9 +352,43 @@ export function StargateProvider({ children }: { children: ReactNode }) {
     ],
   );
 
+  // ONE TRANSCRIPT: fold store turns the UI hasn't shown yet into the visible
+  // history — the call leg records its turns into the shared store, and this
+  // is how they appear in the deck chat the moment a call ends, no reload.
+  // Append-only and deduped against what's already on screen; never touches
+  // an in-flight streaming turn.
+  const resyncHistory = useCallback(async () => {
+    try {
+      const r = await fetch("/api/memory");
+      if (!r.ok) return;
+      const j = (await r.json()) as {
+        working?: Array<{ role?: string; content?: string }>;
+      } | null;
+      if (!j || !Array.isArray(j.working)) return;
+      const incoming: Msg[] = j.working
+        .filter(
+          (e): e is { role: "user" | "assistant"; content: string } =>
+            (e.role === "user" || e.role === "assistant") &&
+            typeof e.content === "string" &&
+            e.content.trim().length > 0,
+        )
+        .map((e) => ({ role: e.role, content: e.content }));
+      if (incoming.length === 0) return;
+      setHistory((prev) => {
+        const seen = new Set(prev.map((m) => `${m.role} ${m.content}`));
+        const fresh = incoming.filter(
+          (m) => !seen.has(`${m.role} ${m.content}`),
+        );
+        return fresh.length === 0 ? prev : [...prev, ...fresh];
+      });
+    } catch {
+      /* fail-open — the visible history just stays as it was */
+    }
+  }, []);
+
   const streamValue = useMemo(
-    () => ({ history, streaming, sendMessage, stopSpeaking }),
-    [history, streaming, sendMessage, stopSpeaking],
+    () => ({ history, streaming, sendMessage, stopSpeaking, resyncHistory }),
+    [history, streaming, sendMessage, stopSpeaking, resyncHistory],
   );
 
   return (
