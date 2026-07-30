@@ -9,6 +9,7 @@ import {
 } from "./StarraClipFace";
 import { StarraCallChat } from "./StarraCallChat";
 import { useStargateStream } from "@/lib/stargate-context";
+import { decideSpicy, pickSpicyClip } from "@/lib/voice/spicy-mode";
 // ENGINE BUS — client-safe, secret-free. "@/lib/engine/bus" only.
 import { useEngineBus } from "@/lib/engine/bus";
 
@@ -95,6 +96,64 @@ export function VoiceCallOverlay({
     if (wasOpenRef.current && !open) void resyncHistory();
     wasOpenRef.current = open;
   }, [open, resyncHistory]);
+
+  // ── SPICY MODE — her videos ON HER FACE, never a separate window ─────────
+  // Classic arms it by saying/typing "spicy mode" on the call; asking her to
+  // play one of her videos then swaps a clip onto the avatar stage itself
+  // (streamed from the auth-gated /api/avatar/spicy route). Ends on the clip's
+  // own `ended`, on "stop the video"/"back to you", or with the call. Pure
+  // decisions live in src/lib/voice/spicy-mode.ts (tested); this block is only
+  // the wiring. Classic-initiated only, per the locked persona clause.
+  const [spicyArmed, setSpicyArmed] = useState(false);
+  const [spicyClip, setSpicyClip] = useState<string | null>(null);
+  const spicyArmedRef = useRef(false);
+  spicyArmedRef.current = spicyArmed;
+  const spicyListRef = useRef<string[] | null>(null);
+  const spicyLastRef = useRef<string | null>(null);
+  const spicySeenRef = useRef(0);
+  useEffect(() => {
+    if (!open) {
+      // A new call starts cold: spicy mode never carries across calls.
+      setSpicyArmed(false);
+      setSpicyClip(null);
+      spicySeenRef.current = 0;
+      return;
+    }
+    // Only the newest not-yet-processed USER line can decide anything.
+    for (let i = spicySeenRef.current; i < transcript.length; i++) {
+      const line = transcript[i];
+      if (line.role !== "user") continue;
+      const d = decideSpicy(line.text, spicyArmedRef.current);
+      if (d.armed !== spicyArmedRef.current) setSpicyArmed(d.armed);
+      spicyArmedRef.current = d.armed;
+      if (d.action === "stop") setSpicyClip(null);
+      if (d.action === "play") {
+        void (async () => {
+          try {
+            if (!spicyListRef.current) {
+              const r = await fetch("/api/avatar/spicy");
+              const j = r.ok
+                ? ((await r.json()) as { clips?: string[] })
+                : null;
+              spicyListRef.current = Array.isArray(j?.clips) ? j.clips : [];
+            }
+            const pick = pickSpicyClip(
+              spicyListRef.current,
+              Math.random(),
+              spicyLastRef.current,
+            );
+            if (pick) {
+              spicyLastRef.current = pick;
+              setSpicyClip(pick);
+            }
+          } catch {
+            /* no list, no clip — the face just stays live */
+          }
+        })();
+      }
+    }
+    spicySeenRef.current = transcript.length;
+  }, [open, transcript]);
   // ONE VOICE (Classic's order, 2026-07-30): while her call is LIVE, typing to
   // her goes INTO the call — the same realtime session answers aloud as eve,
   // same persona, same context. Only when no open call can carry it does the
@@ -382,6 +441,37 @@ export function VoiceCallOverlay({
               openness read 0 for the whole reply and the bank's half-open floor
               frame sat frozen over her mouth. */}
           <StarraClipFace active={open} mode={faceMode} analyser={faceAnalyser} />
+          {/* SPICY MODE clip — layered over the avatar INSIDE the same stage
+              (Classic: "not in a separate window"). Tries sound first; if the
+              engine refuses unmuted autoplay it retries muted rather than
+              showing nothing. Unmounts on ended/stop/call-end. */}
+          {spicyClip ? (
+            <video
+              key={spicyClip}
+              src={`/api/avatar/spicy?clip=${encodeURIComponent(spicyClip)}`}
+              autoPlay
+              playsInline
+              onEnded={() => setSpicyClip(null)}
+              onError={() => setSpicyClip(null)}
+              ref={(el) => {
+                if (!el) return;
+                el.muted = false;
+                void el.play().catch(() => {
+                  el.muted = true;
+                  void el.play().catch(() => setSpicyClip(null));
+                });
+              }}
+              style={{
+                position: "absolute",
+                inset: 0,
+                width: "100%",
+                height: "100%",
+                objectFit: "contain",
+                background: "#000",
+                zIndex: 5,
+              }}
+            />
+          ) : null}
           {/* Paid Replicate fallback clip (flag-gated OFF via NEXT_PUBLIC_LIPSYNC=0,
               see lipsync.ts header): only rendered when lipSyncClip is non-null,
               which only ever happens if the flag is flipped on. When it IS wired,
