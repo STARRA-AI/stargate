@@ -611,6 +611,18 @@ export function Bridge() {
           >
             {eco ? "ECO ON" : "ECO"}
           </button>
+          {/* Full deck reload. Load-bearing in the dock app: the WKWebView has
+              no browser chrome, so without this a wedged deck means quitting
+              the whole app. Reload also re-seeds history from the shared
+              memory store (stargate-context boot seeding). */}
+          <button
+            type="button"
+            className="eco-btn"
+            title="Reload the deck — fresh page, memory re-synced"
+            onClick={() => window.location.reload()}
+          >
+            REFRESH
+          </button>
         </header>
 
         <div className="main-grid">
