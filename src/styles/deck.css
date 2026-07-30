@@ -1088,15 +1088,42 @@ body.low-power .star-ring { animation: none; }
 /* ── HER FACE — full-screen FaceTime call ──
    Three silent portrait clips crossfaded on call-state: calm idle, an attentive
    LISTENING face while you talk, her TALKING loop while she speaks. Her face
-   fills the screen; the glow strength + a subtle scale ride her live voice
-   (--starra-level, 0..1, set every animation frame by the overlay). No
-   transcript — just her, like a real call. */
+   fills the screen. No transcript — just her, like a real call. */
 .call-facetime { padding: 0; background: var(--void); }
+
+/* Two-column call: her face fills the left/center column, the live transcript
+   sits in its own column on the right — so her aspect ratio is never squeezed
+   by the chat. On a phone it stacks (her on top, chat below). */
+.call-facetime { flex-direction: row; align-items: stretch; justify-content: stretch; }
+.call-face-col {
+  position: relative; flex: 1 1 auto; min-width: 0; overflow: hidden;
+}
+.call-chat-pane {
+  flex: 0 0 clamp(300px, 32%, 440px);
+  min-width: 0; display: flex;
+  border-left: 1px solid var(--border);
+  background: color-mix(in oklab, var(--void-2) 60%, rgba(6,3,14,0.9));
+  backdrop-filter: blur(8px);
+}
+/* The floating status (top) + controls (bottom) now anchor to the face column,
+   so they never drift over the chat pane. */
+.call-face-col .call-ft-top,
+.call-face-col .call-ft-controls,
+.call-face-col .call-ft-error { position: absolute; }
+
+@media (max-width: 820px) {
+  .call-facetime { flex-direction: column; }
+  .call-face-col { flex: 1 1 58%; }
+  .call-chat-pane {
+    flex: 1 1 42%;
+    border-left: none; border-top: 1px solid var(--border);
+  }
+}
+
 .call-facetime .call-face-stage {
   position: absolute; inset: 0; width: 100%; height: 100%;
   border: none; border-radius: 0; overflow: hidden;
   background: var(--void);
-  --starra-level: 0;
 }
 /* Blurred, dimmed copy of her filling the whole screen behind the sharp face —
    so a portrait clip fills a wide screen without black bars, and she's never
@@ -1107,33 +1134,61 @@ body.low-power .star-ring { animation: none; }
   transform: scale(1.15); filter: blur(28px) brightness(0.42) saturate(1.1);
   z-index: 0;
 }
-/* The sharp foreground: CONTAIN so you see her head-down, nothing cropped. */
-.call-face-video {
+/* Her live face (StarraClipFace): crossfades her real portrait/talking clips
+   on call state. She holds still on connect; no generated-video jitter. */
+.call-face-portrait {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 1;
+}
+/* Paid Replicate fallback clip (flag-gated OFF via NEXT_PUBLIC_LIPSYNC=0, see
+   src/lib/voice/lipsync.ts header for the verified cost + defect writeup).
+   Stretched full-stage — this is exactly the letterboxing that makes the
+   underlying 256x256 SadTalker crop read as a "pasted box" over her real
+   face. Left functional for the labeled fallback only; NOT the default. */
+.call-face-lipsync {
   position: absolute; inset: 0; width: 100%; height: 100%;
   object-fit: contain; object-position: center;
-  opacity: 0; transition: opacity 260ms ease; z-index: 1;
-}
-/* base = calm idle; listening / speaking crossfade their own clip in */
-.call-face-idle { opacity: 1; }
-.call-face-listening .call-face-idle { opacity: 0; }
-.call-face-listening .call-face-listen { opacity: 1; }
-.call-face-speaking .call-face-idle { opacity: 0; }
-.call-face-speaking .call-face-talk {
-  opacity: 1;
-  /* she visibly moves with what she's saying (live amplitude) */
-  transform: scale(calc(1 + var(--starra-level, 0) * 0.018));
-  transform-origin: center 30%;
 }
 
-/* speaking glow — magenta vignette whose strength rides her live loudness */
+/* Native-resolution mouth-patch canvas — the FREE default lip-sync path
+   (A1's StarraClipFace.tsx, driven by viseme-sync.ts's MouthAnchorTrack +
+   the live output-audio analyser). Unlike `.call-face-lipsync` above, this
+   patches only the tracked mouth region at the stage's own resolution — no
+   stretch, no letterbox, no separate low-res source image. This container
+   fills the stage; the component positions/sizes the drawn patch per-frame
+   from the tracked mouth box (fractions of this box, not fixed pixels), so
+   it scales with the stage like everything else in `.call-face-stage`.
+   INTEGRATION NOTE (A2, 2026-07-28, contract §8/Task 3): A1's StarraClipFace
+   had not landed a mouth-patch element as of this edit — no such class
+   existed in the codebase to read back (verified: `grep -rn
+   call-face-mouth-patch src/` before this edit returned nothing). Name
+   chosen to match the existing `.call-face-*` convention; A1 should apply
+   this class to their actual DOM node when it lands, or tell A2 the name
+   it actually needs so this can be renamed to match — do not invent a
+   second, competing class. */
+.call-face-mouth-patch {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  z-index: 2;
+  pointer-events: none;
+}
+
+/* speaking glow — a slow CALM pulse (not per-frame amplitude, which flickered).
+   Fades in when she talks, holds a soft magenta vignette that breathes with her. */
 .call-face-glow {
   position: absolute; inset: 0; pointer-events: none; z-index: 2;
-  opacity: 0; transition: opacity 140ms ease;
+  opacity: 0; transition: opacity 400ms ease;
   box-shadow:
     inset 0 0 70px color-mix(in oklab, var(--magenta) 40%, transparent),
     inset 0 0 170px color-mix(in oklab, var(--purple) 20%, transparent);
 }
-.call-face-speaking .call-face-glow { opacity: calc(0.28 + var(--starra-level, 0) * 0.72); }
+.call-face-speaking .call-face-glow {
+  opacity: 0.4;
+  animation: starra-glow-pulse 3.4s ease-in-out infinite;
+}
+@keyframes starra-glow-pulse {
+  0%, 100% { opacity: 0.32; }
+  50%      { opacity: 0.6; }
+}
 
 /* readability scrim (top + bottom) so status/controls sit on her cleanly */
 .call-face-scrim {
@@ -1159,13 +1214,16 @@ body.low-power .star-ring { animation: none; }
   z-index: 4; max-width: min(420px, 90vw);
 }
 
-/* Reduced-motion / low-power: keep her face (her presence) but drop the live
-   scale + hold the glow steady. */
+/* Reduced-motion / low-power: keep her face (her presence) but hold her
+   completely still + hold the glow steady (no breathe, no pulse). */
 @media (prefers-reduced-motion: reduce) {
-  .call-face-speaking .call-face-talk { transform: none; }
-  .call-face-speaking .call-face-glow { opacity: 0.5; }
+  .call-face-listening .call-face-portrait,
+  .call-face-speaking .call-face-portrait { animation: none; transform: none; }
+  .call-face-speaking .call-face-glow { animation: none; opacity: 0.5; }
 }
-body.low-power .call-face-speaking .call-face-talk { transform: none; }
+body.low-power .call-face-listening .call-face-portrait,
+body.low-power .call-face-speaking .call-face-portrait { animation: none; transform: none; }
+body.low-power .call-face-speaking .call-face-glow { animation: none; opacity: 0.5; }
 
 .call-error-box {
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;

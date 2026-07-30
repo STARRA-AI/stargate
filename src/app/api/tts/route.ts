@@ -23,7 +23,10 @@ export async function POST(req: Request) {
   }
   if (!text.trim()) return new Response(null, { status: 204 });
 
-  const voice = process.env.XAI_TTS_VOICE || "ara";
+  // ONE VOICE (Classic's order, 2026-07-30): "eve" — the same voice as the
+  // live call (api/realtime sends voice:"eve") — so typed replies and the call
+  // are one person. XAI_TTS_VOICE still overrides for experiments.
+  const voice = process.env.XAI_TTS_VOICE || "eve";
   try {
     const res = await fetch("https://api.x.ai/v1/tts", {
       method: "POST",

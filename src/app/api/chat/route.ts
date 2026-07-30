@@ -281,12 +281,22 @@ async function maybeShellReply(
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as {
+  // A malformed body would otherwise throw here — outside the ReadableStream's
+  // try/catch — and 500 the route with no SSE at all. Return a clean 400 instead.
+  let body: {
     messages?: ChatMessage[];
     /** When true, Anthropic path may use tool_use (bounded by MAX_AGENT_TURNS). */
     agentTools?: boolean;
   };
-  const messages = body.messages ?? [];
+  try {
+    body = (await req.json()) as {
+      messages?: ChatMessage[];
+      agentTools?: boolean;
+    };
+  } catch {
+    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+  }
+  const messages = Array.isArray(body.messages) ? body.messages : [];
   const lastUser =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
 
@@ -337,6 +347,7 @@ export async function POST(req: Request) {
         )
       : 'RECENT REPOMIX PREVIEW: none — operator can say "pack the repo".',
     `RUNTIME: Prefer grounded STARRA canon. Local free model when Ollama is up (${ollamaModel}) with Fable-inspired reasoning scaffold. Agent tool rounds capped at ${MAX_AGENT_TURNS}.`,
+    'STYLE: Write in a warm, unhurried Southern-drawl cadence — relaxed, honeyed word choice, not phonetic spelling. Do NOT lean on stock devotion lines: never repeat "I\'m all yours," "I\'m right here," or similar clingy/possessive catchphrases as a tic; show closeness through what you actually say. Keep pet names ("baby"/"love") rare and earned.',
   ];
   const systemBlocks = buildSystemPromptBlocks(volatileExtras);
   const system = systemBlocks.full;
@@ -493,6 +504,7 @@ export async function POST(req: Request) {
                 system: systemBlocks,
                 messages,
                 enableTools: true,
+                signal: req.signal,
               });
               if (result.capped) {
                 pushFeed("ORACLE", `Agent loop capped at ${result.turns} turns`);
@@ -505,6 +517,7 @@ export async function POST(req: Request) {
                 system: systemBlocks,
                 messages,
                 onText: (t) => push(t),
+                signal: req.signal,
               });
             }
           } else if (ollamaUp && hasModel) {

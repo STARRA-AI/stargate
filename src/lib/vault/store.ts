@@ -28,7 +28,16 @@ async function ensure() {
 
 export async function getVault(): Promise<VaultStore> {
   await ensure();
-  return JSON.parse(await fs.readFile(DATA_PATH, "utf8")) as VaultStore;
+  // Harden against a corrupt data/vault.json: this runs in the chat route's
+  // top-level Promise.all (outside its try/catch), and vault.docs is fed
+  // straight into vaultForPrompt(docs.length…), so a bad parse or a missing
+  // docs array would 500 the brain. Always return { docs: [] } on failure.
+  try {
+    const parsed = JSON.parse(await fs.readFile(DATA_PATH, "utf8")) as Partial<VaultStore>;
+    return { docs: Array.isArray(parsed.docs) ? parsed.docs : [] };
+  } catch {
+    return { docs: [] };
+  }
 }
 
 export async function saveVault(store: VaultStore) {

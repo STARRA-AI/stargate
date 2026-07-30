@@ -9,7 +9,24 @@
 #   starra install  # put `starra` on PATH + double-clickable .command
 set -euo pipefail
 
-PROJ="$(cd "$(dirname "$0")/.." && pwd)"
+# Resolve this script's REAL path before deriving PROJ. `starra install` drops a
+# SYMLINK at ~/bin/starra → scripts/starra (verified: ls -l ~/bin/starra), and
+# `dirname "$0"` on that symlink yields ~/bin, so PROJ became $HOME — sending the
+# pid file, the logs and the pre-`npm run dev` `cd` to the wrong directory.
+# That bug already fired: /Users/work/data/starra-dev.pid was written 2026-07-25
+# 23:39, one minute after the symlink was created. Split-brain state like that is
+# exactly how `status` ends up lying and the deck ends up silently down.
+# Follow the symlink chain to the real file instead (bounded, so a link loop
+# can't hang the launcher).
+_src="${BASH_SOURCE[0]}"
+_hops=0
+while [[ -L "$_src" && $_hops -lt 20 ]]; do
+  _t="$(readlink "$_src")"
+  if [[ "$_t" == /* ]]; then _src="$_t"; else _src="$(dirname "$_src")/$_t"; fi
+  _hops=$((_hops + 1))
+done
+PROJ="$(cd "$(dirname "$_src")/.." && pwd)"
+unset _src _hops
 STORAGE="/Volumes/Storage"
 MODELS="$STORAGE/STARRA/ollama/models"
 LOG_DIR="${STORAGE}/STARRA/logs"
@@ -19,6 +36,17 @@ mkdir -p "$LOG_DIR" "$PROJ/data" 2>/dev/null || true
 PID_FILE="$PROJ/data/starra-dev.pid"
 LOG="$LOG_DIR/starra-up.log"
 PORT="${STARRA_PORT:-3000}"
+# Sentinel telling the launchd watchdog "Classic stopped her on purpose — stay
+# down". Without it, `starra stop` would race the watchdog and she'd pop right
+# back up. `starra up` clears it. See scripts/starra-watchdog.sh.
+PAUSE_FILE="$PROJ/data/starra-paused"
+# launchd job label — kept in one place so the script, the plist and the
+# installer can never drift apart.
+KEEPALIVE_LABEL="com.starra.deck"
+# The watchdog this launcher supervises with, and the pid file it writes so a
+# `starra status` typed in any fresh shell can see whether she is really guarded.
+WATCHDOG="$PROJ/scripts/starra-watchdog.sh"
+GUARD_PID_FILE="$PROJ/data/starra-watchdog.pid"
 
 # ── TLS ── Serve HTTPS when a locally-trusted mkcert cert is present, so browsers
 # stop warning "Not secure" and the mic/camera work over the LAN (secure context
@@ -27,18 +55,79 @@ PORT="${STARRA_PORT:-3000}"
 # rootCA.pem on the iPhone (see: mkcert -CAROOT).
 CERT="$PROJ/certs/deck-cert.pem"
 KEY="$PROJ/certs/deck-key.pem"
-# HTTPS is OPT-IN: `STARRA_HTTPS=1 starra up` (with a cert present) serves TLS for
-# the phone / secure-context. Default is plain HTTP so the deck ALWAYS loads with
-# zero cert-trust friction. localhost HTTP is already a secure context, so the
-# mic/camera still work on the Mac.
-if [[ "${STARRA_HTTPS:-0}" == "1" && -f "$CERT" && -f "$KEY" ]]; then
+# HTTPS AUTO-UPGRADE (2026-07-29). Previously HTTPS was purely opt-in via
+# STARRA_HTTPS=1, and the default was plain HTTP — which meant the deck answered on
+# the Wi-Fi in cleartext (verified: http://192.168.1.65:3000/login returned 200 from
+# the LAN), carrying the login password and the session cookie unencrypted.
+#
+# It now upgrades ITSELF the moment TLS can be served without friction, i.e. when
+# BOTH are true:
+#   - the mkcert leaf exists (certs/deck-cert.pem, valid to Oct 2028, SANs cover
+#     localhost + 127.0.0.1 + 192.168.1.65 + ::1), and
+#   - the mkcert ROOT CA is actually trusted in a keychain, so browsers show no
+#     warning. Checked, never assumed — an untrusted CA would hand Classic a scary
+#     interstitial, which is why plain HTTP was the safe default before.
+#
+# So: run `mkcert -install` once (it needs the Mac password, which is why this
+# cannot self-serve) and every later launch is HTTPS automatically. The deck's
+# auth cookie also picks up its `secure` flag on its own at that point
+# (src/app/api/auth/route.ts, isSecureRequest).
+#
+# Overrides, both honored: STARRA_HTTPS=1 forces TLS even if the CA is untrusted;
+# STARRA_HTTPS=0 forces plain HTTP even if it is trusted.
+mkcert_ca_trusted() {
+  command -v security >/dev/null 2>&1 || return 1
+  security find-certificate -a -c "mkcert" /Library/Keychains/System.keychain 2>/dev/null \
+    | grep -q "labl" && return 0
+  security find-certificate -a -c "mkcert" "$HOME/Library/Keychains/login.keychain-db" 2>/dev/null \
+    | grep -q "labl" && return 0
+  return 1
+}
+STARRA_HTTPS_EFFECTIVE="${STARRA_HTTPS:-auto}"
+if [[ "$STARRA_HTTPS_EFFECTIVE" == "auto" ]]; then
+  if [[ -f "$CERT" && -f "$KEY" ]] && mkcert_ca_trusted; then
+    STARRA_HTTPS_EFFECTIVE=1
+  else
+    STARRA_HTTPS_EFFECTIVE=0
+  fi
+fi
+if [[ "$STARRA_HTTPS_EFFECTIVE" == "1" && -f "$CERT" && -f "$KEY" ]]; then
   SCHEME="https"
   HOST="${STARRA_HOST:-0.0.0.0}"   # all interfaces so the phone can reach HTTPS
 else
   SCHEME="http"
-  HOST="${STARRA_HOST:-127.0.0.1}"
+  # Default to all interfaces so the phone link actually works out of the box.
+  # Override with STARRA_HOST=127.0.0.1 to force loopback-only.
+  HOST="${STARRA_HOST:-0.0.0.0}"
 fi
 URL="${SCHEME}://127.0.0.1:${PORT}"
+
+# Is the deck's auth gate actually armed? src/middleware.ts:16-17 reads:
+#   "Gate is OFF until a password is configured — never lock the deck with no key."
+#   if (!authPassword()) return NextResponse.next();
+# and src/lib/auth.ts:18 sources that from process.env.STARRA_PASSWORD. So the
+# gate exists ONLY when STARRA_PASSWORD is non-empty. Checked without ever
+# printing the value.
+deck_password_set() {
+  [[ -n "${STARRA_PASSWORD:-}" ]] && return 0
+  local v
+  v="$(grep -m1 '^STARRA_PASSWORD=' "$PROJ/.env.local" 2>/dev/null | cut -d= -f2- || true)"
+  v="${v%$'\r'}"
+  v="${v%\"}"; v="${v#\"}"
+  v="${v%\'}"; v="${v#\'}"
+  [[ -n "$v" ]]
+}
+
+# ── LAN EXPOSURE GUARD ── 0.0.0.0 publishes the deck to every device on the
+# Wi‑Fi. That is only acceptable while the auth gate above is armed; with no
+# password the middleware waves everyone through, so binding wide would put an
+# UNLOCKED STARRA on the network. Fail closed to loopback instead, and say so.
+# This is what makes the LAN default safe by construction rather than by comment.
+LAN_GUARD=""
+if [[ "$HOST" == "0.0.0.0" ]] && ! deck_password_set; then
+  HOST="127.0.0.1"
+  LAN_GUARD="no-password"
+fi
 
 ollama_up() {
   curl -sf --max-time 2 "http://127.0.0.1:11434/api/tags" >/dev/null 2>&1
@@ -47,6 +136,77 @@ ollama_up() {
 deck_up() {
   # -k: accept the cert even before the CA is trusted, so the health check works.
   curl -sfk --max-time 2 "${SCHEME}://127.0.0.1:${PORT}/" >/dev/null 2>&1
+}
+
+# Authoritative bind check for `status`: asks the OS what the listening
+# socket is actually bound to (lsof shows "*:PORT" for 0.0.0.0, "127.0.0.1:
+# PORT" for loopback-only) rather than trusting this invocation's $HOST —
+# which can be stale if STARRA_HOST wasn't exported in *this* shell even
+# though the running deck was started elsewhere with a different value.
+# Scans EVERY listening socket on the port, not just the first line: a host can
+# hold both a wildcard and a loopback listener (or v4 + v6), and `head -1` would
+# pick whichever lsof happened to print first and could answer backwards.
+# "*:PORT" / "0.0.0.0:PORT" / "[::]:PORT" all mean all-interfaces.
+deck_bound_all_interfaces() {
+  lsof -nP -iTCP:"${PORT}" -sTCP:LISTEN 2>/dev/null | awk 'NR>1{print $9}' \
+    | grep -qE '^\*:|^0\.0\.0\.0:|^\[::\]:'
+}
+
+# This Mac's LAN address, derived live. Does NOT hardcode en0: en0 is Wi‑Fi on
+# this machine today (route -n get default → "interface: en0", verified), but on
+# Ethernet or a dock the primary interface is a different device and a hardcoded
+# en0 would print a stale or empty address. Ask the routing table first, then
+# fall back. Prints nothing when there is no LAN address at all.
+lan_ip() {
+  local iface ip i
+  iface="$(route -n get default 2>/dev/null | awk -F'interface:' '/interface:/{gsub(/ /,"",$2); print $2; exit}')"
+  for i in "$iface" en0 en1; do
+    [[ -n "$i" ]] || continue
+    ip="$(ipconfig getifaddr "$i" 2>/dev/null || true)"
+    if [[ -n "$ip" ]]; then echo "$ip"; return 0; fi
+  done
+  return 0
+}
+
+# SINGLE SOURCE OF TRUTH for the phone line — every caller (up / open / status)
+# goes through here, so there is exactly one place that can ever print a phone
+# URL and it always asks the OS first. A URL is emitted ONLY when the kernel
+# confirms a wildcard bind AND this Mac actually has a LAN address; otherwise it
+# prints why not. Never trusts $HOST, because a `starra status` typed in a fresh
+# shell has no idea what STARRA_HOST the running deck was launched with.
+#   $1 = "probe" → also curl the LAN URL and report real reachability.
+phone_link_line() {
+  if [[ "${LAN_GUARD:-}" == "no-password" ]]; then
+    echo "  phone link: OFF — STARRA_PASSWORD is unset, so the auth gate is off"
+    echo "               (src/middleware.ts:16-17) and the LAN bind is refused."
+    echo "               Set STARRA_PASSWORD in .env.local, then: starra up"
+    return 0
+  fi
+  if ! deck_bound_all_interfaces; then
+    echo "  phone link: not on the LAN — bound to loopback only."
+    echo "               Run: STARRA_HOST=0.0.0.0 starra up"
+    return 0
+  fi
+  local lan url
+  lan="$(lan_ip)"
+  if [[ -z "$lan" ]]; then
+    echo "  phone link: unavailable — this Mac has no LAN address right now"
+    return 0
+  fi
+  url="${SCHEME}://${lan}:${PORT}"
+  if [[ "${1:-}" == "probe" ]]; then
+    # Curling the LAN IP from this Mac proves the socket answers on the LAN
+    # address itself (not just loopback). It cannot prove the iPhone's Wi‑Fi
+    # path or a firewall in between — so it is reported as "answering", not as
+    # a promise about the phone.
+    if curl -sfk --max-time 2 "${url}/" >/dev/null 2>&1; then
+      echo "● Phone (same Wi‑Fi): ${url} (answering on the LAN address)"
+    else
+      echo "○ Phone (same Wi‑Fi): ${url} (bound to the LAN but not answering)"
+    fi
+  else
+    echo "  Phone (same Wi‑Fi): ${url}"
+  fi
 }
 
 # Guard against the dead-symlink trap: if ~/.ollama/models is a symlink whose
@@ -129,12 +289,23 @@ start_deck() {
         deck_up && { echo "● Deck online"; return 0; }
         sleep 0.5
       done
+      echo "◆ Deck pid ${old} is running but never answered; treating as stuck."
+    elif [[ -n "$old" ]]; then
+      echo "◆ Stale pid file: process ${old} is not running (likely a reboot). Cleaning up."
+    else
+      echo "◆ Empty pid file found. Cleaning up."
     fi
     rm -f "$PID_FILE"
   fi
   if ! ensure_node_on_path; then
     echo "◆ npm not found. Install Node (nvm or Homebrew) then retry."
     return 1
+  fi
+  if [[ "${LAN_GUARD:-}" == "no-password" ]]; then
+    echo "◆ LAN bind refused: STARRA_PASSWORD is not set, so the deck's auth gate"
+    echo "  is off (src/middleware.ts:16-17) and 0.0.0.0 would publish an unlocked"
+    echo "  STARRA to the Wi‑Fi. Binding loopback only. Set STARRA_PASSWORD in"
+    echo "  .env.local to turn the phone link back on."
   fi
   echo "→ Starting STARGATE (${SCHEME}) on ${HOST}:${PORT}…"
   cd "$PROJ"
@@ -150,7 +321,10 @@ start_deck() {
   for _ in $(seq 1 60); do
     if deck_up; then
       echo "● Deck online at $URL"
-      echo "  Phone (same Wi‑Fi): ${SCHEME}://$(ipconfig getifaddr en0 2>/dev/null || echo YOUR_LAN_IP):${PORT}"
+      # `probe`, not a bare print: `starra up` must never hand him a phone URL it
+      # has not just curled. The deck is answering by definition here, so the
+      # extra check costs one local request.
+      phone_link_line probe
       return 0
     fi
     sleep 0.5
@@ -160,6 +334,8 @@ start_deck() {
 }
 
 cmd_up() {
+  # Bringing her up cancels any deliberate stop, so the watchdog resumes guarding.
+  rm -f "$PAUSE_FILE" 2>/dev/null || true
   # Don't abort the whole launcher if one step returns non-zero.
   set +e
   start_ollama
@@ -175,6 +351,19 @@ cmd_up() {
     tail -20 "$LOG" 2>/dev/null || true
     return 1
   fi
+  # Arm the crash guard from THIS shell — see start_guard for why launchd cannot
+  # do it while the repo lives under ~/Desktop. Silent when something else is
+  # already guarding her; never claims a guard it did not confirm alive.
+  set +e
+  if [[ -z "${STARRA_WATCHDOG:-}" ]] && ! guard_pid >/dev/null 2>&1 && [[ "$(keepalive_state)" != "running" ]]; then
+    if start_guard; then
+      echo "● Crash guard on (watchdog pid $(guard_pid)) — she comes back on her own if the deck dies."
+    else
+      echo "○ Crash guard could not start — she is up, but will not revive herself."
+      echo "  Detail: $LOG_DIR/starra-keepalive.log"
+    fi
+  fi
+  set -e
   return 0
 }
 
@@ -190,9 +379,7 @@ cmd_open() {
     echo ""
     echo "Copy. STARRA is up."
     echo "  On this Mac:  $URL"
-    local lan
-    lan="$(ipconfig getifaddr en0 2>/dev/null || true)"
-    [[ -n "$lan" ]] && echo "  On iPhone:    ${SCHEME}://${lan}:${PORT}"
+    phone_link_line
     echo "  Wake: say \"starra\" or press Option+Space"
     echo ""
   else
@@ -206,6 +393,11 @@ cmd_open() {
 }
 
 cmd_stop() {
+  # Tell the watchdog this is intentional BEFORE killing anything — otherwise it
+  # sees the health check fail and immediately brings her back, and `starra stop`
+  # looks broken.
+  mkdir -p "$(dirname "$PAUSE_FILE")" 2>/dev/null || true
+  : >"$PAUSE_FILE"
   if [[ -f "$PID_FILE" ]]; then
     local pid
     pid="$(cat "$PID_FILE" 2>/dev/null || true)"
@@ -219,16 +411,237 @@ cmd_stop() {
   else
     pkill -f "next dev.*${PORT}" 2>/dev/null || true
   fi
-  echo "● Deck stopped (Ollama left running)."
+  echo "● Deck stopped (Ollama left running). Watchdog paused — \`starra up\` resumes it."
+}
+
+# macOS TCC shields a handful of user folders (Desktop/Documents/Downloads)
+# from launchd-spawned jobs: the job can chdir in, but READING a file there
+# returns EPERM. Measured on this Mac 2026-07-28 — a throwaway launchd agent
+# doing `head -c 1 package.json` under ~/Desktop came back "Operation not
+# permitted" — and it is why scripts/macos/install-keepalive.sh declines to
+# install here (install-keepalive.sh:93-125).
+# Status needs this so it never points Classic at an installer that will
+# refuse: when the repo IS shielded, the one-time unblock has to be named
+# first, because it is the only thing that makes the installer work.
+repo_shielded() {
+  case "$PROJ/" in
+    "$HOME"/Desktop/*|"$HOME"/Documents/*|"$HOME"/Downloads/*) return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The honest "how do I get reboot coverage" answer for THIS machine, indented
+# by the caller so it lines up under whichever status line raised the question.
+# Never promises the installer alone is enough when it demonstrably is not.
+keepalive_howto() {
+  local pad="${1:-               }"
+  if repo_shielded; then
+    echo "${pad}Reboot coverage needs one one-time choice from you — macOS will not let"
+    echo "${pad}launchd read this folder until then, so the installer declines:"
+    echo "${pad}  a) System Settings → Privacy & Security → Full Disk Access → + → /bin/bash"
+    echo "${pad}  b) or move this repo out of ~/Desktop (e.g. ~/Projects/stargate)"
+    echo "${pad}then run: bash scripts/macos/install-keepalive.sh"
+  else
+    echo "${pad}Survive reboots too: bash scripts/macos/install-keepalive.sh"
+  fi
+}
+
+# What launchd ACTUALLY thinks of the keepalive job:
+#   absent      → not loaded at all
+#   running     → has a live pid
+#   failing:<n> → loaded but last run exited <n> (respawn loop)
+# `launchctl list <label>` only prints a "PID" key while the job is alive, which
+# is what lets us tell "protecting her" apart from "dying every 30 seconds".
+keepalive_state() {
+  local out st
+  out="$(launchctl list "$KEEPALIVE_LABEL" 2>/dev/null)" || { echo "absent"; return 0; }
+  [[ -z "$out" ]] && { echo "absent"; return 0; }
+  if grep -q '"PID"' <<<"$out"; then echo "running"; return 0; fi
+  st="$(awk -F'= ' '/"LastExitStatus"/{gsub(/[; ]/,"",$2); print $2; exit}' <<<"$out")"
+  # launchd reports the raw wait status; >>8 turns 32256 into the real exit code 126.
+  if [[ "$st" =~ ^[0-9]+$ ]] && (( st > 255 )); then st=$(( st >> 8 )); fi
+  echo "failing:${st:-unknown}"
+}
+
+# ── CRASH GUARD (the keepalive that actually runs on this Mac) ───────────────
+# Measured here 2026-07-28, not assumed:
+#   • A launchd job is DENIED read access to anything under ~/Desktop —
+#     `head -c 12 package.json` from a throwaway LaunchAgent returns "Operation
+#     not permitted" — and it stays denied even when the script launchd runs
+#     lives OUTSIDE ~/Desktop. It can still curl the deck; it can never read her
+#     files to restart her. That is macOS TCC, and this repo is under ~/Desktop.
+#   • A process started from a session that already HAS that access KEEPS it
+#     after it is detached and reparented to launchd (probe: ppid=1, still
+#     reading package.json every 2s long after its launcher exited).
+# So the guard is spawned from HERE — from the shell Classic already typed in —
+# instead of by launchd. That is the difference between a keepalive that works
+# today with zero permission grants and one that dies every 30 seconds while
+# claiming to protect her. The honest limit is stated in `status`: this covers
+# crashes for as long as he stays logged in, not a reboot.
+guard_pid() {
+  local p
+  [[ -f "$GUARD_PID_FILE" ]] || return 1
+  p="$(cat "$GUARD_PID_FILE" 2>/dev/null || true)"
+  [[ "$p" =~ ^[0-9]+$ ]] || return 1
+  kill -0 "$p" 2>/dev/null || return 1
+  # Confirm the pid is really the watchdog. After a reboot that number belongs
+  # to something else entirely, and trusting it would make `status` lie.
+  ps -o command= -p "$p" 2>/dev/null | grep -q 'starra-watchdog' || return 1
+  echo "$p"
+  return 0
+}
+
+# Returns 0 only when a watchdog is confirmed ALIVE afterwards — never on the
+# strength of having spawned one.
+start_guard() {
+  # We ARE the watchdog (it exports this): arming another would fork-bomb.
+  if [[ -n "${STARRA_WATCHDOG:-}" ]]; then return 0; fi
+  if guard_pid >/dev/null 2>&1; then return 0; fi
+  # launchd is already doing the job (repo outside ~/Desktop, or FDA granted).
+  if [[ "$(keepalive_state)" == "running" ]]; then return 0; fi
+  if [[ ! -f "$WATCHDOG" ]]; then return 1; fi
+  mkdir -p "$LOG_DIR" 2>/dev/null || true
+  # nohup so closing the Terminal window does not take her guard with it.
+  nohup bash "$WATCHDOG" >>"$LOG_DIR/starra-keepalive.log" 2>&1 &
+  disown "$!" 2>/dev/null || true
+  local i
+  for i in $(seq 1 12); do
+    if guard_pid >/dev/null 2>&1; then return 0; fi
+    sleep 0.3
+  done
+  return 1
+}
+
+# Stop means STOPPED. It must never return while the watchdog is still running,
+# because it also deletes the pid file — and a live watchdog with no pid file is
+# invisible to guard_pid, so the next `starra up` would arm a second one and two
+# supervisors would race to restart the same deck. So: signal, WAIT for the
+# process to actually be gone, escalate if it will not go, and only then clear
+# the files.
+stop_guard() {
+  local p i
+  if p="$(guard_pid)"; then
+    kill "$p" 2>/dev/null || true
+    for i in $(seq 1 20); do
+      if ! kill -0 "$p" 2>/dev/null; then break; fi
+      sleep 0.25
+    done
+    if kill -0 "$p" 2>/dev/null; then
+      kill -9 "$p" 2>/dev/null || true
+      for i in $(seq 1 12); do
+        if ! kill -0 "$p" 2>/dev/null; then break; fi
+        sleep 0.25
+      done
+    fi
+    if kill -0 "$p" 2>/dev/null; then
+      echo "◆ Watchdog pid $p will not die — leaving its pid file alone so status keeps telling the truth."
+      return 1
+    fi
+  fi
+  # Belt and braces for a watchdog that was SIGKILLed and never ran its trap.
+  rm -f "$GUARD_PID_FILE" 2>/dev/null || true
+  rm -rf "$PROJ/data/starra-watchdog.lock" 2>/dev/null || true
+  return 0
+}
+
+cmd_guard() {
+  case "${1:-}" in
+    stop|off)
+      stop_guard
+      echo "● Crash guard off. She will not come back on her own until \`starra up\`."
+      ;;
+    ""|start|on)
+      if [[ "$(keepalive_state)" == "running" ]]; then
+        echo "● Already guarded by launchd (${KEEPALIVE_LABEL}) — nothing to do."
+        return 0
+      fi
+      if start_guard; then
+        echo "● Crash guard ON (watchdog pid $(guard_pid)) — she restarts herself if the deck dies."
+      else
+        echo "◆ Could not start the crash guard. Log: $LOG_DIR/starra-keepalive.log"
+        return 1
+      fi
+      ;;
+    *)
+      echo "Usage: starra guard [stop]"
+      return 1
+      ;;
+  esac
 }
 
 cmd_status() {
   if ollama_up; then echo "● Ollama"; else echo "○ Ollama"; fi
-  if deck_up; then echo "● Deck $URL"; else echo "○ Deck"; fi
-  local lan
-  lan="$(ipconfig getifaddr en0 2>/dev/null || true)"
-  [[ -n "$lan" ]] && echo "  iPhone: ${SCHEME}://${lan}:${PORT}"
+
+  # Local link: actually curl it, don't assume from the pid/bind config.
+  if deck_up; then
+    echo "● Deck $URL (reachable)"
+  else
+    echo "○ Deck $URL (unreachable)"
+  fi
+
+  # Phone link: one code path, and it probes for real. See phone_link_line.
+  phone_link_line probe
+
+  # Keepalive: registered with launchd is NOT the same as working. A job can be
+  # loaded and still be dying on every launch (that is exactly what happened
+  # here: macOS privacy blocked it, exit 126, and launchd kept respawning it).
+  # So report launchd's ACTUAL state — running pid vs last exit status.
+  # Two things can guard her and they are NOT the same promise, so they are
+  # never reported as if they were: launchd survives a reboot; a session-armed
+  # watchdog covers crashes until he logs out. Only the one that is really
+  # running gets printed, and it is printed for what it actually covers.
+  local kstate gpid
+  kstate="$(keepalive_state)"
+  gpid="$(guard_pid 2>/dev/null || true)"
+
+  if [[ "$kstate" == "running" ]]; then
+    if [[ -f "$PAUSE_FILE" ]]; then
+      echo "● Keepalive: running, but PAUSED (you ran \`starra stop\`) — \`starra up\` resumes it"
+    else
+      echo "● Keepalive: armed (${KEEPALIVE_LABEL}) — she restarts on crash + at login"
+    fi
+  elif [[ -n "$gpid" ]]; then
+    if [[ -f "$PAUSE_FILE" ]]; then
+      echo "● Crash guard: ON (watchdog pid $gpid) but PAUSED (you ran \`starra stop\`) — \`starra up\` resumes it"
+    else
+      echo "● Crash guard: ON (watchdog pid $gpid) — she restarts herself within ~20s if the deck dies."
+    fi
+    echo "               Covers crashes while you stay logged in. NOT a reboot: macOS blocks"
+    echo "               launchd from reading ~/Desktop, so after logging back in run \`starra\` once."
+    keepalive_howto "               "
+    # A shell guard being up must never HIDE a launchd agent that is loaded and
+    # dying: that job respawns every 30s forever, burning CPU and filling the log
+    # while looking like protection. Report it here or it is invisible.
+    if [[ "$kstate" == failing:* ]]; then
+      echo "◆              Note: a launchd keepalive (${KEEPALIVE_LABEL}) is ALSO loaded and FAILING"
+      echo "               (last exit ${kstate#failing:}) — it respawns every 30s and can never work"
+      echo "               from ~/Desktop. Clear it: launchctl bootout gui/$(id -u)/${KEEPALIVE_LABEL}"
+    fi
+  else
+    case "$kstate" in
+      failing:126|failing:1)
+        echo "◆ Keepalive: LOADED BUT FAILING (exit 126 = macOS blocked it)."
+        echo "               Cause: this repo is under ~/Desktop, which macOS shields from"
+        echo "               background jobs — launchd can see the folder but not read the"
+        echo "               files, so the watchdog dies instantly."
+        echo "               Fix now (no permissions): starra guard"
+        keepalive_howto "               "
+        ;;
+      failing:*)
+        echo "◆ Keepalive: LOADED BUT FAILING (last exit ${kstate#failing:})."
+        echo "               Log: $PROJ/data/logs/starra-keepalive.log"
+        echo "               Guard her right now anyway: starra guard"
+        ;;
+      *)
+        echo "○ Keepalive: not installed — she will NOT restart herself if she crashes."
+        echo "               Arm it now, no permissions needed:  starra guard"
+        keepalive_howto "               "
+        ;;
+    esac
+  fi
+
   [[ -f "$LOG" ]] && echo "  log: $LOG"
+  return 0
 }
 
 cmd_install() {
@@ -261,8 +674,15 @@ starra — wake STARGATE
   starra up       start Ollama + deck (background)
   starra open     open HUD (starts if needed)
   starra stop     stop deck
-  starra status   health
+  starra status   health (deck + phone link + keepalive, all probed for real)
+  starra guard    arm the crash guard now (starra up does this for you)
+  starra guard stop   turn it off
   starra install  PATH + double-click STARRA.command
+
+  Crash guard vs keepalive — they are not the same promise:
+    starra guard                          crashes, while you are logged in. Works today.
+    bash scripts/macos/install-keepalive.sh   crashes AND reboots — needs macOS to let
+                                          launchd read this folder (it tells you how).
 EOF
 }
 
@@ -296,6 +716,7 @@ main() {
     up|start) cmd_up ;;
     stop|down) cmd_stop ;;
     status|st) cmd_status ;;
+    guard|keepalive) shift; cmd_guard "${1:-}" ;;
     install) cmd_install ;;
     lipsync) shift; cmd_lipsync "${1:-}" ;;
     -h|--help|help) usage ;;
@@ -307,4 +728,9 @@ main() {
   esac
 }
 
-main "$@"
+# Only run when EXECUTED, not when sourced. The watchdog and the test harness
+# source this file to reuse deck_up/ollama_up/phone_link_line without launching
+# anything — without this guard, sourcing it would fire cmd_open.
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+  main "$@"
+fi

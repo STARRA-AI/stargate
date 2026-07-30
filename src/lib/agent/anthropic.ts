@@ -199,6 +199,9 @@ export async function runAnthropicAgent(opts: {
   system: SystemPromptBlocks;
   messages: ChatMessage[];
   enableTools?: boolean;
+  /** Aborts the upstream Anthropic call(s) when the client disconnects — stops
+   * burning premium tokens on a reply nobody is receiving. */
+  signal?: AbortSignal;
 }): Promise<{ text: string; turns: number; capped: boolean }> {
   const client = new Anthropic({ apiKey: opts.apiKey });
   const model = opts.model ?? "claude-sonnet-4-20250514";
@@ -226,13 +229,16 @@ export async function runAnthropicAgent(opts: {
     maxTurns: MAX_AGENT_TURNS,
     onCap: async () => ({ text: LOOP_CAP_MESSAGE }),
     step: async () => {
-      const response = await client.messages.create({
-        model,
-        max_tokens: 1024,
-        system,
-        messages: history,
-        ...(tools ? { tools } : {}),
-      });
+      const response = await client.messages.create(
+        {
+          model,
+          max_tokens: 1024,
+          system,
+          messages: history,
+          ...(tools ? { tools } : {}),
+        },
+        opts.signal ? { signal: opts.signal } : undefined,
+      );
 
       if (response.stop_reason !== "tool_use") {
         const text = textFromContent(response.content) || LOOP_CAP_MESSAGE;
@@ -275,6 +281,8 @@ export async function streamAnthropicCached(opts: {
   system: SystemPromptBlocks;
   messages: ChatMessage[];
   onText: (chunk: string) => void;
+  /** Aborts the upstream Anthropic stream when the client disconnects. */
+  signal?: AbortSignal;
 }): Promise<void> {
   const client = new Anthropic({ apiKey: opts.apiKey });
   const model = opts.model ?? "claude-sonnet-4-20250514";
@@ -290,16 +298,19 @@ export async function streamAnthropicCached(opts: {
     system.push({ type: "text", text: opts.system.volatile });
   }
 
-  const response = await client.messages.create({
-    model,
-    max_tokens: 1024,
-    system,
-    messages: opts.messages.map((m) => ({
-      role: m.role,
-      content: m.content,
-    })),
-    stream: true,
-  });
+  const response = await client.messages.create(
+    {
+      model,
+      max_tokens: 1024,
+      system,
+      messages: opts.messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+      })),
+      stream: true,
+    },
+    opts.signal ? { signal: opts.signal } : undefined,
+  );
 
   for await (const event of response) {
     if (

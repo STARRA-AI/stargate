@@ -1,7 +1,27 @@
 "use client";
 
-import { useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVoiceCall, type VoiceCallState } from "@/lib/voice/useVoiceCall";
+import {
+  StarraClipFace,
+  selectFaceAnalyser,
+  selectFaceMode,
+} from "./StarraClipFace";
+import { StarraCallChat } from "./StarraCallChat";
+import { useStargateStream } from "@/lib/stargate-context";
+// ENGINE BUS — client-safe, secret-free. "@/lib/engine/bus" only.
+import { useEngineBus } from "@/lib/engine/bus";
+
+// INTEGRATION NOTE (contract §8, A1↔A2 seam): A1's half is landed, so this
+// file consumes the seam directly with no casts —
+//   `analyser: AnalyserNode | null` on UseVoiceCallResult (useVoiceCall.ts:120)
+//   `analyser?: AnalyserNode | null` on StarraClipFace's props
+//   (StarraClipFace.tsx:57)
+// The earlier landing-order shims (a widened ReturnType intersection and an
+// `as unknown as ComponentType<…>` on StarraClipFace) are deleted: they are
+// not just redundant, they SUPPRESS type-checking across the one cross-agent
+// seam the contract requires be checked. `analyser` being null stays a normal
+// state — StarraClipFace renders today's exact behavior when it is null.
 
 function statusCopy(state: VoiceCallState): string {
   switch (state) {
@@ -30,11 +50,10 @@ function pointsToSettings(message: string): boolean {
 
 /**
  * FaceTime-style full-screen voice call with STARRA. Her face fills the screen;
- * it switches clips on call state (idle ⇄ attentive-listening ⇄ talking) and its
- * intensity tracks her live voice amplitude (getAssistantLevel, rAF-polled into
- * the --starra-level CSS var). No transcript — just her, like a real call. All
- * call/audio plumbing lives in useVoiceCall(); this drives connect()/disconnect()
- * off the `open` prop and renders the engine's state.
+ * it switches clips on call state (idle ⇄ attentive-listening ⇄ talking). No
+ * transcript — just her, like a real call. All call/audio plumbing lives in
+ * useVoiceCall(); this drives connect()/disconnect() off the `open` prop and
+ * renders the engine's state.
  */
 export function VoiceCallOverlay({
   open,
@@ -46,24 +65,120 @@ export function VoiceCallOverlay({
   const {
     state,
     error,
+    transcript,
+    liveUser,
+    liveAssistant,
     connect,
     disconnect,
     muted,
     toggleMute,
-    getAssistantLevel,
     lipSyncClip,
     lipSyncRendering,
     clearLipSyncClip,
+    analyser,
+    sendText,
   } = useVoiceCall();
 
   const panelRef = useRef<HTMLDivElement>(null);
   const endBtnRef = useRef<HTMLButtonElement>(null);
   const previouslyFocusedRef = useRef<HTMLElement | null>(null);
-  const faceStageRef = useRef<HTMLDivElement>(null);
-  const idleVideoRef = useRef<HTMLVideoElement>(null);
-  const talkVideoRef = useRef<HTMLVideoElement>(null);
-  const listenVideoRef = useRef<HTMLVideoElement>(null);
   const ringbackRef = useRef<HTMLAudioElement>(null);
+
+  // Shared brain stream — the fallback answer path when no live call can
+  // carry a typed message, and the source of the deck-chat half of the column.
+  const { history, streaming, sendMessage } = useStargateStream();
+  // ONE VOICE (Classic's order, 2026-07-30): while her call is LIVE, typing to
+  // her goes INTO the call — the same realtime session answers aloud as eve,
+  // same persona, same context. Only when no open call can carry it does the
+  // brain+TTS path answer instead.
+  const handleSend = useCallback(
+    (t: string) => {
+      if (sendText(t)) return;
+      void sendMessage(t);
+    },
+    [sendText, sendMessage],
+  );
+  // TEXT truth: still the right signal for the chat column's busy state.
+  const sheReplying = streaming.trim().length > 0;
+
+  // AUDIO truth: what her voice is actually doing. This is deliberately NOT
+  // derived from `streaming`.
+  //
+  // THE BUG THIS FIXES: `faceMode` used to be `state === "speaking" ||
+  // sheReplying`, i.e. driven by the TEXT token stream. stargate-context.tsx
+  // calls setStreaming("") (:262) BEFORE awaiting the TTS round-trip (:263) and
+  // therefore before audio.play() — so her face animated all the way through the
+  // SILENT token stream and flipped back to the idle pool at the exact moment
+  // her voice started. Inverted, every single typed reply.
+  //
+  // speak.ts publishes `playing` from the audio element's own `playing`/`ended`/
+  // `pause`/`error` events (and clears it on every failure path), so it cannot
+  // latch on when TTS fails. It also hands over an analyser on her TTS output —
+  // the typed-reply path previously had none at all, which pinned openness at 0.
+  const [ttsPlaying, setTtsPlaying] = useState(false);
+  const [ttsAnalyser, setTtsAnalyser] = useState<AnalyserNode | null>(null);
+  // ENGINE BUS — the aggregated truth. speak.ts publishes the TTS leg from the
+  // audio element's own events; useVoiceCall publishes the realtime leg with the
+  // analyser it already creates. Reading it HERE is what stops this component
+  // guessing on its own: `faceMode` and the mouth's analyser now come from the
+  // same place, whichever surface is actually making sound.
+  //
+  // ADDITIVE, NOT AUTHORITATIVE. Both selectors below fall back to the exact
+  // pre-bus expressions when the bus is silent, and the bus can only ADD a
+  // speaking face, never subtract one. The direct subscription above is kept
+  // deliberately: it is what gates speak.ts's WebAudio tap on `open`
+  // (its `ttsListeners.size === 0` bail), so it is load-bearing for her voice —
+  // and it is the belt if the bus ever went quiet.
+  const bus = useEngineBus();
+  //
+  // GATED ON `open` DELIBERATELY, and this is load-bearing for her VOICE, not
+  // just tidiness. speak.ts only builds an AudioContext / captures her TTS
+  // element into a WebAudio graph when this subscription exists (its
+  // `ttsListeners.size === 0` bail). This component is mounted for the whole
+  // session (Bridge.tsx:519,945) and only returns null when closed, so an
+  // ungated `[]` subscription made every typed DeckConsole reply and every
+  // wake-word reply carry the WebAudio risk while nothing on screen could
+  // possibly use the analyser — StarraClipFace is its only consumer and only
+  // renders inside this overlay. Closing the call now really does switch the tap
+  // off. Re-opening re-reads current truth via getTtsAudio() below.
+  useEffect(() => {
+    if (typeof window === "undefined" || !open) return;
+    let cancelled = false;
+    let unsubscribe: (() => void) | null = null;
+    // Dynamic import matches how stargate-context.tsx reaches speak.ts, keeping
+    // the voice module off the SSR path.
+    void import("@/lib/voice/speak")
+      .then(({ subscribeTtsAudio, getTtsAudio }) => {
+        if (cancelled) return;
+        const apply = (s: { playing: boolean; analyser: AnalyserNode | null }) => {
+          setTtsPlaying(s.playing);
+          setTtsAnalyser(s.analyser);
+        };
+        apply(getTtsAudio()); // catch a reply already in flight
+        unsubscribe = subscribeTtsAudio(apply);
+      })
+      .catch(() => {
+        /* no audio truth available — falls back to call state below */
+      });
+    return () => {
+      cancelled = true;
+      unsubscribe?.();
+      // Nothing is listening any more, so this state can only go stale. Drop it
+      // to the safe default (idle face, no analyser) rather than letting a
+      // re-opened call paint one frame of a speaking face from a finished turn.
+      setTtsPlaying(false);
+      setTtsAnalyser(null);
+    };
+  }, [open]);
+
+  // One conversation in the chat: the live-call turns + the typed/brain turns.
+  const chatMessages = useMemo(
+    () => [
+      ...transcript.map((m) => ({ role: m.role, text: m.text })),
+      ...history.map((m) => ({ role: m.role, text: m.content })),
+    ],
+    [transcript, history],
+  );
 
   // Mirror connect/disconnect in refs so the open/close effect reacts only to
   // `open` itself, not to callback identity churn as the engine advances
@@ -93,35 +208,16 @@ export function VoiceCallOverlay({
     };
   }, []);
 
-  // Only decode the clip that's actually on screen — idle always loops; the
-  // talking clip plays only while she speaks, the listening clip only while she
-  // listens. Keeps two portrait videos from decoding at once on an older Mac.
-  useEffect(() => {
-    const idle = idleVideoRef.current;
-    const talk = talkVideoRef.current;
-    const listen = listenVideoRef.current;
-    const onScreenClip = state === "speaking" ? "talk" : state === "listening" ? "listen" : "idle";
-    // Only the on-screen clip decodes; the other two are paused. Idle is the base
-    // layer for connecting/reconnecting/idle/error.
-    if (talk) {
-      if (onScreenClip === "talk") void talk.play().catch(() => {});
-      else talk.pause();
-    }
-    if (listen) {
-      if (onScreenClip === "listen") void listen.play().catch(() => {});
-      else listen.pause();
-    }
-    if (idle) {
-      if (onScreenClip === "idle") void idle.play().catch(() => {});
-      else idle.pause();
-    }
-  }, [state]);
-
   // Ringback: her song plays EXACTLY ONCE per summon — on the first connect —
   // then fades out when she picks up. It never replays on a reconnect and never
   // loops; it only plays again when the call is closed and re-summoned (the
   // ringbackDoneRef resets when `open` goes false, below).
   const ringbackDoneRef = useRef(false);
+  // The fade is also once-per-summon. Without this latch, EVERY listening⇄speaking
+  // transition (many per call) started a fresh 600ms requestAnimationFrame loop on
+  // an already-silent, already-paused element — ~36 needless frames per turn, each
+  // one re-pausing the ringback and re-seeking it to 0, for the life of the call.
+  const ringbackFadedRef = useRef(false);
   useEffect(() => {
     const a = ringbackRef.current;
     if (!a) return;
@@ -131,7 +227,11 @@ export function VoiceCallOverlay({
       a.volume = 0.35;
       a.currentTime = 0;
       void a.play().catch(() => {});
-    } else if (state === "listening" || state === "speaking") {
+    } else if (
+      (state === "listening" || state === "speaking") &&
+      !ringbackFadedRef.current
+    ) {
+      ringbackFadedRef.current = true;
       // she picked up — fade the song out over ~600ms, then stop
       const start = a.volume;
       const t0 = typeof performance !== "undefined" ? performance.now() : 0;
@@ -152,32 +252,15 @@ export function VoiceCallOverlay({
   useEffect(() => {
     if (!open) {
       ringbackDoneRef.current = false;
+      ringbackFadedRef.current = false;
       const a = ringbackRef.current;
       if (a) { a.pause(); a.currentTime = 0; }
     }
   }, [open]);
 
-  // Audio-reactive face: push her live loudness (0..1) into a CSS var every
-  // animation frame so her glow/scale track what she's actually saying. rAF, no
-  // re-render per audio frame. getAssistantLevel is stable, so this runs once
-  // per open.
-  useEffect(() => {
-    if (!open || typeof window === "undefined") return;
-    const el = faceStageRef.current;
-    // Only drive the reactive var while she's actually speaking — no 60fps DOM
-    // writes when she's idle/listening (that's wasted CPU on an older Mac).
-    if (state !== "speaking") {
-      el?.style.setProperty("--starra-level", "0");
-      return;
-    }
-    let raf = 0;
-    const tick = () => {
-      faceStageRef.current?.style.setProperty("--starra-level", getAssistantLevel().toFixed(3));
-      raf = window.requestAnimationFrame(tick);
-    };
-    raf = window.requestAnimationFrame(tick);
-    return () => window.cancelAnimationFrame(raf);
-  }, [open, state, getAssistantLevel]);
+  // (Her face no longer scales with live amplitude — that per-frame jitter was
+  // part of the "seizure" look. She holds still + breathes gently; the speaking
+  // glow is a slow calm CSS pulse.)
 
   // Focus management: move focus into the call on open, trap Tab, restore on
   // close. aria-modal is only a hint — the browser enforces none of this.
@@ -235,8 +318,25 @@ export function VoiceCallOverlay({
 
   // Which face clip is showing: her talking loop, her attentive-listening face,
   // or the calm idle (connecting / reconnecting / error all fall back to idle).
-  const faceMode =
-    state === "speaking" ? "speaking" : state === "listening" ? "listening" : "idle";
+  // `ttsPlaying` (audio truth), NOT `sheReplying` (text truth) — see the
+  // subscription above for why the text signal was inverted.
+  // ONE TRUTH (see the bus notes above): `state` is the call leg, `ttsPlaying` is
+  // the local TTS subscription, `bus.speaking` is whichever leg last reported real
+  // sound. selectFaceMode is pure and unit-tested, and with the bus silent it
+  // returns exactly what this expression returned before adoption.
+  const faceMode = selectFaceMode({
+    callState: state,
+    ttsPlaying,
+    busSpeaking: bus.speaking,
+  });
+  // The mouth's input, chosen once instead of by two surfaces independently.
+  const faceAnalyser = selectFaceAnalyser({
+    busSpeaking: bus.speaking,
+    busAnalyser: bus.analyser,
+    ttsPlaying,
+    ttsAnalyser,
+    callAnalyser: analyser,
+  });
   const statusText =
     state === "error" && /microphone/i.test(error || "")
       ? "Microphone blocked"
@@ -256,108 +356,102 @@ export function VoiceCallOverlay({
       {/* Her song as the ringback while the line connects (fades out on pickup). */}
       <audio ref={ringbackRef} src="/avatar/starra-ringback.mp3" preload="auto" aria-hidden />
 
-      {/* Full-screen face — she's shown head-down (contain), with a soft blurred
-          copy of her filling the screen behind (FaceTime/iOS portrait framing),
-          so nothing is cropped close and there are no black bars. */}
-      <div className={`call-face-stage call-face-${faceMode}`} ref={faceStageRef}>
-        <video
-          className="call-face-backdrop"
-          src="/avatar/starra-idle.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-          aria-hidden
-        />
-        <video
-          ref={idleVideoRef}
-          className="call-face-video call-face-idle"
-          src="/avatar/starra-idle.mp4"
-          autoPlay
-          loop
-          muted
-          playsInline
-          aria-hidden
-        />
-        <video
-          ref={listenVideoRef}
-          className="call-face-video call-face-listen"
-          src="/avatar/starra-listening.mp4"
-          loop
-          muted
-          playsInline
-          aria-hidden
-        />
-        <video
-          ref={talkVideoRef}
-          className="call-face-video call-face-talk"
-          src="/avatar/starra-talking.mp4"
-          loop
-          muted
-          playsInline
-          aria-hidden
-        />
-        {/* Lip-sync (flag-gated): her rendered word-matched talking clip. When a
-            clip URL arrives it plays full-screen ON TOP with its own audio, then
-            clears when finished — she's back to the idle/reactive face. */}
-        {lipSyncClip ? (
-          <video
-            className="call-face-video call-face-lipsync"
-            src={lipSyncClip}
-            autoPlay
-            playsInline
-            onEnded={clearLipSyncClip}
-            onError={clearLipSyncClip}
-            style={{ opacity: 1, zIndex: 2 }}
-          />
-        ) : null}
-        {/* speaking glow — intensity rides her live voice (--starra-level) */}
-        <div className="call-face-glow" aria-hidden />
-        {/* readability scrim behind the top status + bottom controls */}
-        <div className="call-face-scrim" aria-hidden />
-      </div>
-
-      <div className="call-ft-top">
-        <span className="call-kicker">STARRA</span>
-        <span
-          className={`call-status${state === "error" ? " is-error" : ""}`}
-          aria-live="polite"
-        >
-          {statusText}
-        </span>
-      </div>
-
-      {state === "error" && error ? (
-        <div className="call-error-box call-ft-error" role="alert">
-          <span className="call-error-text">{error}</span>
-          {settingsLink ? (
-            <a className="call-error-link" href={settingsLink}>
-              Open Settings → Link APIs
-            </a>
+      {/* LEFT/CENTER: her face. RIGHT: the live transcript, beside her (her
+          aspect ratio is untouched — the chat lives in its own column). */}
+      <div className="call-face-col">
+        <div className={`call-face-stage call-face-${faceMode}`}>
+          <img className="call-face-backdrop" src="/avatar/starra-portrait.jpg" alt="" aria-hidden />
+          {/* Her PHOTOREAL self from the real STARRA ANGLES clips, driven by call
+              state (talking clip while she speaks; idle + expressions otherwise).
+              `analyser` is the live output-audio analyser (null when she's not
+              speaking / unavailable) — A1's free native-res mouth-patch renderer
+              in StarraClipFace uses it to drive her mouth; omitting it (or it
+              being null) must render exactly today's behavior (contract §8). */}
+          {/* Whichever source is ACTUALLY making sound. Her TTS element wins while
+              it is playing (a typed reply during a live call would otherwise be
+              driven by the silent WS analyser); the call analyser is the default.
+              Before this, typed replies had NO analyser on any graph at all, so
+              openness read 0 for the whole reply and the bank's half-open floor
+              frame sat frozen over her mouth. */}
+          <StarraClipFace active={open} mode={faceMode} analyser={faceAnalyser} />
+          {/* Paid Replicate fallback clip (flag-gated OFF via NEXT_PUBLIC_LIPSYNC=0,
+              see lipsync.ts header): only rendered when lipSyncClip is non-null,
+              which only ever happens if the flag is flipped on. When it IS wired,
+              this is a 256x256 SadTalker crop letterboxed over her full-size face
+              (`.call-face-lipsync` in deck.css) — that mismatch in scale is exactly
+              the "pasted box" stiffness. The default today is A1's native-resolution
+              mouth patch above, not this. */}
+          {lipSyncClip ? (
+            <video
+              className="call-face-video call-face-lipsync"
+              src={lipSyncClip}
+              autoPlay
+              playsInline
+              onEnded={clearLipSyncClip}
+              onError={clearLipSyncClip}
+              style={{ opacity: 1, zIndex: 2 }}
+            />
           ) : null}
+          {/* speaking glow — a slow calm pulse while she talks (not amplitude) */}
+          <div className="call-face-glow" aria-hidden />
+          {/* readability scrim behind the top status + bottom controls */}
+          <div className="call-face-scrim" aria-hidden />
         </div>
-      ) : null}
 
-      <div className="call-ft-controls">
-        <button
-          type="button"
-          className={`call-mute-btn${muted ? " is-muted" : ""}`}
-          onClick={toggleMute}
-          aria-pressed={muted}
-        >
-          {muted ? "UNMUTE" : "MUTE"}
-        </button>
+        <div className="call-ft-top">
+          <span className="call-kicker">STARRA</span>
+          <span
+            className={`call-status${state === "error" ? " is-error" : ""}`}
+            aria-live="polite"
+          >
+            {statusText}
+          </span>
+        </div>
 
-        {state === "error" ? (
-          <button type="button" className="call-retry-btn" onClick={() => void connect()}>
-            RETRY
-          </button>
+        {state === "error" && error ? (
+          <div className="call-error-box call-ft-error" role="alert">
+            <span className="call-error-text">{error}</span>
+            {settingsLink ? (
+              <a className="call-error-link" href={settingsLink}>
+                Open Settings → Link APIs
+              </a>
+            ) : null}
+          </div>
         ) : null}
 
-        <button type="button" className="call-end-btn" onClick={endCall} ref={endBtnRef}>
-          END CALL
-        </button>
+        <div className="call-ft-controls">
+          <button
+            type="button"
+            className={`call-mute-btn${muted ? " is-muted" : ""}`}
+            onClick={toggleMute}
+            aria-pressed={muted}
+          >
+            {muted ? "UNMUTE" : "MUTE"}
+          </button>
+
+          {state === "error" ? (
+            <button type="button" className="call-retry-btn" onClick={() => void connect()}>
+              RETRY
+            </button>
+          ) : null}
+
+          <button type="button" className="call-end-btn" onClick={endCall} ref={endBtnRef}>
+            END CALL
+          </button>
+        </div>
       </div>
+
+      {/* RIGHT: one conversation — type to her (Grok brain + memory), attach
+          files, copy any line she says. Voice-call turns show here too. */}
+      <aside className="call-chat-pane">
+        <StarraCallChat
+          messages={chatMessages}
+          liveUser={liveUser}
+          liveAssistant={streaming || liveAssistant}
+          onSend={handleSend}
+          busy={sheReplying}
+        />
+      </aside>
     </div>
   );
 }

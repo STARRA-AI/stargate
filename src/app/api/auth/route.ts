@@ -5,6 +5,11 @@ import {
   checkPassword,
   makeToken,
 } from "@/lib/auth";
+import {
+  checkLockout,
+  recordFailure,
+  recordSuccess,
+} from "@/lib/auth-lockout";
 
 // @/lib/auth uses cookies + crypto (HMAC token signing) — force the Node.js
 // runtime so this never gets bundled for the Edge runtime (no node:crypto there).
@@ -25,6 +30,21 @@ export async function POST(req: Request) {
       { status: 400 },
     );
   }
+  // Brute-force gate. The deck answers on the LAN (verified: 0.0.0.0 bind at
+  // scripts/starra:69), and before this there was no attempt limit at all — an
+  // unlimited-guess oracle for anyone on the Wi-Fi. Loopback is NEVER locked, so
+  // this Mac always gets in; see src/lib/auth-lockout.ts for the three guarantees.
+  const locked = checkLockout(req.headers);
+  if (locked.locked) {
+    return NextResponse.json(
+      {
+        ok: false,
+        error: "Too many wrong attempts from this network. Try again shortly.",
+      },
+      { status: 429, headers: { "Retry-After": String(locked.retryAfterSec) } },
+    );
+  }
+
   let password = "";
   try {
     const body = (await req.json()) as { password?: unknown };
@@ -34,8 +54,21 @@ export async function POST(req: Request) {
   }
 
   if (!checkPassword(password)) {
+    const tripped = recordFailure(req.headers);
+    if (tripped.locked) {
+      return NextResponse.json(
+        {
+          ok: false,
+          error: "Too many wrong attempts from this network. Try again shortly.",
+        },
+        { status: 429, headers: { "Retry-After": String(tripped.retryAfterSec) } },
+      );
+    }
     return NextResponse.json({ ok: false, error: "Wrong password." }, { status: 401 });
   }
+
+  // Correct password clears this caller's failure record.
+  recordSuccess(req.headers);
 
   const token = await makeToken();
   if (!token) {
@@ -47,9 +80,30 @@ export async function POST(req: Request) {
     sameSite: "lax",
     path: "/",
     maxAge: MAX_AGE,
-    // no `secure` flag → works over plain HTTP on localhost/LAN too
+    // `secure` is set ONLY when this request actually arrived over TLS. A hard
+    // `secure: true` would break the default HTTP deck entirely (the browser
+    // would refuse to store the cookie and login would silently never stick), so
+    // it is conditional: turn on `STARRA_HTTPS=1` and the session cookie
+    // immediately stops travelling in cleartext, with no other change needed.
+    secure: isSecureRequest(req),
   });
   return res;
+}
+
+/**
+ * Did this request arrive over TLS? Checks the URL scheme first, then the
+ * forwarded header for the proxied case. Guarded so a malformed URL cannot throw
+ * inside the login path — falling back to `false` keeps HTTP login working, which
+ * is the safe direction to fail.
+ */
+function isSecureRequest(req: Request): boolean {
+  const proto = req.headers.get("x-forwarded-proto");
+  if (proto && proto.split(",")[0]?.trim().toLowerCase() === "https") return true;
+  try {
+    return new URL(req.url).protocol === "https:";
+  } catch {
+    return false;
+  }
 }
 
 /** Logout — clear the cookie. */

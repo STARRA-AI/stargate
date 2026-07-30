@@ -1,0 +1,62 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  STARRA keepalive — TEMPLATE. Do not load this file directly.
+  scripts/macos/install-keepalive.sh substitutes __PROJ__ for the real absolute
+  repo path and installs the result to ~/Library/LaunchAgents/.
+
+  This is a LaunchAgent (per-user), not a LaunchDaemon (system). That is the
+  deliberate choice: the deck must run as Classic, with his nvm/node and his
+  .env.local, and a LaunchAgent needs no sudo and no root-owned files.
+  The honest tradeoff: a LaunchAgent starts at LOGIN, not at boot. After a
+  reboot she comes back the moment he logs in — not while the Mac sits at the
+  login window.
+
+  launchd supervises the WATCHDOG (which never exits); the watchdog supervises
+  the deck. See scripts/starra-watchdog.sh for why it is not pointed at
+  `starra up` directly.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.starra.deck</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/bin/bash</string>
+        <string>__PROJ__/scripts/starra-watchdog.sh</string>
+    </array>
+
+    <!-- Start at login. -->
+    <key>RunAtLoad</key>
+    <true/>
+
+    <!-- If the watchdog itself ever dies, launchd brings it straight back. -->
+    <key>KeepAlive</key>
+    <true/>
+
+    <!-- Never respawn faster than this, so a watchdog that fails instantly
+         cannot spin launchd (and the CPU) in a tight loop. -->
+    <key>ThrottleInterval</key>
+    <integer>30</integer>
+
+    <key>WorkingDirectory</key>
+    <string>__PROJ__</string>
+
+    <!-- launchd hands jobs a minimal PATH that does not include Homebrew or
+         nvm. scripts/starra resolves node/npm itself (ensure_node_on_path),
+         but seeding the usual locations means the common case never needs it. -->
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    </dict>
+
+    <!-- Always inside the repo: /Volumes/Storage may be unmounted at login, and
+         a log path launchd cannot create can stop the job from spawning. -->
+    <key>StandardOutPath</key>
+    <string>__PROJ__/data/logs/starra-keepalive.log</string>
+    <key>StandardErrorPath</key>
+    <string>__PROJ__/data/logs/starra-keepalive.log</string>
+</dict>
+</plist>

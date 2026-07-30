@@ -29,8 +29,22 @@ async function ensure() {
 
 export async function getMemory(): Promise<MemoryStore> {
   await ensure();
-  const raw = await fs.readFile(DATA_PATH, "utf8");
-  return JSON.parse(raw) as MemoryStore;
+  // A corrupt/partial data/memory.json (crash mid-write, manual edit) must NOT
+  // take the chat brain down: getMemory() runs in the chat route's top-level
+  // Promise.all (outside its try/catch), so a thrown JSON.parse there 500s every
+  // request. Fall back to a FRESH empty store (never the shared EMPTY ref, which
+  // recordExchange would then mutate); the next recordExchange write self-heals.
+  try {
+    const raw = await fs.readFile(DATA_PATH, "utf8");
+    const parsed = JSON.parse(raw) as Partial<MemoryStore>;
+    return {
+      working: Array.isArray(parsed.working) ? parsed.working : [],
+      summaries: Array.isArray(parsed.summaries) ? parsed.summaries : [],
+      archival: Array.isArray(parsed.archival) ? parsed.archival : [],
+    };
+  } catch {
+    return { working: [], summaries: [], archival: [] };
+  }
 }
 
 export async function saveMemory(store: MemoryStore): Promise<MemoryStore> {

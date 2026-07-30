@@ -4,6 +4,7 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useRef,
   useState,
@@ -154,6 +155,34 @@ export function StargateProvider({ children }: { children: ReactNode }) {
   // — React may invoke it more than once, e.g. under StrictMode).
   const historyRef = useRef<Msg[]>(history);
   historyRef.current = history;
+
+  // ONE MEMORY: seed the visible conversation from the shared store on boot,
+  // so a reload resumes the same continuous conversation the brain and the
+  // call already remember (api/chat and the call leg both write it). Seeds
+  // ONLY an empty history — it never clobbers a conversation in progress.
+  // Fail-open: a failed or empty read just leaves today's empty start.
+  useEffect(() => {
+    let cancelled = false;
+    void fetch("/api/memory")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { working?: Array<{ role?: string; content?: string }> } | null) => {
+        if (cancelled || !j || !Array.isArray(j.working) || j.working.length === 0) return;
+        const seed: Msg[] = j.working
+          .filter(
+            (e): e is { role: "user" | "assistant"; content: string } =>
+              (e.role === "user" || e.role === "assistant") &&
+              typeof e.content === "string" &&
+              e.content.trim().length > 0,
+          )
+          .map((e) => ({ role: e.role, content: e.content }));
+        if (seed.length === 0) return;
+        setHistory((prev) => (prev.length === 0 ? seed : prev));
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const pushLog = useCallback((text: string) => {
     setActionLog((prev) => [

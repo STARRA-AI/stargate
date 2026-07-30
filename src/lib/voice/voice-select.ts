@@ -1,11 +1,13 @@
 /**
- * STARRA voice selection — operator hears an Asian woman with a Japanese
- * or British accent. Preference order:
+ * STARRA voice selection — ONE VOICE (Classic's order, 2026-07-30): she is
+ * "eve", the British female voice of the live call (api/realtime) and of xAI
+ * TTS (api/tts). Web Speech here is the LAST-RESORT availability fallback, and
+ * it must approximate the same person, never a different character:
  *   1. Operator's stored pick (Settings → Voice)
- *   2. British English female voices (Google UK English Female, Kate, Serena, Martha…)
- *   3. Japanese female voices (Kyoko, O-Ren) speaking the reply
- *   4. Any female-sounding English voice
- * Delivery: slightly higher pitch, measured rate — calm, dry, precise.
+ *   2. British English female voices (Google UK English Female, Kate, Serena…)
+ *   3. Any female-sounding English voice
+ *   4. Japanese female voices (Kyoko, O-Ren) — deep fallback only
+ * Delivery: slightly higher pitch, measured unhurried rate.
  */
 
 export const STARRA_PITCH = 1.08;
@@ -117,18 +119,20 @@ export function pickStarraVoice(
   );
   if (gbAny) return gbAny;
 
-  // 3. Japanese female
-  const ja =
-    firstMatch(voices, JA_FEMALE, "ja") ?? firstMatch(voices, JA_FEMALE);
-  if (ja) return ja;
-
-  // 4. Any female-sounding English voice
+  // 3. Any female-sounding English voice — an English female approximates the
+  // call voice (eve, en-GB) far closer than a Japanese voice reading English,
+  // so this now outranks the old Japanese rung (one person, one voice).
   const enFemale = voices.find(
     (v) =>
       v.lang.toLowerCase().startsWith("en") &&
       EN_FEMALE_HINTS.some((p) => p.test(v.name)),
   );
   if (enFemale) return enFemale;
+
+  // 4. Japanese female — deep fallback only, when no English female exists.
+  const ja =
+    firstMatch(voices, JA_FEMALE, "ja") ?? firstMatch(voices, JA_FEMALE);
+  if (ja) return ja;
 
   return voices.find((v) => v.lang.toLowerCase().startsWith("en")) ?? voices[0];
 }

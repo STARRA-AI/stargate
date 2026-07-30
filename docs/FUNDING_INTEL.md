@@ -45,3 +45,9 @@ These now map to dormant key slots in Settings so STARGATE can grow into deeper 
 - `Dessiidoo/Fund-Flow-AI`
 
 Reason: it reads as a separate fundraising CRM scaffold rather than a trustworthy source registry for STARGATE intake.
+
+## Source intelligence
+
+The underlying funding intel — 17 backyard banks/credit unions, soft-pull prequal options, bureau-reporting behavior, and the application sequence — lives in [`BACKYARD_BANKS_AND_SOFT_PULL_FUNDING.md`](./BACKYARD_BANKS_AND_SOFT_PULL_FUNDING.md). This file is the *surface* (the Tools-panel registry); that one is the *source*.
+
+Every rate, bureau pull, and membership rule there is a LEAD dated 2026-07-27, not a current fact. Verify with the institution before acting on it.

@@ -351,7 +351,9 @@ export function loadObsidianCanon(): string {
   return obsidianCache;
 }
 
-/** Test/dev helper — clear canon caches after file edits. */
+/** Test/dev helper — clear canon caches after file edits. The canon .md files
+ *  are fs-read, NOT imported, so editing them alone never busts these caches:
+ *  it takes this call, a dev-server reload of this module, or a restart. */
 export function clearCanonCache() {
   brainCache = null;
   soulCache = null;

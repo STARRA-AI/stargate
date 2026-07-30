@@ -1,0 +1,65 @@
+{
+  "version": 1,
+  "source": "/avatar/clips/talking.mp4",
+  "width": 140,
+  "height": 100,
+  "fps": 30,
+  "frames": [
+    {
+      "id": "v00",
+      "file": "/avatar/visemes/v00.png",
+      "openness": 0.0814,
+      "sourceFrame": 164,
+      "poseConfidence": 0.9433
+    },
+    {
+      "id": "v01",
+      "file": "/avatar/visemes/v01.png",
+      "openness": 0.1875,
+      "sourceFrame": 172,
+      "poseConfidence": 0.9683
+    },
+    {
+      "id": "v02",
+      "file": "/avatar/visemes/v02.png",
+      "openness": 0.3166,
+      "sourceFrame": 177,
+      "poseConfidence": 0.9783
+    },
+    {
+      "id": "v03",
+      "file": "/avatar/visemes/v03.png",
+      "openness": 0.4319,
+      "sourceFrame": 138,
+      "poseConfidence": 0.9767
+    },
+    {
+      "id": "v04",
+      "file": "/avatar/visemes/v04.png",
+      "openness": 0.5627,
+      "sourceFrame": 103,
+      "poseConfidence": 0.9932
+    },
+    {
+      "id": "v05",
+      "file": "/avatar/visemes/v05.png",
+      "openness": 0.6877,
+      "sourceFrame": 225,
+      "poseConfidence": 0.9815
+    },
+    {
+      "id": "v06",
+      "file": "/avatar/visemes/v06.png",
+      "openness": 0.8114,
+      "sourceFrame": 344,
+      "poseConfidence": 0.97
+    },
+    {
+      "id": "v07",
+      "file": "/avatar/visemes/v07.png",
+      "openness": 0.9407,
+      "sourceFrame": 327,
+      "poseConfidence": 0.9771
+    }
+  ]
+}

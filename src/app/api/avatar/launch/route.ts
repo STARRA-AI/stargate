@@ -75,6 +75,16 @@ export async function POST(req: Request) {
     });
     child.on("error", () => {});
     child.unref();
+    // The child inherited its own copy of the log fd at spawn time — close ours
+    // now so repeated launches don't leak file descriptors in this long-running
+    // server process.
+    if (out !== "ignore") {
+      try {
+        fs.closeSync(out);
+      } catch {
+        /* already closed */
+      }
+    }
     return NextResponse.json({ ok: true, pid: child.pid ?? null, python });
   } catch (e) {
     return NextResponse.json(

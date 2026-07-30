@@ -41,10 +41,23 @@ export async function POST() {
   const { spawn } = await import("child_process");
   const root = process.cwd();
 
-  // Build the script path at runtime (path.join, not a bare string literal) so
-  // Turbopack doesn't statically try to resolve it as a module — that was the
-  // "Module not found: Can't resolve 'scripts/distill-prompt-patterns.mjs'" build error.
-  const script = path.join(root, "scripts", "distill-prompt-patterns.mjs");
+  // Resolve the distill script by READING the scripts dir at runtime, so there is
+  // no static .mjs path literal anywhere for Turbopack's asset tracer to fold and
+  // try to resolve as a server-relative module — that produced "Module not found:
+  // Can't resolve './ROOT/scripts/distill-prompt-patterns.mjs'" at build time.
+  // It's spawned (not imported), so the real file on disk is still found.
+  const scriptsDir = path.join(root, "scripts");
+  const entries = await fs.readdir(scriptsDir).catch(() => [] as string[]);
+  const scriptName = entries.find(
+    (f) => f.startsWith("distill-prompt-patterns") && f.endsWith(".mjs"),
+  );
+  if (!scriptName) {
+    return Response.json(
+      { ok: false, error: "distill script not found in scripts/" },
+      { status: 500 },
+    );
+  }
+  const script = path.join(scriptsDir, scriptName);
   const code = await new Promise<number>((resolve) => {
     const child = spawn("node", [script], {
       cwd: root,

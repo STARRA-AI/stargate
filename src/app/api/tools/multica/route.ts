@@ -56,7 +56,7 @@ export async function GET(req: Request) {
 }
 
 export async function POST(req: Request) {
-  const body = (await req.json()) as {
+  let body: {
     mode?: "issue" | "quick";
     title?: string;
     description?: string;
@@ -64,6 +64,18 @@ export async function POST(req: Request) {
     workspaceId?: string;
     agentId?: string;
   };
+  try {
+    body = (await req.json()) as {
+      mode?: "issue" | "quick";
+      title?: string;
+      description?: string;
+      prompt?: string;
+      workspaceId?: string;
+      agentId?: string;
+    };
+  } catch {
+    return Response.json({ error: "invalid JSON body" }, { status: 400 });
+  }
 
   if (body.mode === "quick") {
     const prompt = body.prompt?.trim() || body.title?.trim();

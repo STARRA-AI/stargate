@@ -11,6 +11,9 @@
 
 import type { ChatMessage } from "@/lib/llm/ollama";
 import { getKey } from "@/lib/keys";
+// Client-safe redactor (pure, no secrets, no server-only guard) — see the note at
+// the throw site for why this is imported from the leaf module, not @/lib/engine.
+import { redactSecrets } from "@/lib/engine/redact";
 
 export type HostedProvider = "kimi" | "grok";
 
@@ -103,6 +106,54 @@ export async function resolveHostedModel(
   return cfg.defaultModel;
 }
 
+/**
+ * Repetition penalties — sent ONLY where the provider documents them as real.
+ * Verified live 2026-07-28 against each provider's own API reference:
+ *
+ * - Groq (`kimi` slot) — https://console.groq.com/docs/api-reference
+ *   Both `frequency_penalty` and `presence_penalty` carry the note
+ *   "This is not yet supported by any of our models." The request is accepted
+ *   but the knob does NOTHING, so we never send it: a dead param would only
+ *   buy false confidence. On Groq, anti-repetition is 100% the persona.
+ *
+ * - xAI (`grok` slot) — https://docs.x.ai/docs/api-reference, POST /v1/chat/completions
+ *   `frequency_penalty`: "(Not supported by reasoning models)"
+ *   `presence_penalty`:  "(Not supported by `grok-3` and reasoning models)"
+ *   and https://docs.x.ai/docs/models lists grok-4.5 with
+ *   `"features":{...,"reasoning":true,"reasoningEffortOptions":{...}}` —
+ *   i.e. the slug in .env.local IS a reasoning model, so it gets NO penalties.
+ *   A non-reasoning xAI slug (e.g. grok-4.20-non-reasoning) does get them.
+ *
+ * Values stay conservative on purpose: over-penalizing makes her word-avoidant
+ * and incoherent, which reads as MORE stilted, not less.
+ */
+const PENALTY_FREQUENCY = 0.4;
+const PENALTY_PRESENCE = 0.3;
+
+/** Explicit "-non-reasoning" suffix wins; it contains "reasoning" as a substring. */
+const NON_REASONING_SLUG = /non-reasoning/i;
+/** Slugs xAI documents as reasoning models (penalties unsupported). */
+const REASONING_SLUG = /reasoning|grok-3|grok-4\.5|grok-4\.3|grok-build|grok-code/i;
+
+export function supportsPenalties(
+  provider: HostedProvider,
+  model: string,
+): boolean {
+  // Groq: documented as inert on every model — never send.
+  if (provider !== "grok") return false;
+  if (NON_REASONING_SLUG.test(model)) return true;
+  return !REASONING_SLUG.test(model);
+}
+
+function penaltyBody(
+  provider: HostedProvider,
+  model: string,
+): { frequency_penalty: number; presence_penalty: number } | Record<string, never> {
+  return supportsPenalties(provider, model)
+    ? { frequency_penalty: PENALTY_FREQUENCY, presence_penalty: PENALTY_PRESENCE }
+    : {};
+}
+
 /** Stream a hosted OpenAI-compatible chat completion. Mirrors ollama.ts streamOpenAICompat. */
 export async function streamHosted(opts: {
   provider: HostedProvider;
@@ -117,30 +168,60 @@ export async function streamHosted(opts: {
   if (!key) throw new Error(`${cfg.keyEnv} not set`);
   const model = await resolveHostedModel(opts.provider);
 
-  const res = await fetch(`${cfg.base}/chat/completions`, {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: `Bearer ${key}`,
-    },
-    body: JSON.stringify({
-      model,
-      stream: true,
-      messages: [
-        { role: "system", content: opts.system },
-        ...opts.messages,
-      ],
-    }),
-    signal: AbortSignal.any(
-      [opts.signal, AbortSignal.timeout(120_000)].filter(
-        (s): s is AbortSignal => Boolean(s),
+  const penalties = penaltyBody(opts.provider, model);
+
+  const send = (withPenalties: boolean) =>
+    fetch(`${cfg.base}/chat/completions`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        Authorization: `Bearer ${key}`,
+      },
+      body: JSON.stringify({
+        model,
+        stream: true,
+        ...(withPenalties ? penalties : {}),
+        messages: [
+          { role: "system", content: opts.system },
+          ...opts.messages,
+        ],
+      }),
+      signal: AbortSignal.any(
+        [opts.signal, AbortSignal.timeout(120_000)].filter(
+          (s): s is AbortSignal => Boolean(s),
+        ),
       ),
-    ),
-  });
+    });
+
+  let res = await send(true);
+
+  // Graceful degradation: if a provider rejects the sampling knobs (slug moved
+  // to a reasoning model, param retired), retry once WITHOUT them so the reply
+  // still lands. Never let a tuning param be the reason she goes silent.
+  if (!res.ok && res.status === 400 && Object.keys(penalties).length > 0) {
+    res = await send(false);
+  }
 
   if (!res.ok || !res.body) {
     const detail = await res.text().catch(() => "");
-    throw new Error(`${opts.provider} ${res.status} ${detail.slice(0, 160)}`);
+    // REDACT BEFORE TRUNCATING (2026-07-29). This Error message reaches the
+    // browser via src/app/api/chat/route.ts (:418, :420, :426, :548), so a raw
+    // upstream body from xAI/Groq — which can echo the Authorization header on
+    // some 401/403 shapes — was rendering straight to Classic's screen. Same
+    // defect the board ruled MAJOR for /api/realtime; this is the brain path,
+    // which the first audit missed because its fetch lives here in a lib rather
+    // than in a route.ts.
+    //
+    // Order matters: scrub FIRST, then truncate. Truncating first can split the
+    // credential so the full-value match no longer fires, leaving a fragment of
+    // a live key in the message.
+    //
+    // Imported from @/lib/engine/redact, NOT the @/lib/engine barrel: that barrel
+    // is server-only, and this module is transitively in the CLIENT graph via
+    // src/lib/keys.ts -> src/app/settings/page.tsx. redact.ts is pure and
+    // client-safe, so it cannot break /app/settings.
+    const safe = redactSecrets(detail, key ? [key] : []);
+    throw new Error(`${opts.provider} ${res.status} ${safe.slice(0, 160)}`);
   }
 
   const reader = res.body.getReader();

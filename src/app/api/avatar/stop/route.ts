@@ -23,10 +23,15 @@ export async function POST(req: Request) {
   }
 
   return new Promise<Response>((resolve) => {
-    // Kill her however she was launched: full-path python, the .app's relative
-    // `python3 main.py`, and the STARRA-Avatar.app wrapper shell.
+    // Kill her however she was launched: the raw python3 fallback spawn (always
+    // invoked with the script's full path, so it always contains
+    // "starra-avatar/main.py") and the STARRA-Avatar.app wrapper shell. (A bare
+    // 'python3 main.py' pattern was removed here: launch/route.ts always passes
+    // main.py's absolute path as the argv, so that pattern never matched the
+    // avatar process — it could only ever have matched an unrelated python
+    // process elsewhere on the machine.)
     exec(
-      "pkill -f 'starra-avatar/main.py'; pkill -f 'python3 main.py'; pkill -f 'STARRA-Avatar.app'",
+      "pkill -f 'starra-avatar/main.py'; pkill -f 'STARRA-Avatar.app'",
       () => resolve(NextResponse.json({ ok: true })),
     );
   });

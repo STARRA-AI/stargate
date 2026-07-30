@@ -11,6 +11,9 @@ import { addVoiceSeconds } from "@/lib/voice/voiceCost";
 import { STARRA_VOICE_PERSONA } from "@/lib/persona";
 import { pcm16ToWavBase64 } from "@/lib/voice/wav";
 import { renderLipSync, LIPSYNC_ENABLED } from "@/lib/voice/lipsync";
+// ENGINE BUS — client-safe and secret-free by construction. "@/lib/engine/bus"
+// only, never "@/lib/engine": that barrel reaches the credential resolvers.
+import { getEngineState, publishVoice, type VoiceSource } from "@/lib/engine/bus";
 
 /**
  * Client engine for a full-duplex voice call against xAI's Realtime API.
@@ -43,6 +46,22 @@ const XAI_REALTIME_WS_SUBPROTOCOL_PREFIX = "xai-client-secret.";
 // sexy, friendly, assistant + companion — canon-informed, not recited). Shared
 // with the talking-avatar app. See src/lib/persona.ts.
 const STARRA_INSTRUCTIONS = STARRA_VOICE_PERSONA;
+
+/** Fire-and-forget: write a finished call turn into the SAME memory store the
+ *  chat brain writes (api/chat → recordExchange). One person, one memory —
+ *  what she hears on a call she remembers in chat, and vice versa. Failure is
+ *  swallowed: memory must never break the voice link. */
+function recordCallTurn(role: "user" | "assistant", content: string): void {
+  try {
+    void fetch("/api/memory", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ role, content }),
+    }).catch(() => {});
+  } catch {
+    /* never let a memory write touch the call */
+  }
+}
 
 /**
  * Client-side amplitude gate for barge-in, checked against the mic worklet's
@@ -88,6 +107,16 @@ export type VoiceCallState =
 // It only gives up after this many consecutive failed attempts.
 const MAX_RECONNECT_ATTEMPTS = 5;
 
+/**
+ * How long the call may sit in "speaking" with an EMPTY playback queue and no
+ * further audio before we conclude her turn is over. Re-armed on every audio
+ * delta and on every finished source (armDrainWatchdog), and it refuses to fire
+ * while anything is still queued — so it can only ever end a stall, never a real
+ * utterance. 3s of empty queue is unambiguously silence: xAI streams her audio
+ * many frames per second while she is talking.
+ */
+const SPEAKING_DRAIN_TIMEOUT_MS = 3_000;
+
 export interface VoiceCallTranscriptLine {
   role: "user" | "assistant";
   text: string;
@@ -100,6 +129,10 @@ export interface UseVoiceCallResult {
   liveUser: string;
   liveAssistant: string;
   connect: () => Promise<void>;
+  /** Inject typed text into the LIVE realtime session so the call itself
+   *  answers (same voice, same context). Returns false when no open call can
+   *  carry it — the caller then falls back to the brain+TTS path. */
+  sendText: (text: string) => boolean;
   disconnect: () => void;
   muted: boolean;
   toggleMute: () => void;
@@ -111,6 +144,13 @@ export interface UseVoiceCallResult {
   lipSyncClip: string | null;
   lipSyncRendering: boolean;
   clearLipSyncClip: () => void;
+  /** Live analyser on HER OUTPUT AUDIO, or null when no call is up.
+   * Free, local, and passive — it taps the playback graph she is already
+   * hearing and adds no latency and no billed call. StarraClipFace reads it
+   * per animation frame to drive her mouth from her actual voice
+   * (see viseme-sync.ts). Null is a normal state: consumers must render
+   * exactly their no-analyser behaviour when it is null. */
+  analyser: AnalyserNode | null;
 }
 
 type RealtimeTokenResponse = {
@@ -179,6 +219,129 @@ function getAudioContextCtor(): typeof AudioContext | undefined {
   return window.AudioContext ?? w.webkitAudioContext;
 }
 
+/** Longest we will EVER wait on AudioContext.resume(). Matches speak.ts. */
+const RESUME_TIMEOUT_MS = 250;
+
+/**
+ * `resume()` without assuming it returns a promise — the older WebKit form is
+ * callback-based and returns undefined, where `.resume().catch()` throws a
+ * TypeError instead of resuming anything. This hook deliberately falls back to
+ * `webkitAudioContext` (getAudioContextCtor above), so that form is in scope.
+ *
+ * DELIBERATE COPY of speak.ts's callResume/settleWithin rather than an import:
+ * useVoiceCall.ts is imported STATICALLY by VoiceCallOverlay, while speak.ts is
+ * reached by dynamic import on purpose (VoiceCallOverlay.tsx:139) to keep it and
+ * its transitive voice graph off the eager call chunk. Importing it here for two
+ * ~20-line helpers would undo that. Both copies are unit-tested
+ * (tests/voice-debug-timing.test.ts).
+ */
+export function callResume(ctx: AudioContext): unknown {
+  try {
+    return ctx.resume?.();
+  } catch {
+    return undefined;
+  }
+}
+
+/**
+ * Await `p` but NEVER longer than `ms`, and never reject.
+ *
+ * THE BUG THIS EXISTS FOR (confirmed, in connect() below): `await
+ * ctx.resume().catch(() => {})` looks safe and is not. `.catch()` handles
+ * REJECTION, not PENDENCY — under the autoplay policy a context created without
+ * live user activation is "suspended" and resume() is QUEUED until activation
+ * arrives, so the promise can simply never settle. connect() awaited that twice,
+ * which parks the call in "connecting" FOREVER: no socket, no mic, no voice.
+ */
+export function settleWithin(p: unknown, ms: number): Promise<void> {
+  const thenable =
+    !!p &&
+    (typeof p === "object" || typeof p === "function") &&
+    typeof (p as PromiseLike<unknown>).then === "function";
+  if (!thenable) return Promise.resolve();
+  return new Promise<void>((resolve) => {
+    let done = false;
+    const finish = () => {
+      if (done) return;
+      done = true;
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    (p as PromiseLike<unknown>).then(
+      () => {
+        clearTimeout(timer);
+        finish();
+      },
+      () => {
+        clearTimeout(timer);
+        finish();
+      },
+    );
+  });
+}
+
+// ── ENGINE BUS — the realtime leg's half of the one shared truth ────────────
+// Mirrors what this hook already knows onto the bus so the face, the HUD and the
+// Options panel stop guessing separately. Both helpers are MODULE-level on
+// purpose: no hook, no dependency array, so wiring them in cannot churn any
+// useCallback identity (that churn is what tears a live call down).
+
+/**
+ * The bus patch for a call-state transition, or null for "say nothing". Pure and
+ * total, so the ownership rule is unit-tested rather than inferred.
+ *
+ * SAME RULE AS speak.ts, MIRRORED: entering "speaking" publishes speaking +
+ * "realtime" + this leg's analyser in ONE patch (taking the bus over from a TTS
+ * reply is correct — the call is the louder truth). Leaving "speaking" retracts
+ * ONLY if the bus is silent or this leg still owns it: if a typed reply's TTS is
+ * mid-playback, retracting would idle her face while she is audibly talking.
+ */
+export function realtimeBusPatch(
+  next: VoiceCallState,
+  currentBusSource: string | null,
+  analyser: AnalyserNode | null,
+): { speaking: boolean; source: VoiceSource; analyser?: AnalyserNode | null } | null {
+  if (next === "speaking") {
+    return { speaking: true, source: "realtime", analyser };
+  }
+  if (currentBusSource !== null && currentBusSource !== "realtime") return null;
+  return { speaking: false, source: null };
+}
+
+/** Same ownership gate for the analyser alone (created on connect, dropped on
+ * teardown): never blank her TTS tap just because this leg has none. */
+export function realtimeAnalyserPatch(
+  next: AnalyserNode | null,
+  currentBusSource: string | null,
+): { analyser: AnalyserNode | null } | null {
+  if (currentBusSource !== null && currentBusSource !== "realtime") return null;
+  return { analyser: next };
+}
+
+/** Publish a call-state transition. Synchronous, wrapped, never awaited — it sits
+ * in setCallState, which is called from ws.onmessage and playback bookkeeping. */
+function mirrorCallStateToEngineBus(
+  next: VoiceCallState,
+  analyser: AnalyserNode | null,
+): void {
+  try {
+    const patch = realtimeBusPatch(next, getEngineState().source, analyser);
+    if (patch) publishVoice(patch);
+  } catch {
+    /* observation only — the call must never depend on the bus */
+  }
+}
+
+/** Publish this leg's analyser handle. Same guarantees. */
+function mirrorAnalyserToEngineBus(next: AnalyserNode | null): void {
+  try {
+    const patch = realtimeAnalyserPatch(next, getEngineState().source);
+    if (patch) publishVoice(patch);
+  } catch {
+    /* observation only */
+  }
+}
+
 export function useVoiceCall(): UseVoiceCallResult {
   const [state, setState] = useState<VoiceCallState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -203,7 +366,17 @@ export function useVoiceCall(): UseVoiceCallResult {
   const liveUserRef = useRef("");
   const liveAssistantRef = useRef("");
 
+  // Live analyser over her OUTPUT audio, for the mouth-sync face. Kept as
+  // STATE (not just a ref) because the consuming component has to re-render
+  // when it appears/disappears; the ref is what the audio callbacks read.
+  const [analyser, setAnalyser] = useState<AnalyserNode | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+
   const wsRef = useRef<WebSocket | null>(null);
+  // ONE MEMORY: the continuity digest fetched (in parallel with token minting)
+  // from the same store the chat brain reads, appended to her call
+  // instructions so she walks into every call already knowing the chat.
+  const memoryDigestRef = useRef<string | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micContextRef = useRef<AudioContext | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -212,6 +385,9 @@ export function useVoiceCall(): UseVoiceCallResult {
 
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartRef = useRef(0);
+
+  // Stall watchdog for the "speaking" state — see armDrainWatchdog.
+  const speakingDrainTimerRef = useRef<number | null>(null);
 
   // Live loudness (0..1) of her currently-playing audio, for the audio-reactive
   // face. Quick attack, gradual decay so her on-screen animation tracks what she
@@ -251,6 +427,17 @@ export function useVoiceCall(): UseVoiceCallResult {
   // reconnect forever, hammering /api/realtime. See stableTimerRef.
   const stableTimerRef = useRef<number | null>(null);
 
+  // Monotonic id for the in-flight connect() attempt. cleanupInternal() bumps it
+  // on EVERY teardown (disconnect / unmount / fatal error / a newer connect's
+  // own start-of-run cleanup). connect() captures it right after that cleanup and
+  // re-checks it after each await (fetch /api/realtime, getUserMedia, addModule,
+  // resume). If it changed, this attempt was superseded while it was awaiting, so
+  // it tears down only the handles IT created and bails BEFORE opening the socket.
+  // Without this, a connect() whose awaits resolve after a disconnect()/unmount
+  // would resurrect a torn-down call: a live WebSocket, a hot mic, and a running
+  // billing clock the operator can't see or stop.
+  const connectEpochRef = useRef(0);
+
   // True once the server has signaled the current response's audio stream
   // is finished (response.done / *.audio.done) — used to decide when the
   // scheduled-playback queue draining should flip state back to
@@ -274,6 +461,10 @@ export function useVoiceCall(): UseVoiceCallResult {
   const setCallState = useCallback((next: VoiceCallState) => {
     stateRef.current = next;
     setState(next);
+    // ONE TRUTH: the same transition that moves this hook's state moves the bus,
+    // so the face can never read "speaking" from one signal and a shut mouth from
+    // another. analyserRef is a ref, so this needs no dependency.
+    mirrorCallStateToEngineBus(next, analyserRef.current);
   }, []);
 
   const setLiveUserBoth = useCallback((text: string) => {
@@ -288,7 +479,46 @@ export function useVoiceCall(): UseVoiceCallResult {
 
   // ---- playback ----------------------------------------------------
 
+  const clearDrainWatchdog = useCallback(() => {
+    if (speakingDrainTimerRef.current != null) {
+      window.clearTimeout(speakingDrainTimerRef.current);
+      speakingDrainTimerRef.current = null;
+    }
+  }, []);
+
+  /**
+   * Bound the "speaking" state so it cannot LATCH.
+   *
+   * THE FAILURE IT CLOSES: leaving "speaking" requires BOTH the playback queue to
+   * drain AND `assistantResponseDoneRef` to be true (see source.onended below),
+   * and that flag is only ever set by a server event — `response.done` /
+   * `response.audio.done`. If her audio deltas simply stop arriving and no done
+   * event ever follows (and the socket does NOT close, which ws.onclose would
+   * otherwise handle), the queue drains into silence and the call stays pinned on
+   * "speaking" forever: the header reads "STARRA is speaking…", her face runs the
+   * talking clip over silence, and the operator's turn never comes back.
+   *
+   * Re-armed on EVERY audio delta and on every source that finishes, and it
+   * refuses to act unless the queue is genuinely empty — so a healthy turn of any
+   * length never trips it, and it can only ever fire into real silence.
+   */
+  const armDrainWatchdog = useCallback(() => {
+    if (speakingDrainTimerRef.current != null) {
+      window.clearTimeout(speakingDrainTimerRef.current);
+    }
+    speakingDrainTimerRef.current = window.setTimeout(() => {
+      speakingDrainTimerRef.current = null;
+      if (stateRef.current !== "speaking") return;
+      if (activeSourcesRef.current.size > 0) return; // still audible — not stalled
+      assistantResponseDoneRef.current = true;
+      bargeStreakRef.current = 0;
+      assistantLevelRef.current = 0;
+      setCallState("listening");
+    }, SPEAKING_DRAIN_TIMEOUT_MS);
+  }, [setCallState]);
+
   const stopAllPlayback = useCallback(() => {
+    clearDrainWatchdog();
     for (const source of activeSourcesRef.current) {
       try {
         source.onended = null;
@@ -308,7 +538,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     // Playback is gone — drop any in-progress barge-in streak so it can't
     // carry over and false-fire into the next response.
     bargeStreakRef.current = 0;
-  }, []);
+  }, [clearDrainWatchdog]);
 
   // ---- transcript commits -------------------------------------------
 
@@ -319,6 +549,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     setLiveUserBoth("");
     if (text) {
       setTranscript((prev) => [...prev, { role: "user", text }]);
+      recordCallTurn("user", text);
     }
   }, [setLiveUserBoth]);
 
@@ -338,10 +569,48 @@ export function useVoiceCall(): UseVoiceCallResult {
       setLiveAssistantBoth("");
       if (text) {
         setTranscript((prev) => [...prev, { role: "assistant", text }]);
+        recordCallTurn("assistant", text);
       }
     },
     [setLiveAssistantBoth],
   );
+
+  /**
+   * Type-to-her DURING the call: inject the text into the LIVE realtime
+   * session (conversation.item.create + response.create) so the SAME session
+   * answers — same voice (eve), same persona, same context by construction.
+   * Returns false when no open call can carry it (the caller then falls back
+   * to the brain+TTS path). The typed line is committed to the transcript
+   * optimistically because the server does not echo injected text back as a
+   * user transcript event.
+   */
+  const sendText = useCallback((text: string): boolean => {
+    const t = text.trim();
+    if (!t) return false;
+    const ws = wsRef.current;
+    const s = stateRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN || (s !== "listening" && s !== "speaking")) {
+      return false;
+    }
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "message",
+            role: "user",
+            content: [{ type: "input_text", text: t }],
+          },
+        }),
+      );
+      ws.send(JSON.stringify({ type: "response.create" }));
+    } catch {
+      return false;
+    }
+    setTranscript((prev) => [...prev, { role: "user", text: t }]);
+    recordCallTurn("user", t);
+    return true;
+  }, []);
 
   const schedulePlayback = useCallback(
     (base64: string) => {
@@ -372,6 +641,9 @@ export function useVoiceCall(): UseVoiceCallResult {
         speakingStartedAtRef.current = Date.now(); // start the barge-in grace window
         setCallState("speaking");
       }
+      // Real audio arrived — push the stall watchdog out. Deltas land many times
+      // a second through her turn, so this is the "progress" signal.
+      armDrainWatchdog();
 
       try {
         const buffer = ctx.createBuffer(1, samples.length, REALTIME_SAMPLE_RATE);
@@ -383,7 +655,23 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         const source = ctx.createBufferSource();
         source.buffer = buffer;
-        source.connect(ctx.destination);
+        // Route through the analyser (which is itself wired to the
+        // destination) so the mouth-sync face can read her real voice. An
+        // AnalyserNode is a pass-through: it does not alter or delay the
+        // audio. Identity-guarded against a stale context, and any failure
+        // falls straight back to the direct connection — she must never go
+        // silent to keep a face animation alive.
+        const tap = analyserRef.current;
+        let routed = false;
+        if (tap && tap.context === ctx) {
+          try {
+            source.connect(tap);
+            routed = true;
+          } catch {
+            routed = false;
+          }
+        }
+        if (!routed) source.connect(ctx.destination);
 
         const startAt = Math.max(ctx.currentTime, nextStartRef.current);
         source.onended = () => {
@@ -398,8 +686,13 @@ export function useVoiceCall(): UseVoiceCallResult {
               // Leaving "speaking" — clear any partial barge-in streak so it
               // can't carry into the next response and false-fire.
               bargeStreakRef.current = 0;
+              clearDrainWatchdog();
               setCallState("listening");
             }
+          } else if (stateRef.current === "speaking") {
+            // Still nominally her turn. If this was the LAST queued source and
+            // no done event ever arrives, the watchdog is what un-latches it.
+            armDrainWatchdog();
           }
         };
 
@@ -410,7 +703,7 @@ export function useVoiceCall(): UseVoiceCallResult {
         // A single bad chunk shouldn't take down the call.
       }
     },
-    [commitUser, setCallState],
+    [armDrainWatchdog, clearDrainWatchdog, commitUser, setCallState],
   );
 
   // ---- barge-in -------------------------------------------------------
@@ -476,6 +769,9 @@ export function useVoiceCall(): UseVoiceCallResult {
   // ---- fatal error / cleanup -------------------------------------------
 
   const cleanupInternal = useCallback(() => {
+    // Invalidate any connect() attempt currently parked on an await — this
+    // teardown supersedes it, so its late resolve must not resurrect the call.
+    connectEpochRef.current += 1;
     // Cancel any pending reconnect so a teardown (end call / unmount) can't be
     // undone by a timer firing after cleanup. Note: this does NOT reset the
     // reconnect ATTEMPT counter — connect() runs cleanupInternal at its start,
@@ -490,6 +786,8 @@ export function useVoiceCall(): UseVoiceCallResult {
       window.clearTimeout(stableTimerRef.current);
       stableTimerRef.current = null;
     }
+    // Never leave the speaking-stall watchdog behind on teardown/unmount.
+    clearDrainWatchdog();
     // Bill the elapsed connection time to the voice meter before teardown —
     // once per session (callStartRef is nulled so retries/unmount can't
     // double-count).
@@ -540,6 +838,15 @@ export function useVoiceCall(): UseVoiceCallResult {
     micContextRef.current = null;
 
     try {
+      analyserRef.current?.disconnect();
+    } catch {
+      // ignore
+    }
+    analyserRef.current = null;
+    setAnalyser(null); // consumers fall back to their no-analyser rendering
+    mirrorAnalyserToEngineBus(null); // ...and so does the bus (guarded: never blanks a TTS tap)
+
+    try {
       playbackContextRef.current?.close()?.catch(() => {});
     } catch {
       // ignore
@@ -549,7 +856,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     assistantResponseDoneRef.current = true;
     lastAssistantResponseIdRef.current = null;
     userTurnPendingRef.current = false;
-  }, [stopAllPlayback]);
+  }, [clearDrainWatchdog, stopAllPlayback]);
 
   const handleFatalError = useCallback(
     (message: string) => {
@@ -783,6 +1090,10 @@ export function useVoiceCall(): UseVoiceCallResult {
     }
 
     cleanupInternal(); // defensive: clear any leftovers from a prior attempt
+    // Claim this attempt's epoch AFTER the cleanup bump above, so any teardown
+    // that fires during the awaits below (disconnect/unmount/newer connect) moves
+    // the ref past this value and the stale-attempt checks catch it.
+    const myEpoch = connectEpochRef.current;
     intentionalDisconnectRef.current = false;
     setError(null);
     setTranscript([]);
@@ -790,15 +1101,35 @@ export function useVoiceCall(): UseVoiceCallResult {
     setLiveAssistantBoth("");
     setCallState("connecting");
 
+    // ONE MEMORY: pull the same continuity digest the chat brain uses, in
+    // parallel with token minting so it costs zero extra latency. Fail-open —
+    // a missing digest never delays or breaks her voice.
+    memoryDigestRef.current = null;
+    void fetch("/api/memory?digest=1")
+      .then((r) => (r.ok ? r.json() : null))
+      .then((j: { digest?: string } | null) => {
+        if (j && typeof j.digest === "string" && j.digest.trim()) {
+          memoryDigestRef.current = j.digest.slice(0, 4000);
+        }
+      })
+      .catch(() => {});
+
     try {
       const res = await fetch("/api/realtime", { method: "POST" });
       const data = (await res.json()) as RealtimeTokenResponse;
 
       if (data.mode !== "live" || !data.value || !data.url) {
-        setError(data.message || "Voice link unavailable.");
-        setCallState("error");
+        // Route through handleFatalError (not a bare setState) so the reconnect
+        // budget is reset here too — otherwise a token that goes unavailable
+        // mid-reconnect ends the chain in "error" with a stale, depleted
+        // reconnectAttemptsRef, starving the NEXT fresh call's reconnect budget.
+        handleFatalError(data.message || "Voice link unavailable.");
         return;
       }
+
+      // A disconnect()/unmount that fired while we awaited the token bumped the
+      // epoch. Nothing is allocated yet, so a plain return is a clean abort.
+      if (connectEpochRef.current !== myEpoch) return;
 
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Microphone access is not available in this browser.");
@@ -843,7 +1174,15 @@ export function useVoiceCall(): UseVoiceCallResult {
       // by the time we get here we've awaited /api/realtime + getUserMedia —
       // both real round-trips — so that activation may already be gone.
       // Resume explicitly rather than assume the context started running.
-      await micContext.resume().catch(() => {});
+      //
+      // BOUNDED. This was `await micContext.resume().catch(() => {})`, which is
+      // the unbounded-await bug documented on settleWithin above: with the
+      // activation already spent, resume() is queued and never settles, and the
+      // call sat in "connecting" forever — no socket, no mic, no voice. It also
+      // assumed resume() returns a promise, which the older WebKit form (reachable
+      // via the webkitAudioContext fallback) does not. A context that is still
+      // suspended after this is strictly better than a call that never starts.
+      await settleWithin(callResume(micContext), RESUME_TIMEOUT_MS);
       await micContext.audioWorklet.addModule("/pcm-worklet-processor.js");
 
       const micSource = micContext.createMediaStreamSource(stream);
@@ -871,9 +1210,73 @@ export function useVoiceCall(): UseVoiceCallResult {
 
       const playbackContext = new AudioContextCtor({ sampleRate: REALTIME_SAMPLE_RATE });
       playbackContextRef.current = playbackContext;
-      // Same rationale as micContext above — don't assume it started running.
-      await playbackContext.resume().catch(() => {});
+      // Same rationale as micContext above — don't assume it started running,
+      // and bound the wait (see settleWithin) so a queued resume() can never
+      // wedge the call in "connecting".
+      await settleWithin(callResume(playbackContext), RESUME_TIMEOUT_MS);
       nextStartRef.current = 0;
+
+      // Passive tap on her output for the mouth-sync face. Wired
+      // analyser -> destination; schedulePlayback then feeds sources into the
+      // analyser. Entirely optional: if createAnalyser is unavailable or
+      // throws, we leave it null and playback connects directly, which is
+      // exactly today's behaviour.
+      try {
+        const tap = playbackContext.createAnalyser();
+        tap.fftSize = 1024;
+        tap.smoothingTimeConstant = 0.6;
+        tap.connect(playbackContext.destination);
+        analyserRef.current = tap;
+        setAnalyser(tap);
+        mirrorAnalyserToEngineBus(tap);
+      } catch {
+        analyserRef.current = null;
+        setAnalyser(null);
+        mirrorAnalyserToEngineBus(null);
+      }
+
+      // Last checkpoint before the socket opens. A disconnect()/unmount/newer
+      // connect() may have fired during getUserMedia/addModule/resume. If so, tear
+      // down ONLY the handles this attempt created — identity-guarded so a newer
+      // attempt's live handles are never touched (a shared cleanupInternal() here
+      // could clobber them) — and abort before the WS opens. Otherwise this late
+      // resolve would bring up a live socket + billing clock on a torn-down call.
+      if (connectEpochRef.current !== myEpoch) {
+        try {
+          stream.getTracks().forEach((t) => t.stop());
+        } catch {
+          /* ignore */
+        }
+        if (micStreamRef.current === stream) micStreamRef.current = null;
+        try {
+          micSource.disconnect();
+        } catch {
+          /* ignore */
+        }
+        if (micSourceRef.current === micSource) micSourceRef.current = null;
+        try {
+          workletNode.port.close();
+          workletNode.disconnect();
+        } catch {
+          /* ignore */
+        }
+        if (workletNodeRef.current === workletNode) workletNodeRef.current = null;
+        micContext.close().catch(() => {});
+        if (micContextRef.current === micContext) micContextRef.current = null;
+        if (analyserRef.current && analyserRef.current.context === playbackContext) {
+          try {
+            analyserRef.current.disconnect();
+          } catch {
+            /* ignore */
+          }
+          analyserRef.current = null;
+          setAnalyser(null);
+          mirrorAnalyserToEngineBus(null);
+        }
+        playbackContext.close().catch(() => {});
+        if (playbackContextRef.current === playbackContext) playbackContextRef.current = null;
+        return;
+      }
 
       const ws = new WebSocket(data.url, [XAI_REALTIME_WS_SUBPROTOCOL_PREFIX + data.value]);
       wsRef.current = ws;
@@ -887,8 +1290,12 @@ export function useVoiceCall(): UseVoiceCallResult {
             JSON.stringify({
               type: "session.update",
               session: {
-                voice: "ara",
-                instructions: STARRA_INSTRUCTIONS,
+                voice: "eve",
+                // Persona + the shared-memory digest (when it arrived in time
+                // — see the parallel fetch in connect). Same store as chat.
+                instructions: memoryDigestRef.current
+                  ? `${STARRA_INSTRUCTIONS}\n\nSHARED MEMORY (one continuous life — the same store your chat self reads and writes; carry it forward naturally, don't recite it):\n${memoryDigestRef.current}`
+                  : STARRA_INSTRUCTIONS,
                 turn_detection: {
                   type: "server_vad",
                   threshold: 0.6,
@@ -998,11 +1405,13 @@ export function useVoiceCall(): UseVoiceCallResult {
     liveAssistant,
     connect,
     disconnect,
+    sendText,
     muted,
     toggleMute,
     getAssistantLevel,
     lipSyncClip,
     lipSyncRendering,
     clearLipSyncClip,
+    analyser,
   };
 }

@@ -108,8 +108,16 @@ async function ensure() {
 
 export async function getTier1(): Promise<Tier1Data> {
   await ensure();
-  const raw = await fs.readFile(DATA_PATH, "utf8");
-  return Tier1Schema.parse(JSON.parse(raw));
+  // A corrupt data/tier1.json (bad JSON) or one that fails the zod schema must
+  // not 500 the chat brain: getTier1() runs in the chat route's top-level
+  // Promise.all, outside its try/catch. Fall back to the SEED (always valid) so
+  // the deck stays up; the operator can re-save valid context to heal the file.
+  try {
+    const raw = await fs.readFile(DATA_PATH, "utf8");
+    return Tier1Schema.parse(JSON.parse(raw));
+  } catch {
+    return Tier1Schema.parse(SEED);
+  }
 }
 
 export async function saveTier1(data: Tier1Data): Promise<Tier1Data> {

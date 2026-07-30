@@ -184,6 +184,23 @@ type KeySlot = {
   powers: string;
   linked: boolean;
   masked: string | null;
+  /** Which store the live value came from — see /api/keys. */
+  source?: "engine" | "vault" | "env" | null;
+  /** An Options-panel override outranks anything saved on THIS page. */
+  shadowedByEngine?: boolean;
+};
+
+/**
+ * THE SHADOWING, SPELLED OUT. getKey() resolves engine.json keyOverride →
+ * data/keys.json → process.env (src/lib/keys.ts:16-27). This page writes the
+ * MIDDLE store. So when the Options panel already holds a key for a slot, a key
+ * pasted here saves but never takes effect. The order is correct; hiding it was
+ * not. These two labels are how the page says so.
+ */
+const SOURCE_LABEL: Record<string, string> = {
+  engine: "OPTIONS PANEL",
+  vault: "THIS PAGE",
+  env: ".ENV.LOCAL",
 };
 
 // Display-only grouping — KEY_SLOTS in lib/keys.ts is the single source of
@@ -192,6 +209,7 @@ type KeySlot = {
 const SLOT_GROUP = new Map<string, string>(
   KEY_SLOTS.map((s) => [s.id, s.group]),
 );
+const SLOT_LABEL = new Map<string, string>(KEY_SLOTS.map((s) => [s.id, s.label]));
 const GROUP_ORDER: string[] = [];
 for (const s of KEY_SLOTS) {
   if (!GROUP_ORDER.includes(s.group)) GROUP_ORDER.push(s.group);
@@ -223,7 +241,25 @@ function KeyVault() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(patch),
       });
-      setSaved(res.ok ? "KEYS STORED — panels go live on next refresh" : "LINK DEGRADED. RETRY?");
+      // The route names the slots this save cannot affect — an Options override
+      // outranks the vault, so "KEYS STORED" alone would be a lie for them.
+      let shadowed: string[] = [];
+      try {
+        const d = (await res.json()) as { shadowed?: string[] };
+        if (Array.isArray(d.shadowed)) shadowed = d.shadowed;
+      } catch {
+        /* a body we cannot read never downgrades the HTTP verdict below */
+      }
+      if (!res.ok) {
+        setSaved("LINK DEGRADED. RETRY?");
+      } else if (shadowed.length > 0) {
+        const names = shadowed.map((id) => SLOT_LABEL.get(id) ?? id).join(" · ");
+        setSaved(
+          `STORED BUT OUTRANKED — ${names}: the Options panel holds an override for ${shadowed.length === 1 ? "that slot" : "those slots"}, so this value is not in use. Clear it in OPTIONS to hand control back here.`,
+        );
+      } else {
+        setSaved("KEYS STORED — panels go live on next refresh");
+      }
       setValues({});
       await load();
     } catch {
@@ -255,7 +291,7 @@ function KeyVault() {
                   key={s.id}
                   className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
                 >
-                  <span className="flex items-center gap-2">
+                  <span className="flex flex-wrap items-center gap-2">
                     {s.label}
                     <span
                       className={
@@ -264,10 +300,27 @@ function KeyVault() {
                     >
                       {s.linked ? `● linked ${s.masked}` : "○ not linked"}
                     </span>
+                    {s.linked && s.source && (
+                      <span className="text-[10px] tracking-widest text-[var(--star)] uppercase">
+                        via {SOURCE_LABEL[s.source] ?? s.source}
+                      </span>
+                    )}
+                    {s.shadowedByEngine && (
+                      <span className="border border-[var(--danger)] px-1 text-[10px] tracking-widest text-[var(--danger)] uppercase">
+                        OVERRIDDEN IN OPTIONS
+                      </span>
+                    )}
                   </span>
                   <span className="block text-[10px] text-[var(--star)]">
                     powers: {s.powers}
                   </span>
+                  {s.shadowedByEngine && (
+                    <span className="block text-[10px] text-[var(--danger)]">
+                      The Options panel holds a key for this slot and it outranks
+                      this page. Anything stored here will save but stay unused —
+                      clear the override in OPTIONS first.
+                    </span>
+                  )}
                   <input
                     type="password"
                     placeholder={s.hint}

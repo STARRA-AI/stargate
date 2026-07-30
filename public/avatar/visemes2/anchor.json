@@ -1,0 +1,631 @@
+{
+  "fps": 24.0,
+  "method": "ncc-nose-template-multiscale-sequential",
+  "note": "Per-frame mouth box for base_speak.mp4 (768x1168 @24fps), derived by normalised-cross-correlation tracking of a RIGID nose template (bridge to nostrils, stopping above the lip line so speech cannot deform it) over a range of template SCALES, with a sequential warm start, then 5-tap temporal smoothing of the box position. `confidence` is the raw NCC at that frame: it falls when her head rotates away from the reference pose, which is exactly when a frontal mouth patch would look wrong, so the runtime can treat it as a pose gate. NOT a landmark model; there is no face-landmark dependency and mediapipe is not installed. The live public/avatar/visemes/anchor.json tracks talking.mp4 at 832x1248 and is useless for this base \u2014 this track is measured fresh.",
+  "confidenceIsNcc": true,
+  "frames": [
+    {
+      "x": 289,
+      "y": 355,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9867
+    },
+    {
+      "x": 289,
+      "y": 355,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9872
+    },
+    {
+      "x": 289,
+      "y": 355,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9866
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9883
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9887
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9895
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9896
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9906
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.991
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9911
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9906
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9904
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.989
+    },
+    {
+      "x": 289,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9879
+    },
+    {
+      "x": 288,
+      "y": 356,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.987
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9871
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9879
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9882
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9883
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9883
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9893
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9894
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9899
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9901
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9903
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9902
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9899
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9898
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9897
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9897
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9894
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9892
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 289,
+      "y": 357,
+      "w": 197,
+      "h": 141,
+      "confidence": 0.9881
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 197,
+      "h": 141,
+      "confidence": 0.9873
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 197,
+      "h": 141,
+      "confidence": 0.9863
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 197,
+      "h": 141,
+      "confidence": 0.9863
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 197,
+      "h": 141,
+      "confidence": 0.9865
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9868
+    },
+    {
+      "x": 288,
+      "y": 357,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9867
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.987
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9872
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9879
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.988
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.988
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.988
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9884
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9885
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9889
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9891
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.989
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.989
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9891
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.989
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9893
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9892
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9891
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.989
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9883
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9889
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9889
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9887
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9884
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9883
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9879
+    },
+    {
+      "x": 287,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9875
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9874
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.988
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9882
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9884
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9885
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9886
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9887
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9887
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    },
+    {
+      "x": 288,
+      "y": 358,
+      "w": 196,
+      "h": 140,
+      "confidence": 0.9888
+    }
+  ]
+}

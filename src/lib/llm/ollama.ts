@@ -132,6 +132,19 @@ async function streamNativeChat(
         num_predict: model.includes("deepseek-r1") ? 384 : 220,
         temperature: model.includes("deepseek-r1") ? 0.4 : 0.4,
         num_ctx: numCtx,
+        // Repetition control. Verified live 2026-07-28 against Ollama's own
+        // "Valid Parameters and Values" table:
+        // https://raw.githubusercontent.com/ollama/ollama/main/docs/modelfile.mdx
+        //   repeat_penalty — "Sets how strongly to penalize repetitions."  (Default: 1.1)
+        //   repeat_last_n  — "Sets how far back for the model to look back to
+        //                     prevent repetition."                        (Default: 64, -1 = num_ctx)
+        // Nudged just past the defaults: 1.15 discourages her recycling the
+        // same stock phrases without pushing her into word-avoidance, and a
+        // 256-token window spans a few turns instead of one short reply.
+        // NOTE: Ollama exposes NO dry_multiplier/dry_base — the DRY sampler is
+        // llama.cpp-only and is not available through this API.
+        repeat_penalty: 1.15,
+        repeat_last_n: 256,
       },
     }),
     signal: AbortSignal.timeout(75_000),
