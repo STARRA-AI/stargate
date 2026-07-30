@@ -68,7 +68,10 @@ describe("v4 bank — the shipped visemes3/bank.json parses", () => {
     assert.ok(bank4, "public/avatar/visemes3/bank.json must parse as v4");
     assert.equal(bank4.version, 4);
     assert.equal(bank4.base, "/avatar/body/base_loop.mp4");
-    assert.equal(bank4.frames.length, 10);
+    // 16 = closure + 15 grid entries: FIVE roundness columns x three openness
+    // rungs (2026-07-30 rebuild — intermediate rounding shapes so the smoothed
+    // audio roundness axis lands on real frames instead of jumping to a pucker).
+    assert.equal(bank4.frames.length, 16);
     assert.ok(bank4.width > 0 && bank4.height > 0 && bank4.fps > 0);
   });
 
@@ -88,8 +91,15 @@ describe("v4 bank — the shipped visemes3/bank.json parses", () => {
   it("reads opennessCeiling and closedId from the FILE, not from a constant", () => {
     assert.ok(bank4);
     assert.equal(bank4.opennessCeiling, 0.55);
-    assert.equal(bank4.closedId, "m01");
-    assert.notEqual(bank4.closedId, "m_closed"); // the pucker, rejected by eye
+    // The PRESSED closure (aperture 2px, lips touching in 91% of centre-band
+    // columns — the file's own provenance fields). The old bank pointed away
+    // from m_closed because its per-entry registration floated the crop into
+    // her nose; the 2026-07-30 rebuild places every entry on ONE rigid mapping,
+    // and the pressed closure composites correctly (verified on real frames).
+    assert.equal(bank4.closedId, "m_closed");
+    const closed = bank4.frames.find((f) => f.id === bank4.closedId);
+    assert.ok(closed);
+    assert.equal(closed.openness, 0, "the closure must be genuinely shut");
   });
 
   it("no shipped entry sits above the ceiling (the gape entries were dropped)", () => {
@@ -233,14 +243,13 @@ describe("v4 — openness clamps to the ceiling instead of overflowing the ladde
   it("a FULL-VOLUME passage picks the top of the real ladder, never past it", () => {
     assert.ok(bank4);
     const top = Math.max(...bank4.frames.map((f) => f.openness));
-    assert.equal(top, 0.5);
+    assert.equal(top, 0.5238); // m14 "ah", the widest kept entry (ceiling 0.55)
     // The WIDEST openness tier in the shipped bank. It is a TIER, not a single
-    // frame, because this is a 2-D lookup: at a mid roundness the weighted scan
-    // legitimately prefers m06 (openness 0.4762, roundness 0.4474) over the
-    // 0.50 entries, whose roundness is 1.0 / 0.0895 and therefore far away.
-    // Demanding the exact max at every roundness would be demanding the
-    // roundness axis be ignored, which is the whole point of the 2-D bank.
-    const tier = 0.4762;
+    // frame, because this is a 2-D lookup: the weighted scan legitimately picks
+    // whichever 0.50+ entry is nearest in roundness. Demanding the exact max at
+    // every roundness would be demanding the roundness axis be ignored, which
+    // is the whole point of the 2-D bank.
+    const tier = 0.5;
     for (const r of [0, 0.25, 0.5, 0.75, 1]) {
       const p = pickVisemeFrame4(bank4, 1, r);
       assert.ok(p, `no pick at roundness ${r}`);
@@ -253,9 +262,6 @@ describe("v4 — openness clamps to the ceiling instead of overflowing the ladde
         `openness 1.0 selected ${p.id} at ${p.openness} — not in the widest tier (>= ${tier})`,
       );
     }
-    // at the roundness EXTREMES there is a 0.50 entry to reach, and it is reached
-    assert.equal(pickVisemeFrame4(bank4, 1, 0)?.openness, top);
-    assert.equal(pickVisemeFrame4(bank4, 1, 1)?.openness, top);
     // and a full-volume pick is never WIDER than a full-volume pick should be:
     // openness 1.0 and openness 0.55 must resolve to the same frame, because the
     // clamp has already flattened everything above the ceiling.
@@ -441,6 +447,79 @@ describe("v4 placement — the patch is centred under the mask and lands on its 
     }
     // frame 0 is the frame the boxes were measured on: it must be the identity
     assert.deepEqual(baseBoxAt(box, 0), { x: box.x, y: box.y, w: box.w, h: box.h });
+  });
+});
+
+// ── NOSE CLEARANCE + LIP COVERAGE — the anatomy invariant (2026-07-30) ──────
+//
+// MEASURED from the footage itself by scripts/measure_mouth_alignment.py:
+// per-frame NOSE BASELINE of base_loop.mp4 (the lowest row of the dark nostril
+// mass, luminance method, drift-compensated windows; drift-relative spread was
+// 238..241 across all 266 frames — a 3px band, confirming rigid head motion).
+// The defect this pins out: the pre-rebuild bank put every patch's box top
+// 19-36px ABOVE this baseline (solid mask alpha up to 17.3px above it, 266/266
+// frames) — the patch visibly cut into her nose.
+const NOSE_BASELINE_Y: readonly number[] = [
+  241, 241, 241, 241, 241, 240, 240, 240, 240, 239, 239, 239, 238, 238, 238, 237, 237, 236, 235, 234, 234, 233,
+  233, 232, 231, 231, 230, 229, 229, 228, 227, 226, 226, 226, 225, 224, 224, 223, 223, 222, 222, 222, 222, 222,
+  222, 222, 222, 222, 223, 223, 223, 223, 223, 223, 224, 224, 225, 225, 225, 226, 226, 226, 227, 228, 228, 228,
+  229, 229, 230, 230, 230, 231, 231, 231, 232, 233, 233, 233, 233, 233, 233, 234, 234, 234, 234, 234, 234, 234,
+  234, 233, 233, 233, 233, 232, 232, 232, 231, 231, 231, 230, 230, 230, 230, 229, 229, 229, 228, 228, 228, 228,
+  228, 228, 228, 228, 228, 228, 229, 229, 229, 230, 230, 230, 231, 231, 231, 232, 232, 234, 234, 234, 234, 235,
+  235, 235, 236, 236, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 236, 236, 236, 236, 236,
+  236, 236, 235, 235, 235, 235, 235, 235, 235, 235, 235, 235, 234, 234, 234, 234, 234, 234, 234, 234, 234, 233,
+  233, 233, 233, 233, 233, 233, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 233, 233, 233,
+  233, 234, 234, 234, 234, 234, 235, 235, 235, 235, 235, 236, 236, 236, 236, 237, 237, 237, 237, 238, 238, 238,
+  238, 238, 238, 239, 239, 239, 239, 239, 240, 240, 240, 240, 240, 240, 240, 240, 240, 241, 241, 241, 241, 241,
+  241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241,
+  241, 241,
+];
+// The measured lip geometry (drift-relative, base_loop 552x720 coords): the
+// base's resting lips span y 242..284, x 247..305; the patches' OWN lips
+// (chroma-masked per PNG) span y 242..300, x 245..306. The box must hold all
+// of it, with feather room below.
+const LIP_TOP_MIN = 242;
+const PATCH_LIP_BOTTOM_MAX = 300;
+const PATCH_LIP_X = { min: 245, max: 306 };
+
+describe("v4 anatomy invariant — the patch clears her nose and holds her lips", () => {
+  it("every entry shares ONE uniform baseBox (mask geometry cannot flicker)", () => {
+    assert.ok(bank4);
+    const first = bank4.frames[0].baseBox;
+    for (const f of bank4.frames) {
+      assert.deepEqual(
+        f.baseBox,
+        first,
+        `${f.id} baseBox differs — per-entry registration slid the old "oo" crops into her nose`,
+      );
+    }
+  });
+
+  it("the patch top edge clears the measured nose baseline on 266/266 frames", () => {
+    assert.ok(bank4);
+    assert.equal(NOSE_BASELINE_Y.length, BASE_LOOP_FRAMES);
+    for (const f of bank4.frames) {
+      for (let i = 0; i < BASE_LOOP_FRAMES; i++) {
+        const box = baseBoxAt(f.baseBox, i);
+        assert.ok(
+          box.y > NOSE_BASELINE_Y[i],
+          `${f.id} frame ${i}: patch top ${box.y} does not clear the nose baseline ${NOSE_BASELINE_Y[i]}`,
+        );
+      }
+    }
+  });
+
+  it("while still covering the lips fully, with feather room below", () => {
+    assert.ok(bank4);
+    for (const f of bank4.frames) {
+      const b = f.baseBox;
+      assert.ok(b.y <= LIP_TOP_MIN, `${f.id}: box top ${b.y} starts below the lip top ${LIP_TOP_MIN}`);
+      assert.ok(
+        b.y + b.h >= PATCH_LIP_BOTTOM_MAX + 15,
+        `${f.id}: box bottom ${b.y + b.h} leaves no feather room under the lip bottom ${PATCH_LIP_BOTTOM_MAX}`,
+      );
+      assert.ok(b.x <= PATCH_LIP_X.min && b.x + b.w >= PATCH_LIP_X.max, `${f.id}: lip corners outside the box`);
+    }
   });
 });
 

@@ -206,11 +206,16 @@ describe("2-D lookup — /m/ /b/ /p/ actually SHUT", () => {
 });
 
 // ── the audio roundness feature ─────────────────────────────────────────────
-describe("roundness from audio — an F2 proxy, not a guess", () => {
+describe("roundness from audio — a calibrated formant proxy, not a guess", () => {
   // AnalyserNode byte spectrum: bin i covers i*(sampleRate/2)/bins Hz.
-  // Rounded vowels (u/o) put F2 LOW (~700-1100Hz); spread vowels (i/e) put it
-  // HIGH (~1800-2800Hz). Verified on macOS `say` with two voices: rounded
-  // f2ratio 0.608/0.615 vs spread 0.641/0.642, Cohen's d +1.05/+1.35.
+  // A vowel is TWO formants, and both matter (recalibrated 2026-07-30 on
+  // recorded speech — see the calibration note in viseme-sync.ts): F2 separates
+  // rounded (u/o: ~700-1100Hz) from spread (i/e: ~1800-2800Hz), and F1
+  // separates the open unrounded /a/ (F1 600-1000Hz) from BOTH — without the
+  // F1 penalty, /a/ read as fully rounded and every back vowel became a pucker.
+  // Single-bump spectra were retired with that fix: a lone 800Hz peak is
+  // ambiguous between /u/'s F2 and /a/'s F1, which is exactly the ambiguity the
+  // old formula fell into. A vowel model needs both formants.
   const spectrum = (hzEnergy: (hz: number) => number, bins = 512, sr = 48000): Uint8Array => {
     const a = new Uint8Array(bins);
     for (let i = 0; i < bins; i++) {
@@ -220,21 +225,31 @@ describe("roundness from audio — an F2 proxy, not a guess", () => {
     return a;
   };
   const bump = (centre: number, width: number, amp: number) => (hz: number) =>
-    40 + amp * Math.exp(-((hz - centre) ** 2) / (2 * width * width));
+    amp * Math.exp(-((hz - centre) ** 2) / (2 * width * width));
+  const vowel = (f1: number, f2: number) => (hz: number) =>
+    40 + bump(f1, 180, 170)(hz) + bump(f2, 260, 140)(hz);
 
-  it("reads HIGH roundness for a low-F2 (rounded) spectrum", () => {
-    const r = roundnessFromAudio(spectrum(bump(800, 220, 180)), 48000);
+  it("reads HIGH roundness for a rounded vowel (u: F1 300, F2 800)", () => {
+    const r = roundnessFromAudio(spectrum(vowel(300, 800)), 48000);
     assert.ok(r > 0.6, `rounded spectrum should read rounded, got ${r}`);
   });
 
-  it("reads LOW roundness for a high-F2 (spread) spectrum", () => {
-    const r = roundnessFromAudio(spectrum(bump(2400, 350, 180)), 48000);
+  it("reads LOW roundness for a spread vowel (i: F1 300, F2 2400)", () => {
+    const r = roundnessFromAudio(spectrum(vowel(300, 2400)), 48000);
     assert.ok(r < 0.4, `spread spectrum should read spread, got ${r}`);
   });
 
-  it("separates the two by a wide margin", () => {
-    const rounded = roundnessFromAudio(spectrum(bump(800, 220, 180)), 48000);
-    const spread = roundnessFromAudio(spectrum(bump(2400, 350, 180)), 48000);
+  it("does NOT read the open unrounded /a/ as a pucker (the fixed defect)", () => {
+    // F1 750 / F2 1200 — low F2 like a rounded vowel, but HIGH F1. The old
+    // formula returned 1.0 here (fully rounded -> the "oo" patch on every
+    // "ah"); the F1 penalty must keep it at or below neutral.
+    const r = roundnessFromAudio(spectrum(vowel(750, 1200)), 48000);
+    assert.ok(r <= 0.5, `open /a/ must not read rounded, got ${r}`);
+  });
+
+  it("separates rounded from spread by a wide margin", () => {
+    const rounded = roundnessFromAudio(spectrum(vowel(300, 800)), 48000);
+    const spread = roundnessFromAudio(spectrum(vowel(300, 2400)), 48000);
     assert.ok(rounded - spread > 0.3,
       `want clear separation, got rounded=${rounded} spread=${spread}`);
   });
@@ -255,7 +270,11 @@ describe("roundness from audio — an F2 proxy, not a guess", () => {
   });
 
   it("is calibrated on the measured decision boundary", () => {
-    assert.ok(F2_NEUTRAL > 0.5 && F2_NEUTRAL < 0.75, "boundary from say-voice measurement");
+    // Recalibrated 2026-07-30 on recorded speech with band MEANS (class means:
+    // f2ratio rounded 0.363-0.383 / spread 0.438-0.449 -> neutral 0.42). The
+    // old sum-based boundary (0.6275) was mostly bin-count bias — the mid band
+    // holds ~2x the low band's bins.
+    assert.ok(F2_NEUTRAL > 0.3 && F2_NEUTRAL < 0.6, "boundary from say-voice measurement");
     assert.ok(F2_SPAN > 0, "span must be positive");
   });
 });
