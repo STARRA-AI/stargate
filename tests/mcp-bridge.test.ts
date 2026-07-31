@@ -54,7 +54,8 @@ describe("bridge discipline, on the source", () => {
 
   it("composio never fakes: dark until BOTH env vars exist", () => {
     const client = read("src/lib/mcp/client.ts");
-    assert.match(client, /COMPOSIO_MCP_URL && key/);
+    assert.match(client, /if \(url && key\)/);
+    assert.match(client, /COMPOSIO_MCP_URL/);
     assert.match(client, /configured: false/);
   });
 

@@ -21,12 +21,17 @@ export function parseMcpCommand(text: string): McpCommand {
 
   if (/^mcp\s+tools\b/i.test(t)) return { kind: "list" };
 
-  const browse = /^(?:browse|open (?:the )?(?:page|site|url))\s+(\S+)/i.exec(t);
+  const browse = /^(?:browse|open (?:the )?(?:page|site|url))\s+(\S+)\s*$/i.exec(t);
   if (browse) {
     let url = browse[1].replace(/[.,;)\]]+$/, "");
     if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
     try {
-      new URL(url);
+      const parsed = new URL(url);
+      // A plausible host, not a bare word: needs a dot or localhost — so
+      // "browse not a url with spaces" can never become https://not.
+      if (!parsed.hostname.includes(".") && parsed.hostname !== "localhost") {
+        return null;
+      }
       return { kind: "browse", url };
     } catch {
       return null;
