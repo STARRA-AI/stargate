@@ -373,7 +373,8 @@ export async function POST(req: Request) {
       | "ollama"
       | "anthropic"
       | "kimi"
-      | "grok";
+      | "grok"
+      | "freellm";
 
   const shellReply = lastUser ? await maybeShellReply(lastUser, req) : null;
   const toolReply = lastUser ? await maybeToolReply(lastUser) : null;
@@ -420,6 +421,27 @@ export async function POST(req: Request) {
             if (full.length > 0) {
               push(`\n\n[${label} link dropped mid-reply: ${emsg.slice(0, 80)}]`);
               return;
+            }
+            // FreeLLM router rung (recursion-guarded: never from its own
+            // failure): before dropping to Ollama, try the local free-tier
+            // aggregator — auto mode is Kimi -> FreeLLM -> Ollama -> offline.
+            if (label !== "FreeLLM" && (await hostedAvailable("freellm"))) {
+              try {
+                const r = await streamHosted({
+                  provider: "freellm",
+                  system: clipSystemForLocal(system),
+                  messages: sanitizeMessagesForLocal(messages),
+                  onText: (t) => push(t),
+                  signal: req.signal,
+                });
+                pushFeed(
+                  "ALERT",
+                  `${label} failed (${emsg.slice(0, 60)}) — FreeLLM router took it (${r.model})`,
+                );
+                return;
+              } catch {
+                /* router down too — fall through to Ollama */
+              }
             }
             if (ollamaUp && hasModel) {
               pushFeed(
@@ -492,11 +514,27 @@ export async function POST(req: Request) {
             } catch (err) {
               await localFallback("Grok", err);
             }
+          } else if (prefer === "freellm" && (await hostedAvailable("freellm"))) {
+            // FreeLLM router — explicit opt-in: the local free-tier aggregator
+            // carries the turn with the full canon (localhost, no TPM cap).
+            try {
+              const r = await streamHosted({
+                provider: "freellm",
+                system,
+                messages,
+                onText: (t) => push(t),
+                signal: req.signal,
+              });
+              pushFeed("ORACLE", `FreeLLM brain — ${r.model}`);
+            } catch (err) {
+              await localFallback("FreeLLM", err);
+            }
           } else if (
             anthropicKey &&
             prefer !== "ollama" &&
             prefer !== "kimi" &&
-            prefer !== "grok"
+            prefer !== "grok" &&
+            prefer !== "freellm"
           ) {
             if (useAgentTools) {
               // Phase 0: bounded tool loop (non-stream rounds → stub stream final).

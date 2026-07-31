@@ -23,8 +23,10 @@ export async function GET() {
     anthropic: Boolean(process.env.ANTHROPIC_API_KEY),
     groq: Boolean(process.env.GROQ_API_KEY),
     grok: Boolean(process.env.XAI_API_KEY),
+    freellm: Boolean(process.env.FREELLM_API_KEY),
     groqModel: process.env.GROQ_MODEL || "moonshotai/kimi-k2-instruct-0905",
     grokModel: process.env.XAI_MODEL || "grok-4.5",
+    freellmBase: process.env.FREELLM_BASE_URL || "http://localhost:3001/v1",
     soul: soulStatus(),
     brain: brainStatus(),
   });

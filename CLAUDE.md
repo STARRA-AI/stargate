@@ -25,10 +25,11 @@ prompt = Book 3.
 ## Stack (current)
 - Next.js / TypeScript / React app under `src/`; dev server on `:3000`. This is
   the live build — the retired pywebview/Flask STARGATE is not this codebase.
-- Brain: provider-switchable via `LLM_PROVIDER` (`kimi`/`grok`/`anthropic`/`ollama`).
+- Brain: provider-switchable via `LLM_PROVIDER` (`kimi`/`grok`/`anthropic`/`ollama`/`freellm`).
   Kimi/Groq is the free daily driver (tiered prompt under the 8K cap); Grok
   (xAI) opt-in with full canon; local Ollama is the offline fallback.
-- Voice: Ara (xAI TTS) primary, Piper → Web Speech fallback.
+- Voice: Eve (xAI) — her one voice, same as the live call; Piper → Web Speech
+  are offline fallbacks only.
 
 ## Skills
 - `starra-design` — visual/motion doctrine; use when changing the HUD's look, layout, or motion.

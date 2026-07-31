@@ -15,7 +15,7 @@ import { getKey } from "@/lib/keys";
 // the throw site for why this is imported from the leaf module, not @/lib/engine.
 import { redactSecrets } from "@/lib/engine/redact";
 
-export type HostedProvider = "kimi" | "grok";
+export type HostedProvider = "kimi" | "grok" | "freellm";
 
 type HostedConfig = {
   base: string;
@@ -45,12 +45,29 @@ const CONFIG: Record<HostedProvider, HostedConfig> = {
       /^grok/i.test(id) &&
       !/(vision|image|imagine|voice|tts|whisper|embedding|build|code|fast)/i.test(id),
   },
+  freellm: {
+    // Self-hosted freellmapi router (github.com/tashfeenahmed/freellmapi):
+    // stacks free provider tiers behind one local OpenAI-compatible endpoint.
+    // See docs/FREELLM.md for the install/key runbook.
+    base: process.env.FREELLM_BASE_URL || "http://localhost:3001/v1",
+    keyEnv: "FREELLM_API_KEY",
+    modelEnv: "FREELLM_MODEL",
+    // NO invented default slug (verify-never-guess): the model resolves live
+    // from the router's /models; if the router is down and no FREELLM_MODEL
+    // pin is set, resolveHostedModel THROWS — which is what drops the chat to
+    // the next fallback rung instead of sending a made-up model name.
+    defaultModel: "",
+    // The router fronts many families — take any chat-capable slug.
+    match: (id) =>
+      !/(embed|whisper|tts|image|audio|rerank|moderation|guard)/i.test(id),
+  },
 };
 
 /** Vault slot backing each hosted provider — getKey() falls back to process.env. */
-const KEY_SLOT: Record<HostedProvider, "groq" | "xai"> = {
+const KEY_SLOT: Record<HostedProvider, "groq" | "xai" | "freellm"> = {
   kimi: "groq",
   grok: "xai",
+  freellm: "freellm",
 };
 
 export async function hostedKey(
@@ -101,6 +118,13 @@ export async function resolveHostedModel(
     } catch {
       /* fall through to documented default */
     }
+  }
+  if (!cfg.defaultModel) {
+    // freellm: no documented default exists ON PURPOSE — throw a clear error
+    // rather than invent a slug. Callers treat this like any provider failure.
+    throw new Error(
+      `${provider}: model unresolved — router unreachable at ${cfg.base} and no ${cfg.modelEnv} pin set`,
+    );
   }
   modelCache[provider] = cfg.defaultModel;
   return cfg.defaultModel;

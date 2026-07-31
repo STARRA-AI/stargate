@@ -71,6 +71,13 @@ export const KEY_SLOTS = [
     group: "brain",
   },
   {
+    id: "freellm",
+    label: "FreeLLM router (local)",
+    hint: "unified key from localhost:3001",
+    powers: "Free-tier overflow brain (self-hosted router)",
+    group: "brain",
+  },
+  {
     id: "kalshi_key_id",
     label: "Kalshi API key ID",
     hint: "UUID from kalshi.com account settings",
