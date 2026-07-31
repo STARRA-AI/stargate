@@ -1505,3 +1505,7 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
 .funding-prequal { color: var(--warn); border-color: rgba(255, 200, 87, 0.4); }
 .funding-applied { color: var(--star); border-color: rgba(176, 77, 252, 0.45); }
 .funding-name { color: var(--chrome); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── MORNING BRIEFING banner ── */
+.brief-banner { display: block; width: 100%; padding: 7px 12px; margin: 0 0 8px; font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.14em; color: var(--star); background: rgba(176, 77, 252, 0.08); border: 1px solid rgba(176, 77, 252, 0.35); border-radius: 4px; cursor: pointer; text-align: center; }
+.brief-banner:hover { background: rgba(176, 77, 252, 0.16); }

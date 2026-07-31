@@ -47,6 +47,16 @@ const XAI_REALTIME_WS_SUBPROTOCOL_PREFIX = "xai-client-secret.";
 // with the talking-avatar app. See src/lib/persona.ts.
 const STARRA_INSTRUCTIONS = STARRA_VOICE_PERSONA;
 
+// MORNING BRIEFING one-shot: the deck's BRIEF button arms this before opening
+// the call; the next connect() consumes it, fetches the composed brief
+// (api/context/brief) alongside the memory digest, and rides it into her
+// instructions so she opens the call by delivering the brief. Module-level on
+// purpose — no prop-drilling through the overlay for a one-shot flag.
+let briefingRequested = false;
+export function requestBriefingCall(): void {
+  briefingRequested = true;
+}
+
 /** Fire-and-forget: write a finished call turn into the SAME memory store the
  *  chat brain writes (api/chat → recordExchange). One person, one memory —
  *  what she hears on a call she remembers in chat, and vice versa. Failure is
@@ -395,6 +405,9 @@ export function useVoiceCall(): UseVoiceCallResult {
   // fire-and-forget version silently ran whole calls memoryless when
   // /api/memory answered after the socket opened).
   const memoryDigestPromiseRef = useRef<Promise<string | null> | null>(null);
+  // Briefing-call state (same fetch-in-parallel pattern as the digest).
+  const briefRef = useRef<string | null>(null);
+  const briefPromiseRef = useRef<Promise<string | null> | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micContextRef = useRef<AudioContext | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -1140,6 +1153,24 @@ export function useVoiceCall(): UseVoiceCallResult {
       })
       .catch(() => null);
 
+    // BRIEFING CALL: consume the one-shot flag; fetch the composed brief in
+    // parallel too. Fail-open — a missing brief just makes a normal call.
+    const wantsBriefing = briefingRequested;
+    briefingRequested = false;
+    briefRef.current = null;
+    briefPromiseRef.current = wantsBriefing
+      ? fetch("/api/context/brief")
+          .then((r) => (r.ok ? r.json() : null))
+          .then((j: { brief?: string } | null) => {
+            if (j && typeof j.brief === "string" && j.brief.trim()) {
+              briefRef.current = j.brief.slice(0, 2000);
+              return briefRef.current;
+            }
+            return null;
+          })
+          .catch(() => null)
+      : null;
+
     try {
       const res = await fetch("/api/realtime", { method: "POST" });
       const data = (await res.json()) as RealtimeTokenResponse;
@@ -1314,14 +1345,17 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         // The full session config, rebuilt per send so a late digest can be
         // delivered by re-sending the SAME update with richer instructions.
-        const sessionUpdate = (digest: string | null) =>
+        const sessionUpdate = (digest: string | null, brief: string | null) =>
           JSON.stringify({
             type: "session.update",
             session: {
               voice: "eve",
-              instructions: digest
-                ? `${STARRA_INSTRUCTIONS}\n\nSHARED MEMORY (one continuous life — the same store your chat self reads and writes; carry it forward naturally, don't recite it):\n${digest}`
-                : STARRA_INSTRUCTIONS,
+              instructions:
+                STARRA_INSTRUCTIONS +
+                (digest
+                  ? `\n\nSHARED MEMORY (one continuous life — the same store your chat self reads and writes; carry it forward naturally, don't recite it):\n${digest}`
+                  : "") +
+                (brief ? `\n\n${brief}` : ""),
               turn_detection: {
                 type: "server_vad",
                 threshold: 0.6,
@@ -1345,10 +1379,14 @@ export function useVoiceCall(): UseVoiceCallResult {
         // the ref exactly once meant a slow /api/memory left the whole call
         // silently memoryless). Capped so a dead route can only ever delay
         // the greeting by ~1.2s, never block the call.
-        if (!memoryDigestRef.current && memoryDigestPromiseRef.current) {
+        const pending = [
+          memoryDigestRef.current ? null : memoryDigestPromiseRef.current,
+          briefRef.current ? null : briefPromiseRef.current,
+        ].filter((x): x is Promise<string | null> => Boolean(x));
+        if (pending.length > 0) {
           await Promise.race([
-            memoryDigestPromiseRef.current,
-            new Promise((r) => setTimeout(r, 1200)),
+            Promise.all(pending),
+            new Promise((r) => setTimeout(r, 1500)),
           ]);
         }
         // Teardown/newer-connect during the await → this socket is history.
@@ -1356,7 +1394,7 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         const sentWithDigest = memoryDigestRef.current !== null;
         try {
-          ws.send(sessionUpdate(memoryDigestRef.current));
+          ws.send(sessionUpdate(memoryDigestRef.current, briefRef.current));
         } catch (e) {
           handleFatalError(e instanceof Error ? e.message : "Failed to start voice session.");
           return;
@@ -1372,7 +1410,7 @@ export function useVoiceCall(): UseVoiceCallResult {
               ws.readyState === WebSocket.OPEN
             ) {
               try {
-                ws.send(sessionUpdate(late));
+                ws.send(sessionUpdate(late, briefRef.current));
               } catch {
                 /* call is already up persona-only — never break it for memory */
               }

@@ -7,6 +7,7 @@ import { fmtMoney } from "@/lib/deck-demo";
 import { MOTION } from "@/lib/motion/assets";
 import { useCineVideo } from "@/lib/motion/useCineVideo";
 import { useStargate } from "@/lib/stargate-context";
+import { requestBriefingCall } from "@/lib/voice/useVoiceCall";
 import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
@@ -144,6 +145,32 @@ export function Bridge() {
   // separate native window, no redundant mic button.
   const openCall = useCallback(() => setCallOpen(true), []);
   const closeCall = useCallback(() => setCallOpen(false), []);
+
+  // MORNING BRIEFING: BRIEF opens the call with the composed sixty-second
+  // brief riding her instructions. A once-per-day banner nudges after 7am
+  // (localStorage stamp); pressing BRIEF anywhere stamps the day done.
+  const [briefBanner, setBriefBanner] = useState(false);
+  const briefStamp = () => `starra_brief_${new Date().toISOString().slice(0, 10)}`;
+  const openBriefing = useCallback(() => {
+    try {
+      localStorage.setItem(briefStamp(), "1");
+    } catch {
+      /* stamping is a nicety */
+    }
+    setBriefBanner(false);
+    requestBriefingCall();
+    setCallOpen(true);
+  }, []);
+  useEffect(() => {
+    if (!bootDone) return;
+    try {
+      setBriefBanner(
+        new Date().getHours() >= 7 && localStorage.getItem(briefStamp()) === null,
+      );
+    } catch {
+      /* no storage — no banner */
+    }
+  }, [bootDone]);
 
   const motionOk = !eco && !reduced && bootDone;
 
@@ -630,7 +657,21 @@ export function Bridge() {
           >
             REFRESH
           </button>
+          <button
+            type="button"
+            className="eco-btn"
+            title="Morning briefing call — sixty seconds across every panel"
+            onClick={openBriefing}
+          >
+            BRIEF
+          </button>
         </header>
+
+        {briefBanner ? (
+          <button type="button" className="brief-banner" onClick={openBriefing}>
+            MORNING BRIEFING READY — TAP TO HEAR IT
+          </button>
+        ) : null}
 
         <div className="main-grid">
           {/* ── LEFT ── */}
