@@ -81,11 +81,20 @@ describe("cosmetics defaults parity", () => {
     assert.deepEqual(clips, ["idle_a1", "idle_c1", "idle_a2"]);
   });
 
-  it("the panel's clip buttons offer exactly the server's clip set", () => {
-    const m = /const IDLE_CLIPS = \[([^\]]+)\]/.exec(PANEL);
-    assert.ok(m, "IDLE_CLIPS not found in the panel");
-    const clips = (m[1].match(/"([a-z0-9_]+)"/g) ?? []).map((s) => s.replace(/"/g, ""));
-    assert.deepEqual(clips, [...S.COSMETIC_IDLE_CLIPS]);
+  it("the panel offers NO idle-clip buttons — clip switching is retired", () => {
+    // SUPERSEDED CONTRACT (2026-07-30): the face plays one continuous clip
+    // and the engine composites the mouth, so the panel's IDLE POOL toggles
+    // were removed as dead controls. The server schema keeps `idlePool`
+    // tolerantly (older stored configs still parse — covered below); the
+    // PANEL must not resurrect buttons for a setting nothing consumes.
+    assert.ok(
+      !/const IDLE_CLIPS/.test(PANEL),
+      "IDLE_CLIPS buttons are back in the panel — clip switching is retired",
+    );
+    assert.ok(
+      !/patchCosmetics\(\{ idlePool/.test(PANEL),
+      "the panel must not write idlePool any more",
+    );
   });
 
   it("every panel default is accepted by the server schema", () => {
