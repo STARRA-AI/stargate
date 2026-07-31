@@ -279,15 +279,21 @@ input::placeholder { color: #7a63a8; }
 .galaxy-spin {
   position: absolute; left: 50%; top: 50%;
   width: 170vmax; height: 170vmax; margin: -85vmax 0 0 -85vmax;
-  pointer-events: none; z-index: 0; opacity: 0.55;
+  pointer-events: none; z-index: 0; opacity: 0.6;
+  /* Three DISTINCT spiral arms + two off-center blobs: the asymmetry is what
+     makes rotation legible. (First cut was near-symmetric wisps on a 240s
+     turn — Classic's verdict from the live deck: "twinkling, not spinning".
+     75s with visible arm structure reads as the machine idling.) */
   background:
-    radial-gradient(ellipse 42% 30% at 62% 44%, rgba(176, 77, 252, 0.14), transparent 70%),
-    radial-gradient(ellipse 30% 44% at 36% 60%, rgba(211, 139, 255, 0.09), transparent 70%),
-    radial-gradient(ellipse 55% 55% at 50% 50%, rgba(88, 28, 135, 0.16), transparent 75%),
+    radial-gradient(ellipse 40% 26% at 66% 42%, rgba(176, 77, 252, 0.2), transparent 70%),
+    radial-gradient(ellipse 26% 40% at 34% 62%, rgba(211, 139, 255, 0.13), transparent 70%),
+    radial-gradient(ellipse 56% 56% at 50% 50%, rgba(88, 28, 135, 0.18), transparent 75%),
     conic-gradient(from 0deg at 50% 50%,
-      transparent 0deg, rgba(176, 77, 252, 0.05) 80deg, transparent 160deg,
-      rgba(217, 70, 239, 0.04) 240deg, transparent 330deg);
-  animation: spin-cw 240s linear infinite;
+      transparent 0deg,
+      rgba(176, 77, 252, 0.11) 40deg, transparent 105deg,
+      rgba(217, 70, 239, 0.09) 150deg, transparent 215deg,
+      rgba(211, 139, 255, 0.1) 265deg, transparent 330deg);
+  animation: spin-cw 75s linear infinite;
 }
 .galaxy-stars { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
 .galaxy-stars-a {
