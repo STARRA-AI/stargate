@@ -239,10 +239,14 @@ export function VoiceCallOverlay({
   }, [open]);
 
   // One conversation in the chat: the live-call turns + the typed/brain turns.
+  // CHRONOLOGICAL: older deck history first, live call turns after (confirmed
+  // review finding: transcript-first rendered newest-above-oldest, so the
+  // auto-scrolled column pinned to yesterday's chat while new call turns
+  // landed off-screen above it).
   const chatMessages = useMemo(
     () => [
-      ...transcript.map((m) => ({ role: m.role, text: m.text })),
       ...history.map((m) => ({ role: m.role, text: m.content })),
+      ...transcript.map((m) => ({ role: m.role, text: m.text })),
     ],
     [transcript, history],
   );

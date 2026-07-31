@@ -51,13 +51,26 @@ const STARRA_INSTRUCTIONS = STARRA_VOICE_PERSONA;
  *  chat brain writes (api/chat → recordExchange). One person, one memory —
  *  what she hears on a call she remembers in chat, and vice versa. Failure is
  *  swallowed: memory must never break the voice link. */
+// Client-side ORDER guarantee (confirmed review finding): two fire-and-forget
+// POSTs (user turn, then the assistant's) can arrive at the server reversed.
+// Chaining them keeps each turn's request from starting until the previous one
+// answered — still fire-and-forget to the caller, still failure-swallowed.
+let recordCallChain: Promise<unknown> = Promise.resolve();
+
 function recordCallTurn(role: "user" | "assistant", content: string): void {
   try {
-    void fetch("/api/memory", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ role, content }),
-    }).catch(() => {});
+    recordCallChain = recordCallChain
+      .then(() =>
+        fetch("/api/memory", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ role, content }),
+        }),
+      )
+      .then(
+        () => undefined,
+        () => undefined,
+      );
   } catch {
     /* never let a memory write touch the call */
   }
@@ -377,6 +390,11 @@ export function useVoiceCall(): UseVoiceCallResult {
   // from the same store the chat brain reads, appended to her call
   // instructions so she walks into every call already knowing the chat.
   const memoryDigestRef = useRef<string | null>(null);
+  // The in-flight digest fetch itself, so ws.onopen can WAIT briefly for it
+  // and re-send instructions if it lands late (confirmed review finding: the
+  // fire-and-forget version silently ran whole calls memoryless when
+  // /api/memory answered after the socket opened).
+  const memoryDigestPromiseRef = useRef<Promise<string | null> | null>(null);
   const micStreamRef = useRef<MediaStream | null>(null);
   const micContextRef = useRef<AudioContext | null>(null);
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
@@ -1096,23 +1114,31 @@ export function useVoiceCall(): UseVoiceCallResult {
     const myEpoch = connectEpochRef.current;
     intentionalDisconnectRef.current = false;
     setError(null);
-    setTranscript([]);
+    // A RECONNECT keeps the conversation on screen — only a FRESH call starts
+    // a fresh transcript. (Confirmed review finding: clearing unconditionally
+    // meant the auto-reconnect path wiped the visible call chat on every
+    // transient socket blip.) Live partials always reset; they belong to the
+    // dropped utterance either way.
+    if (stateRef.current !== "reconnecting") setTranscript([]);
     setLiveUserBoth("");
     setLiveAssistantBoth("");
     setCallState("connecting");
 
     // ONE MEMORY: pull the same continuity digest the chat brain uses, in
     // parallel with token minting so it costs zero extra latency. Fail-open —
-    // a missing digest never delays or breaks her voice.
+    // a missing digest never delays or breaks her voice. The PROMISE is kept
+    // so ws.onopen can wait a beat for it and re-send late (see there).
     memoryDigestRef.current = null;
-    void fetch("/api/memory?digest=1")
+    memoryDigestPromiseRef.current = fetch("/api/memory?digest=1")
       .then((r) => (r.ok ? r.json() : null))
       .then((j: { digest?: string } | null) => {
         if (j && typeof j.digest === "string" && j.digest.trim()) {
           memoryDigestRef.current = j.digest.slice(0, 4000);
+          return memoryDigestRef.current;
         }
+        return null;
       })
-      .catch(() => {});
+      .catch(() => null);
 
     try {
       const res = await fetch("/api/realtime", { method: "POST" });
@@ -1281,41 +1307,77 @@ export function useVoiceCall(): UseVoiceCallResult {
       const ws = new WebSocket(data.url, [XAI_REALTIME_WS_SUBPROTOCOL_PREFIX + data.value]);
       wsRef.current = ws;
 
-      ws.onopen = () => {
+      ws.onopen = async () => {
         // Connection is live now — start the billing clock (xAI meters Grok
         // Realtime by connection time).
         callStartRef.current = Date.now();
-        try {
-          ws.send(
-            JSON.stringify({
-              type: "session.update",
-              session: {
-                voice: "eve",
-                // Persona + the shared-memory digest (when it arrived in time
-                // — see the parallel fetch in connect). Same store as chat.
-                instructions: memoryDigestRef.current
-                  ? `${STARRA_INSTRUCTIONS}\n\nSHARED MEMORY (one continuous life — the same store your chat self reads and writes; carry it forward naturally, don't recite it):\n${memoryDigestRef.current}`
-                  : STARRA_INSTRUCTIONS,
-                turn_detection: {
-                  type: "server_vad",
-                  threshold: 0.6,
-                  prefix_padding_ms: 333,
-                  silence_duration_ms: 200,
+
+        // The full session config, rebuilt per send so a late digest can be
+        // delivered by re-sending the SAME update with richer instructions.
+        const sessionUpdate = (digest: string | null) =>
+          JSON.stringify({
+            type: "session.update",
+            session: {
+              voice: "eve",
+              instructions: digest
+                ? `${STARRA_INSTRUCTIONS}\n\nSHARED MEMORY (one continuous life — the same store your chat self reads and writes; carry it forward naturally, don't recite it):\n${digest}`
+                : STARRA_INSTRUCTIONS,
+              turn_detection: {
+                type: "server_vad",
+                threshold: 0.6,
+                prefix_padding_ms: 333,
+                silence_duration_ms: 200,
+              },
+              audio: {
+                input: {
+                  format: { type: "audio/pcm", rate: REALTIME_SAMPLE_RATE },
+                  transcription: { model: "grok-transcribe", language_hint: "en" },
                 },
-                audio: {
-                  input: {
-                    format: { type: "audio/pcm", rate: REALTIME_SAMPLE_RATE },
-                    transcription: { model: "grok-transcribe", language_hint: "en" },
-                  },
-                  output: {
-                    format: { type: "audio/pcm", rate: REALTIME_SAMPLE_RATE },
-                  },
+                output: {
+                  format: { type: "audio/pcm", rate: REALTIME_SAMPLE_RATE },
                 },
               },
-            }),
-          );
+            },
+          });
+
+        // Give the parallel digest fetch a short window to land so her memory
+        // rides the FIRST session.update (confirmed review finding: reading
+        // the ref exactly once meant a slow /api/memory left the whole call
+        // silently memoryless). Capped so a dead route can only ever delay
+        // the greeting by ~1.2s, never block the call.
+        if (!memoryDigestRef.current && memoryDigestPromiseRef.current) {
+          await Promise.race([
+            memoryDigestPromiseRef.current,
+            new Promise((r) => setTimeout(r, 1200)),
+          ]);
+        }
+        // Teardown/newer-connect during the await → this socket is history.
+        if (connectEpochRef.current !== myEpoch || wsRef.current !== ws) return;
+
+        const sentWithDigest = memoryDigestRef.current !== null;
+        try {
+          ws.send(sessionUpdate(memoryDigestRef.current));
         } catch (e) {
           handleFatalError(e instanceof Error ? e.message : "Failed to start voice session.");
+          return;
+        }
+        // Digest lost the race: deliver it the moment it lands by re-sending
+        // the same session.update with the memory block included.
+        if (!sentWithDigest && memoryDigestPromiseRef.current) {
+          void memoryDigestPromiseRef.current.then((late) => {
+            if (
+              late &&
+              connectEpochRef.current === myEpoch &&
+              wsRef.current === ws &&
+              ws.readyState === WebSocket.OPEN
+            ) {
+              try {
+                ws.send(sessionUpdate(late));
+              } catch {
+                /* call is already up persona-only — never break it for memory */
+              }
+            }
+          });
         }
       };
 

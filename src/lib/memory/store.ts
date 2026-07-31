@@ -63,7 +63,30 @@ export async function saveMemory(store: MemoryStore): Promise<MemoryStore> {
  */
 export const WORKING_WINDOW = 24;
 
-export async function recordExchange(
+// ONE WRITER AT A TIME (confirmed review finding). recordExchange is a
+// read-modify-write of data/memory.json, and the deck now has CONCURRENT
+// writers: api/chat's own turns, the call leg's POST /api/memory, and
+// back-to-back call commits (assistant turn + barge-in user turn). Unserialized,
+// the second write clobbers the first and a turn vanishes from the one shared
+// memory. Every write flows through this in-process chain instead — each sees
+// the previous write's result. The dev deck is a single Next process, so an
+// in-process chain is the whole story.
+let memoryWriteChain: Promise<unknown> = Promise.resolve();
+
+export function recordExchange(
+  role: "user" | "assistant",
+  content: string,
+): Promise<MemoryStore> {
+  const run = () => recordExchangeUnserialized(role, content);
+  const p = memoryWriteChain.then(run, run);
+  memoryWriteChain = p.then(
+    () => undefined,
+    () => undefined,
+  );
+  return p;
+}
+
+async function recordExchangeUnserialized(
   role: "user" | "assistant",
   content: string,
 ): Promise<MemoryStore> {
@@ -104,10 +127,30 @@ export async function recordExchange(
 }
 
 export function memoryForPrompt(store: MemoryStore, query: string): string {
-  const q = query.toLowerCase();
-  const hits = store.archival
-    .filter((a) => a.text.toLowerCase().includes(q.slice(0, 24)) || q.length < 3)
-    .slice(-5);
+  // WORD-SCORED archival recall (confirmed review finding: the old filter
+  // required the blob to contain the query's exact first-24-char prefix, which
+  // no real sentence ever satisfies — the archival tier was effectively dead).
+  // Now: any blob sharing significant words (4+ chars) with the query scores
+  // one point per matched word; top 5 by score, recency breaking ties. A short
+  // or empty query (the call digest) keeps the recent-5 behavior.
+  const words = query
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((w) => w.length >= 4);
+  const scored = store.archival.map((a, recency) => {
+    const t = a.text.toLowerCase();
+    let score = 0;
+    for (const w of words) if (t.includes(w)) score += 1;
+    return { a, recency, score };
+  });
+  const hits = (
+    words.length === 0
+      ? scored.slice(-5)
+      : scored
+          .filter((s) => s.score > 0)
+          .sort((x, y) => x.score - y.score || x.recency - y.recency)
+          .slice(-5)
+  ).map((s) => s.a);
   // Working is rendered NEWEST FIRST on purpose: both consumers truncate this
   // block from the tail (api/chat clips the system prompt to budget; the call
   // digest slices at 4000 chars), so whatever gets cut must be the OLDEST

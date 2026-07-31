@@ -10,7 +10,6 @@ import { useStargate } from "@/lib/stargate-context";
 import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
-import { ReactorEye } from "./ReactorEye";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
 import { VoiceCallOverlay } from "./VoiceCallOverlay";
@@ -284,11 +283,6 @@ export function Bridge() {
       setVentures(d.ventures ?? []);
     }
   }
-
-  const coreLabel =
-    statusLine === COPY.idle || !bootDone
-      ? COPY.systemsNominal
-      : statusLine.toUpperCase();
 
   const activeVotes = tank.filter((t) => t.vote === "LONG" || t.vote === "SHORT" || t.vote === "HOLD");
   const longs = activeVotes.filter((t) => t.vote === "LONG").length;
@@ -850,10 +844,11 @@ export function Bridge() {
           </div>
 
           {/* ── CENTER ── */}
+          {/* ReactorEye REMOVED entirely (Classic's order, 2026-07-30): its
+              webcam-gaze tracking was pointless data collection. The console
+              carries the call control; the camera is never opened. */}
           <div className="col col-center">
-            <ReactorEye hudState={hudState} label={coreLabel} onMic={openCall} />
-            <DeckConsole onCall={openCall} callActive={callOpen} />
-          </div>
+            <DeckConsole onCall={openCall} callActive={callOpen} /></div>
 
           {/* ── RIGHT ── */}
           <div className="col col-right">

@@ -138,6 +138,67 @@ describe("recall depth — the store carries enough to actually remember", () =>
   });
 });
 
+describe("xhigh review findings — each confirmed defect stays dead", () => {
+  it("memory writes are serialized through one chain (no lost turns)", () => {
+    const src = read("src/lib/memory/store.ts");
+    assert.match(src, /memoryWriteChain/);
+    assert.match(src, /const p = memoryWriteChain\.then\(run, run\)/);
+  });
+
+  it("archival recall matches by significant words, not a 24-char prefix", async () => {
+    const { memoryForPrompt } = await import("../src/lib/memory/store");
+    const store = {
+      working: [],
+      summaries: [],
+      archival: [
+        { id: "a1", text: "user: we picked the DUNS number route | assistant: filed it", at: "t0" },
+        { id: "a2", text: "user: pizza tonight | assistant: sure", at: "t1" },
+      ],
+    };
+    const block = memoryForPrompt(store, "what did we decide about the DUNS number yesterday?");
+    assert.ok(block.includes("DUNS number route"), "word match must surface the old exchange");
+    assert.ok(!block.match(/Archival hits \(0\)/), "archival tier must not be dead");
+  });
+
+  it("the call waits briefly for the digest and re-sends it when late", () => {
+    const src = read("src/lib/voice/useVoiceCall.ts");
+    assert.match(src, /memoryDigestPromiseRef/);
+    assert.match(src, /Promise\.race\(/);
+    assert.match(src, /sentWithDigest/);
+  });
+
+  it("call-turn writes keep their order (client-side chain)", () => {
+    assert.match(read("src/lib/voice/useVoiceCall.ts"), /recordCallChain/);
+  });
+
+  it("a reconnect never wipes the visible transcript", () => {
+    assert.match(
+      read("src/lib/voice/useVoiceCall.ts"),
+      /if \(stateRef\.current !== "reconnecting"\) setTranscript\(\[\]\);/,
+    );
+  });
+
+  it("the call column is chronological: history before live transcript", () => {
+    const src = read("src/components/bridge/VoiceCallOverlay.tsx");
+    const historyAt = src.indexOf("...history.map");
+    const transcriptAt = src.indexOf("...transcript.map");
+    assert.ok(historyAt > 0 && transcriptAt > 0);
+    assert.ok(historyAt < transcriptAt, "history must render above the live call turns");
+  });
+});
+
+describe("the eye cam is gone (Classic's order — no pointless camera data)", () => {
+  it("ReactorEye is deleted and unreferenced", () => {
+    assert.ok(!existsSync(join(REPO, "src/components/bridge/ReactorEye.tsx")));
+    // Comments stripped: the removal note may NAME it; code may not touch it.
+    const codeOnly = read("src/components/bridge/Bridge.tsx")
+      .replace(/\{\/\*[\s\S]*?\*\/\}/g, "")
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    assert.ok(!codeOnly.includes("ReactorEye"));
+  });
+});
+
 describe("the locked rules actually load", () => {
   it("STARRA_PERSONALITY.md fits the brain's clip budget", () => {
     const size = Buffer.byteLength(read("STARRA_PERSONALITY.md"), "utf8");
