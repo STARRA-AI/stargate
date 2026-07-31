@@ -9,6 +9,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { readFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 import {
@@ -96,12 +97,51 @@ describe("the five filters stay canon", () => {
   });
 });
 
-describe("store + route discipline, on the source", () => {
-  it("writes are serialized and re-scans never regress operator status", () => {
+describe("store behavior — REAL, on a temp SQLite db", () => {
+  it("upserts, preserves operator status across re-scans, fills verdicts only when absent", async () => {
+    process.env.STARGATE_DB_PATH = join(
+      tmpdir(),
+      `flipradar-test-${process.pid}-${Math.random().toString(36).slice(2)}.db`,
+    );
+    const { upsertScan, setStatus, getRadar } = await import(
+      "../src/lib/flipradar/store"
+    );
+    const c = (id: string, mrr: number) => ({
+      id,
+      name: id,
+      url: `https://trustmrr.com/startup/${id}`,
+      mrr,
+      source: "trustmrr" as const,
+    });
+    const v = (score: number) => ({
+      score,
+      filters: { diligent: true, value: true, divineRight: true, cost: true, mission: true },
+      note: "n",
+    });
+
+    await upsertScan([c("alpha", 100), c("beta", 200)], new Map([["alpha", v(70)]]), "t1");
+    await setStatus("alpha", "approved", "t2");
+    // Re-scan: new MRR, a would-be verdict for alpha, a fresh candidate.
+    const after = await upsertScan(
+      [c("alpha", 150), c("gamma", 50)],
+      new Map([["alpha", v(10)]]),
+      "t3",
+    );
+    const alpha = after.entries.find((e) => e.id === "alpha");
+    assert.ok(alpha);
+    assert.equal(alpha.status, "approved", "re-scan must never regress status");
+    assert.equal(alpha.mrr, 150, "re-scan refreshes the listed MRR");
+    assert.equal(alpha.verdict?.score, 70, "an existing verdict is never overwritten");
+    assert.equal(after.entries.length, 3);
+    assert.equal(after.lastScanAt, "t3");
+    assert.equal((await getRadar()).entries.length, 3);
+    assert.equal(await setStatus("nope", "passed", "t4"), null);
+  });
+
+  it("writes are transactional (BEGIN/COMMIT with ROLLBACK), on the source", () => {
     const src = read("src/lib/flipradar/store.ts");
-    assert.match(src, /radarWriteChain/);
-    assert.match(src, /never regress/);
-    assert.match(src, /known\.mrr = c\.mrr/);
+    assert.match(src, /d\.exec\("BEGIN"\)/);
+    assert.match(src, /d\.exec\("ROLLBACK"\)/);
   });
 
   it("the route bounds its free-tier spend and stays gated", () => {

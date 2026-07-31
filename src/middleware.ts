@@ -5,6 +5,12 @@ import { authPassword, authCookieName, verifyToken } from "@/lib/auth";
 const PUBLIC_PREFIXES = ["/login", "/api/auth"];
 
 export const config = {
+  // NODEJS RUNTIME (stable since Next 15.5) ON PURPOSE — 2026-07-31: after a
+  // .next cache rebuild, the EDGE sandbox came up with an empty process.env,
+  // authPassword() returned undefined, and the no-password clause silently
+  // OPENED the whole deck while login (nodejs runtime) kept working. Running
+  // the middleware on nodejs gives it the same env the routes see.
+  runtime: "nodejs",
   // Run on everything EXCEPT Next internals and static assets, so the login
   // page and brand assets always load even when the deck is gated.
   //
@@ -24,9 +30,32 @@ export const config = {
   ],
 };
 
+/** Hardening headers on every authed response. CSP intentionally absent for
+ *  now: the dev deck relies on inline styles/scripts Next injects, and a wrong
+ *  CSP bricks the WKWebView dock app — documented in docs/PLATFORM.md. */
+function withSecurityHeaders(res: NextResponse): NextResponse {
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  res.headers.set("X-Frame-Options", "SAMEORIGIN");
+  res.headers.set("Referrer-Policy", "no-referrer");
+  // Camera stays OFF by policy (the eye cam is retired); mic is hers for calls.
+  res.headers.set("Permissions-Policy", "camera=(), geolocation=(), microphone=(self)");
+  return res;
+}
+
 export async function middleware(req: NextRequest) {
-  // Gate is OFF until a password is configured — never lock the deck with no key.
-  if (!authPassword()) return NextResponse.next();
+  // FAIL CLOSED (2026-07-31). The old rule — gate off when no password is
+  // configured — is exactly what turned an env-loading failure into a silently
+  // open deck. The convenience survives ONLY for loopback (his own machine,
+  // fresh setup); any non-local request with no password configured is refused.
+  if (!authPassword()) {
+    const host = (req.headers.get("host") ?? "").toLowerCase();
+    const local =
+      host.startsWith("localhost") ||
+      host.startsWith("127.0.0.1") ||
+      host.startsWith("[::1]");
+    if (local) return NextResponse.next();
+    return new NextResponse("STARGATE auth unavailable — deck sealed.", { status: 503 });
+  }
 
   const { pathname } = req.nextUrl;
   if (PUBLIC_PREFIXES.some((p) => pathname === p || pathname.startsWith(p + "/"))) {
@@ -34,7 +63,7 @@ export async function middleware(req: NextRequest) {
   }
 
   const token = req.cookies.get(authCookieName())?.value;
-  if (await verifyToken(token)) return NextResponse.next();
+  if (await verifyToken(token)) return withSecurityHeaders(NextResponse.next());
 
   // Not authenticated. APIs get a clean 401; pages redirect to the login screen.
   if (pathname.startsWith("/api/")) {

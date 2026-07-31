@@ -1,6 +1,26 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // CACHING: her media (clips, viseme PNGs, brand art) revalidates hourly
+  // instead of on every deck load. NOT immutable on purpose — these files are
+  // replaced in place (the viseme bank was rebuilt tonight under the same
+  // names); a year-long immutable would serve stale mouths.
+  async headers() {
+    return [
+      {
+        source: "/avatar/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=3600, must-revalidate" },
+        ],
+      },
+      {
+        source: "/brand/:path*",
+        headers: [
+          { key: "Cache-Control", value: "public, max-age=86400, must-revalidate" },
+        ],
+      },
+    ];
+  },
   // Allow large brand PNGs through the image optimizer
   images: {
     unoptimized: false,
