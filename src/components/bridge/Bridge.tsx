@@ -10,6 +10,7 @@ import { useStargate } from "@/lib/stargate-context";
 import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
+import { FlipRadar } from "./FlipRadar";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
 import { VoiceCallOverlay } from "./VoiceCallOverlay";
@@ -632,6 +633,7 @@ export function Bridge() {
         <div className="main-grid">
           {/* ── LEFT ── */}
           <div className="col col-left">
+            <FlipRadar />
             <div className="panel" id="panel-snap">
               <div className="panel-head">
                 <span className="dot" />

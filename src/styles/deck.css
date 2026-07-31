@@ -267,6 +267,23 @@ input::placeholder { color: #7a63a8; }
 .site-delta { font-family: var(--mono); font-size: 11px; color: var(--good); }
 
 /* ── center: reactor (4-layer eye rig) ── */
+/* ── FLIP RADAR — the revenue hunter panel (deck vocabulary only) ── */
+.flipradar-body { display: flex; flex-direction: column; gap: 10px; padding: 10px 12px; }
+.flipradar-empty { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--text-faint); margin: 0; }
+.flipradar-row { display: flex; flex-direction: column; gap: 5px; padding-bottom: 8px; border-bottom: 1px solid var(--border); }
+.flipradar-row:last-child { border-bottom: none; padding-bottom: 0; }
+.flipradar-main { display: flex; align-items: baseline; gap: 8px; min-width: 0; }
+.flipradar-name { color: var(--chrome); font-size: 12px; font-weight: 600; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.flipradar-name:hover { color: var(--star); text-decoration: underline; }
+.flipradar-mrr { font-family: var(--font-mono, monospace); font-size: 11px; color: var(--good); white-space: nowrap; }
+.flipradar-score { margin-left: auto; font-family: var(--font-mono, monospace); font-size: 11px; color: var(--star); border: 1px solid var(--border); border-radius: 3px; padding: 0 5px; }
+.flipradar-filters { display: flex; gap: 4px; flex-wrap: wrap; }
+.flipradar-filter { font-family: var(--font-mono, monospace); font-size: 8px; letter-spacing: 0.08em; padding: 1px 4px; border-radius: 2px; border: 1px solid var(--border); }
+.flipradar-filter.pass { color: var(--good); border-color: rgba(110, 231, 160, 0.4); }
+.flipradar-filter.fail { color: var(--bad); border-color: rgba(255, 107, 107, 0.35); opacity: 0.7; }
+.flipradar-note { font-size: 10px; color: var(--text-faint); margin: 0; line-height: 1.35; }
+.flipradar-actions { display: flex; gap: 6px; }
+
 /* Operator console BROUGHT DOWN (Classic's order, 2026-07-30): with the
    reactor eye gone, the console anchors to the BOTTOM of the center column,
    leaving the living galaxy visible above it. */
