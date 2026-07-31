@@ -61,7 +61,7 @@ describe("surfaces + runbook", () => {
     assert.ok(existsSync(join(REPO, "docs/FREELLM.md")));
     const doc = read("docs/FREELLM.md");
     assert.match(doc, /free models, not Claude/);
-    assert.match(doc, /ToS compliance is on you/);
+    assert.match(doc, /ToS\s+compliance is on you/);
     assert.ok(!doc.includes("curl | bash"), "no piped-installer instructions");
   });
 });
