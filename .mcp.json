@@ -1,0 +1,15 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    "composio": {
+      "type": "http",
+      "url": "${COMPOSIO_MCP_URL}",
+      "headers": {
+        "x-api-key": "${COMPOSIO_API_KEY}"
+      }
+    }
+  }
+}

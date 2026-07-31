@@ -5,6 +5,8 @@ import {
   memoryForPrompt,
   recordExchange,
 } from "@/lib/memory/store";
+import { callMcpTool, listMcpServers } from "@/lib/mcp/client";
+import { parseMcpCommand } from "@/lib/mcp/commands";
 import { extractFactsFromExchange } from "@/lib/memory/extract";
 import { getVault, vaultForPrompt } from "@/lib/vault/store";
 import { obsidianForPrompt } from "@/lib/obsidian";
@@ -210,6 +212,32 @@ async function* stubStream(message: string) {
 /** Fast keyword tools — still count as a single agent turn (Phase 0). */
 async function maybeToolReply(lastUser: string): Promise<string | null> {
   const q = lastUser.toLowerCase().trim();
+
+  // MCP BRIDGE (2026-07-31): her hands on Playwright + Composio. Exact
+  // operator fast-paths only — free-form intent stays with the LLM. Works
+  // identically mid-call (this route doesn't know or care that the overlay is
+  // open), and servers run concurrently on their own connections.
+  const mcp = parseMcpCommand(lastUser);
+  if (mcp?.kind === "list") {
+    const servers = await listMcpServers();
+    return servers
+      .map((sv) =>
+        sv.up
+          ? `${sv.name} (${sv.transport}) — ${sv.tools.length} tools: ${sv.tools.slice(0, 12).map((t) => t.name).join(", ")}${sv.tools.length > 12 ? "…" : ""}`
+          : `${sv.name} — ${sv.configured ? `DOWN: ${sv.error}` : `not linked: ${sv.error}`}`,
+      )
+      .join("\n");
+  }
+  if (mcp?.kind === "browse") {
+    const nav = await callMcpTool("playwright", "browser_navigate", { url: mcp.url });
+    if (!nav.ok) return `Couldn't open ${mcp.url} — ${nav.text}`;
+    const snap = await callMcpTool("playwright", "browser_snapshot", {});
+    return `Opened ${mcp.url}.\n${snap.text.slice(0, 3500)}`;
+  }
+  if (mcp?.kind === "call") {
+    const r = await callMcpTool(mcp.server, mcp.tool, mcp.args);
+    return r.ok ? r.text : `${mcp.server}.${mcp.tool} failed — ${r.text}`;
+  }
 
   if (
     /\b(pack (the )?repo|repomix|pack codebase|dump (the )?repo)\b/.test(q)
