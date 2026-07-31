@@ -117,6 +117,7 @@ describe("recall depth — the store carries enough to actually remember", () =>
       ],
       summaries: [],
       archival: [],
+      facts: [],
     };
     const block = memoryForPrompt(store, "");
     const newestAt = block.indexOf("NEWEST-MARKER");
@@ -154,6 +155,7 @@ describe("xhigh review findings — each confirmed defect stays dead", () => {
         { id: "a1", text: "user: we picked the DUNS number route | assistant: filed it", at: "t0" },
         { id: "a2", text: "user: pizza tonight | assistant: sure", at: "t1" },
       ],
+      facts: [],
     };
     const block = memoryForPrompt(store, "what did we decide about the DUNS number yesterday?");
     assert.ok(block.includes("DUNS number route"), "word match must surface the old exchange");

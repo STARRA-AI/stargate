@@ -5,6 +5,7 @@ import {
   memoryForPrompt,
   recordExchange,
 } from "@/lib/memory/store";
+import { extractFactsFromExchange } from "@/lib/memory/extract";
 import { getVault, vaultForPrompt } from "@/lib/vault/store";
 import { obsidianForPrompt } from "@/lib/obsidian";
 import { runRepomix, readLatestPackPreview } from "@/lib/tools/repomix";
@@ -539,6 +540,9 @@ export async function POST(req: Request) {
 
         if (full) {
           await recordExchange("assistant", stripThinkTags(full));
+          // Durable-fact distillation (mem0-style, free driver) — fire-and-
+          // forget: the stream is closing and must never wait on it.
+          void extractFactsFromExchange(lastUser, stripThinkTags(full));
           addTokens(full.length);
           pushFeed("ORACLE", `Reply landed — ${full.length} chars`);
         }

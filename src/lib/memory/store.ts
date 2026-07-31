@@ -12,11 +12,13 @@ export type MemoryStore = {
   working: Exchange[];
   summaries: string[];
   archival: { id: string; text: string; at: string }[];
+  /** Durable extracted facts (mem0-style) — what she KNOWS, not what was said. */
+  facts: { text: string; at: string }[];
 };
 
 const DATA_PATH = path.join(process.cwd(), "data", "memory.json");
 
-const EMPTY: MemoryStore = { working: [], summaries: [], archival: [] };
+const EMPTY: MemoryStore = { working: [], summaries: [], archival: [], facts: [] };
 
 async function ensure() {
   try {
@@ -41,9 +43,10 @@ export async function getMemory(): Promise<MemoryStore> {
       working: Array.isArray(parsed.working) ? parsed.working : [],
       summaries: Array.isArray(parsed.summaries) ? parsed.summaries : [],
       archival: Array.isArray(parsed.archival) ? parsed.archival : [],
+      facts: Array.isArray(parsed.facts) ? parsed.facts : [],
     };
   } catch {
-    return { working: [], summaries: [], archival: [] };
+    return { working: [], summaries: [], archival: [], facts: [] };
   }
 }
 
@@ -155,8 +158,16 @@ export function memoryForPrompt(store: MemoryStore, query: string): string {
   // block from the tail (api/chat clips the system prompt to budget; the call
   // digest slices at 4000 chars), so whatever gets cut must be the OLDEST
   // exchanges, never the most recent ones.
+  // Facts lead the block: durable knowledge beats raw transcript for who she
+  // IS to him. Newest-first for the same tail-truncation reason as working.
+  const facts = [...store.facts]
+    .slice(-20)
+    .reverse()
+    .map((f) => f.text)
+    .join(" || ");
   return [
     "MEMORY TIERS",
+    `Facts (${store.facts.length}, newest first): ${facts || "none yet"}`,
     `Working (${store.working.length}, newest first): ${[...store.working]
       .reverse()
       .map((e) => `${e.role}: ${e.content}`)
@@ -166,10 +177,60 @@ export function memoryForPrompt(store: MemoryStore, query: string): string {
   ].join("\n");
 }
 
+/** Cap on stored durable facts — oldest drop first once exceeded. */
+export const FACTS_CAP = 120;
+
+/**
+ * Merge freshly-extracted facts into the store's fact tier. PURE (tested):
+ * trims, drops empties, dedupes case-insensitively — a new fact that is a
+ * substring of a known fact (or vice versa, in which case the longer, more
+ * specific one wins) is not a new fact. Oldest facts fall off past FACTS_CAP.
+ */
+export function mergeFacts(
+  existing: { text: string; at: string }[],
+  fresh: string[],
+  now: string,
+): { text: string; at: string }[] {
+  const out = [...existing];
+  for (const raw of fresh) {
+    if (typeof raw !== "string") continue;
+    const text = redact(raw.trim()).slice(0, 200);
+    if (text.length < 8) continue;
+    const lower = text.toLowerCase();
+    const dupAt = out.findIndex((f) => {
+      const known = f.text.toLowerCase();
+      return known.includes(lower) || lower.includes(known);
+    });
+    if (dupAt >= 0) {
+      // Keep the longer (more specific) phrasing, refresh its timestamp.
+      if (text.length > out[dupAt].text.length) out[dupAt] = { text, at: now };
+      continue;
+    }
+    out.push({ text, at: now });
+  }
+  return out.slice(-FACTS_CAP);
+}
+
+/** Serialized write of extracted facts — same chain as recordExchange. */
+export function recordFacts(fresh: string[]): Promise<MemoryStore> {
+  const run = async () => {
+    const store = await getMemory();
+    store.facts = mergeFacts(store.facts, fresh, new Date().toISOString());
+    return saveMemory(store);
+  };
+  const p = memoryWriteChain.then(run, run);
+  memoryWriteChain = p.then(
+    () => undefined,
+    () => undefined,
+  );
+  return p;
+}
+
 export function memoryCounts(store: MemoryStore) {
   return {
     working: store.working.length,
     summaries: store.summaries.length,
     archival: store.archival.length,
+    facts: store.facts.length,
   };
 }
