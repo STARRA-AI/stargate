@@ -1492,3 +1492,7 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
 .boot-bar-fill { height: 100%; width: 0%; background: linear-gradient(90deg, var(--accent), var(--accent-glow)); box-shadow: 0 0 12px var(--accent-glow); transition: width 0.3s ease; }
 .boot-lines { height: 150px; margin-top: 22px; display: flex; flex-direction: column; gap: 4px; align-items: center; }
 .boot-lines span { font-family: var(--mono); font-size: 12px; letter-spacing: 1px; color: var(--text-dim); animation: feed-in 0.25s ease; }
+
+/* ── SILENT SHADOW panel ── */
+.shadow-failed { padding: 0 12px 10px; }
+.shadow-failed-line { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--bad); margin: 0 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
