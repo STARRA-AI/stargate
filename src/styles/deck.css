@@ -1496,3 +1496,12 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
 /* ── SILENT SHADOW panel ── */
 .shadow-failed { padding: 0 12px 10px; }
 .shadow-failed-line { font-family: var(--font-mono, monospace); font-size: 10px; color: var(--bad); margin: 0 0 3px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* ── FUNDING PIPELINE panel ── */
+.funding-body { display: flex; flex-direction: column; gap: 8px; padding: 10px 12px; }
+.funding-row { display: flex; flex-direction: column; gap: 4px; }
+.funding-main { display: flex; align-items: baseline; gap: 7px; min-width: 0; }
+.funding-status { font-family: var(--font-mono, monospace); font-size: 8px; letter-spacing: 0.08em; padding: 1px 4px; border-radius: 2px; border: 1px solid var(--border); color: var(--text-faint); }
+.funding-prequal { color: var(--warn); border-color: rgba(255, 200, 87, 0.4); }
+.funding-applied { color: var(--star); border-color: rgba(176, 77, 252, 0.45); }
+.funding-name { color: var(--chrome); font-size: 11px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

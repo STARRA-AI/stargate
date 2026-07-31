@@ -11,6 +11,7 @@ import { useVoiceLoop } from "@/lib/voice/useVoiceLoop";
 import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
 import { FlipRadar } from "./FlipRadar";
+import { FundingPanel } from "./FundingPanel";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
@@ -935,6 +936,7 @@ export function Bridge() {
             </div>
 
             <ShadowPanel />
+            <FundingPanel />
             <div className="panel" id="panel-ventures">
               <div className="panel-head">
                 <span className="dot" />
