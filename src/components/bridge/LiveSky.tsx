@@ -18,6 +18,61 @@
  * disables the sky instead of breaking the deck — additive degradation.
  */
 
+/**
+ * MEASUREMENTS (recorded 2026-07-31) — every number the sky and the reactor
+ * run on, and where each one is enforced. tests/live-sky.test.ts parses this
+ * file and deck.css and asserts each value below, so this block cannot
+ * silently drift away from the code it describes.
+ *
+ * STARFIELD (this file)
+ *   STAR_COUNT ......... 120 stars drawn per frame
+ *   LAYERS ............. 3 parallax depths — share / drift / size / alpha:
+ *       deep  0.45 -> 54 stars, 2.0 px/s, 0.6-1.0 px, alpha 0.55
+ *       mid   0.35 -> 42 stars, 3.2 px/s, 0.9-1.4 px, alpha 0.75
+ *       near  0.20 -> 24 stars, 5.0 px/s, 1.2-1.8 px, alpha 1.00
+ *       shares sum to 1.00, so the drawn population is exactly STAR_COUNT.
+ *   DRIFT heading ...... 200deg, wrapping at every edge
+ *   TWINKLE period ..... 2-6 s per star, random phase
+ *   white core ......... near layer only, star size above 1.55 px
+ *   PALETTE ............ #e9d5ff / #c4b5fd (--star) / #a855f7 (--purple)
+ *
+ * METEOR — the rare streak (this file)
+ *   gap ................ 6000-14000 ms between streaks, one alive at a time
+ *   life ............... 700 ms, sine fade in and out
+ *   tail 80-140 px, travel 0.35-0.65 x canvas width, tilt +/-12deg
+ *
+ * FRAME BUDGET (this file)
+ *   devicePixelRatio ... capped at 2 (retina crispness without a 3x fill cost)
+ *   delta-t clamp ...... 0.1 s, so a stalled tab never jumps the field
+ *
+ * REACTOR (deck.css)
+ *   center ............. --reactor-cx 50% / --reactor-cy 49% on #stage
+ *   rings .............. 40 / 54 / 68 vmin at 18s cw, 45s ccw, 90s cw
+ *   ring opacity ....... 0.75 / 0.55 / 0.40, 2.5-3 px band via radial mask
+ *   core glow .......... 26 vmin, breathe 4.5 s, scale 1.00 -> 1.06
+ *   nebula wash ........ opacity 0.4 (was 0.6) so the canvas reads on top
+ *
+ * AUTHED-DOM VERIFICATION — NOT PERFORMED. Stated plainly rather than
+ * implied: the dev deck answers on :3000, but every page sits behind the
+ * session gate (src/middleware.ts:29-46 redirects to /login) and this agent
+ * does not type Classic's password to authenticate. So every number above is
+ * verified from SOURCE only — the constants below in this file, plus
+ * deck.css --reactor-cx/--reactor-cy and .reactor-ring-1/2/3 +
+ * .reactor-core-glow. The reactor CENTER (50%/49%) is recorded in deck.css as
+ * CEO-measured against the recording; nobody has re-derived it from pixels
+ * since, which is exactly why it is a nudge var and not a hard-coded offset.
+ *
+ * One paste in the logged-in deck's DevTools console closes the live leg:
+ *   const c = document.querySelector('canvas.live-sky');
+ *   const s = getComputedStyle(document.getElementById('stage'));
+ *   ({ canvas: !!c, w: c && c.width, h: c && c.height,
+ *      rings: document.querySelectorAll('.reactor-ring').length,
+ *      glow: !!document.querySelector('.reactor-core-glow'),
+ *      cx: s.getPropertyValue('--reactor-cx').trim(),
+ *      cy: s.getPropertyValue('--reactor-cy').trim() })
+ * Expected: canvas true with non-zero w/h, rings 3, glow true, cx 50%, cy 49%.
+ */
+
 import { useEffect, useRef } from "react";
 
 const STAR_COUNT = 120;

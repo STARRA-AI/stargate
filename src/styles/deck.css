@@ -66,8 +66,11 @@ input::placeholder { color: #7a63a8; }
   color: var(--text);
   background: var(--bg) url("/brand/hud_panel.webp") center center / cover no-repeat;
   transform-origin: top left;
-  /* the artwork's reactor core (CEO-measured from the recording) — the arc
-     rings + core glow center here; nudge these two vars to re-seat them */
+  /* MEASUREMENTS — the artwork's reactor core (CEO-measured against the
+     recording; never re-derived from pixels since, which is why it stays a
+     nudge var): the arc rings + core glow center here. The full recorded set
+     of sky/ring/timing constants lives in the MEASUREMENTS block atop
+     components/bridge/LiveSky.tsx and is asserted in tests/live-sky.test.ts. */
   --reactor-cx: 50%;
   --reactor-cy: 49%;
 }
