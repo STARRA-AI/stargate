@@ -1,5 +1,10 @@
 import { promises as fs } from "fs";
 import path from "path";
+// Static builtin import ON PURPOSE: `await import("child_process")` is a
+// dynamic import, and Turbopack context-folds dynamics in route files into a
+// server-relative resolution ("Can't resolve './ROOT/scripts' <dynamic>"),
+// breaking the whole build. A static node: builtin cannot be folded.
+import { spawn } from "node:child_process";
 
 export const runtime = "nodejs";
 
@@ -38,7 +43,6 @@ export async function GET() {
 }
 
 export async function POST() {
-  const { spawn } = await import("child_process");
   const root = process.cwd();
 
   // Resolve the distill script by READING the scripts dir at runtime, so there is

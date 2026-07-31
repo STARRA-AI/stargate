@@ -11,7 +11,11 @@
  */
 
 const COOKIE = "starra_auth";
-const TTL_MS = 30 * 24 * 60 * 60 * 1000; // 30 days
+// 12 HOURS (was 30 days — Classic, 2026-07-30: "the sign in isn't coming
+// up... fix that"). The cookie itself is now session-scoped (api/auth sets no
+// maxAge), so closing the browser/dock app signs out immediately; this TTL is
+// the hard ceiling even where a webview persists session cookies.
+const TTL_MS = 12 * 60 * 60 * 1000;
 const enc = new TextEncoder();
 
 export function authPassword(): string | undefined {
@@ -52,25 +56,30 @@ export function checkPassword(input: string): boolean {
   return safeEqual(input, secret);
 }
 
-/** Mint a signed session token (exp.hmac), keyed by the password itself. */
+/** Token format version. Bumped v1→v2 with the 12h TTL (2026-07-30) ON
+ *  PURPOSE: verifyToken accepts only the current version, so every cookie
+ *  minted under the old 30-day rule died the moment this shipped — the login
+ *  wall comes back for everyone immediately, no waiting out old tokens. */
+const TOKEN_VERSION = "v2";
+
+/** Mint a signed session token (v2.exp.hmac), keyed by the password itself. */
 export async function makeToken(): Promise<string | null> {
   const secret = authPassword();
   if (!secret) return null;
-  const exp = String(Date.now() + TTL_MS);
-  const sig = await hmacHex(exp, secret);
-  return `${exp}.${sig}`;
+  const payload = `${TOKEN_VERSION}.${Date.now() + TTL_MS}`;
+  const sig = await hmacHex(payload, secret);
+  return `${payload}.${sig}`;
 }
 
-/** Verify a session cookie value: fresh + signature matches the password. */
+/** Verify a session cookie value: current version + fresh + signature matches. */
 export async function verifyToken(token: string | undefined): Promise<boolean> {
   const secret = authPassword();
   if (!secret || !token) return false;
-  const dot = token.indexOf(".");
-  if (dot < 1) return false;
-  const exp = token.slice(0, dot);
-  const sig = token.slice(dot + 1);
+  const parts = token.split(".");
+  if (parts.length !== 3 || parts[0] !== TOKEN_VERSION) return false;
+  const [ver, exp, sig] = parts;
   const expNum = Number(exp);
   if (!Number.isFinite(expNum) || expNum < Date.now()) return false;
-  const expected = await hmacHex(exp, secret);
+  const expected = await hmacHex(`${ver}.${exp}`, secret);
   return safeEqual(sig, expected);
 }

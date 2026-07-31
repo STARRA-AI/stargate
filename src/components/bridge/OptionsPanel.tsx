@@ -100,7 +100,6 @@ const DEFAULT_COSMETICS: Cosmetics = {
   fontScale: 1,
 };
 
-const IDLE_CLIPS = ["idle_a1", "idle_c1", "idle_a2"] as const;
 
 /* ───────────────────────────────── utils ─────────────────────────────── */
 
@@ -674,33 +673,16 @@ export function OptionsPanel() {
               </p>
 
               <div className="opt-field opt-field-col">
-                <span>IDLE POOL</span>
-                <div className="opt-row">
-                  {IDLE_CLIPS.map((clip) => {
-                    const on = cosmetics.idlePool.includes(clip);
-                    return (
-                      <button
-                        key={clip}
-                        type="button"
-                        className="opt-btn"
-                        aria-pressed={on}
-                        onClick={() => {
-                          const next = on
-                            ? cosmetics.idlePool.filter((c) => c !== clip)
-                            : [...cosmetics.idlePool, clip];
-                          // At least one idle clip must remain or her face has nothing to play.
-                          if (next.length === 0) {
-                            setNotice("At least one idle clip must stay selected.");
-                            return;
-                          }
-                          patchCosmetics({ idlePool: next });
-                        }}
-                      >
-                        {clip} · {on ? "ON" : "OFF"}
-                      </button>
-                    );
-                  })}
-                </div>
+                <span>FACE ENGINE — CURRENT STATE</span>
+                <p className="opt-note">
+                  Continuous body: one clip (base_loop) loops forever and the viseme engine
+                  composites her mouth from live audio — 16 real-footage shapes, nose-clear
+                  placement, full articulation. The old idle-clip pool is RETIRED: no clip
+                  switching exists any more, so there is nothing to configure here. Voice is
+                  Eve on every surface (call, typed replies, briefing). Memory, transcripts
+                  and facts are one shared store across chat and calls. BRIEF on the deck
+                  header opens the morning briefing call.
+                </p>
               </div>
             </section>
 

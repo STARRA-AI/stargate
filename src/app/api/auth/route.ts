@@ -15,7 +15,6 @@ import {
 // runtime so this never gets bundled for the Edge runtime (no node:crypto there).
 export const runtime = "nodejs";
 
-const MAX_AGE = 30 * 24 * 60 * 60; // 30 days, seconds
 
 /** Status — is a password configured on the server? (drives the login copy) */
 export async function GET() {
@@ -75,11 +74,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "Auth unavailable." }, { status: 500 });
   }
   const res = NextResponse.json({ ok: true });
+  // SESSION cookie on purpose (no maxAge): the login wall comes back every
+  // time the browser or dock app is reopened. The token's own 12h TTL
+  // (lib/auth.ts) is the backstop for cookie stores that persist anyway.
   res.cookies.set(authCookieName(), token, {
     httpOnly: true,
     sameSite: "lax",
     path: "/",
-    maxAge: MAX_AGE,
     // `secure` is set ONLY when this request actually arrived over TLS. A hard
     // `secure: true` would break the default HTTP deck entirely (the browser
     // would refuse to store the cookie and login would silently never stick), so

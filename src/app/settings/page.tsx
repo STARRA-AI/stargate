@@ -14,6 +14,7 @@ function LlmStatus() {
       .then(
         (d: {
           provider?: string;
+          freellm?: boolean;
           ollama?: { up?: boolean; hasModel?: boolean; model?: string };
           anthropic?: boolean;
           groq?: boolean;
@@ -37,9 +38,11 @@ function LlmStatus() {
                 ? `Grok (${d.grokModel})${d.grok ? "" : " — NO KEY"}`
                 : p === "anthropic"
                   ? `Anthropic${d.anthropic ? "" : " — NO KEY"}`
-                  : p === "ollama"
-                    ? `local Ollama (${o?.model})`
-                    : "auto";
+                  : p === "freellm"
+                    ? `FreeLLM router (local)${d.freellm ? "" : " — NO KEY"}`
+                    : p === "ollama"
+                      ? `local Ollama (${o?.model})`
+                      : "auto";
           const fallback =
             o?.up && o?.hasModel
               ? `Ollama ${o.model} ready`
