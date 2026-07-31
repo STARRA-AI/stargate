@@ -13,6 +13,7 @@ import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
 import { FlipRadar } from "./FlipRadar";
 import { FundingPanel } from "./FundingPanel";
+import { LiveSky } from "./LiveSky";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
@@ -549,16 +550,17 @@ export function Bridge() {
     <div id="stage-wrap">
       <SnapHydrator />
       <div id="stage" ref={stageRef} data-hud={hudState}>
-        {/* LIVING GALAXY (2026-07-30) — the machine is alive. One slow rotate
-            verb on the nebula, breathe on the star layers, three shooting
-            stars on long offsets. Transform+opacity only; ECO and
-            prefers-reduced-motion hold all of it still (deck.css). */}
+        {/* LIVING GALAXY (2026-07-30) — the machine is alive. The nebula
+            wash rotates under a PER-FRAME canvas starfield (LiveSky), and
+            the artwork's reactor core carries three thin rotating arc rings
+            + a breathing core glow (deck.css, centered on --reactor-cx/cy).
+            ECO + prefers-reduced-motion + hidden tab hold all of it still. */}
         <div className="galaxy-spin" aria-hidden />
-        <div className="galaxy-stars galaxy-stars-a" aria-hidden />
-        <div className="galaxy-stars galaxy-stars-b" aria-hidden />
-        <div className="shooting-star ss-1" aria-hidden />
-        <div className="shooting-star ss-2" aria-hidden />
-        <div className="shooting-star ss-3" aria-hidden />
+        <LiveSky />
+        <div className="reactor-ring reactor-ring-1" aria-hidden />
+        <div className="reactor-ring reactor-ring-2" aria-hidden />
+        <div className="reactor-ring reactor-ring-3" aria-hidden />
+        <div className="reactor-core-glow" aria-hidden />
         <div className="ambient-dots" />
         <div className="ambient-scanlines" />
         <div className="ambient-sweep" />

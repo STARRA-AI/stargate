@@ -66,6 +66,10 @@ input::placeholder { color: #7a63a8; }
   color: var(--text);
   background: var(--bg) url("/brand/hud_panel.webp") center center / cover no-repeat;
   transform-origin: top left;
+  /* the artwork's reactor core (CEO-measured from the recording) — the arc
+     rings + core glow center here; nudge these two vars to re-seat them */
+  --reactor-cx: 50%;
+  --reactor-cy: 49%;
 }
 
 /* ── ambient layers ── */
@@ -289,14 +293,15 @@ input::placeholder { color: #7a63a8; }
    leaving the living galaxy visible above it. */
 .col-center { min-width: 0; overflow: visible; display: flex; flex-direction: column; justify-content: flex-end; }
 
-/* ── LIVING GALAXY (2026-07-30) — "a machine that's alive". Doctrine verbs
-   only: rotate (nebula), breathe (star twinkle), a rare streak. All layers
-   are transform/opacity, pointer-transparent, and z-indexed under the HUD.
-   ECO + prefers-reduced-motion freeze everything (rules below). ── */
+/* ── LIVING GALAXY (2026-07-30) — "a machine that's alive". The nebula
+   color wash rotates UNDER a per-frame canvas starfield (LiveSky.tsx);
+   opacity dropped to 0.4 so the canvas stars read on top. ECO +
+   prefers-reduced-motion freeze everything (rules below + the canvas's
+   own gates). ── */
 .galaxy-spin {
   position: absolute; left: 50%; top: 50%;
   width: 170vmax; height: 170vmax; margin: -85vmax 0 0 -85vmax;
-  pointer-events: none; z-index: 0; opacity: 0.6;
+  pointer-events: none; z-index: 0; opacity: 0.4;
   /* Three DISTINCT spiral arms + two off-center blobs: the asymmetry is what
      makes rotation legible. (First cut was near-symmetric wisps on a 240s
      turn — Classic's verdict from the live deck: "twinkling, not spinning".
@@ -312,55 +317,73 @@ input::placeholder { color: #7a63a8; }
       rgba(211, 139, 255, 0.1) 265deg, transparent 330deg);
   animation: spin-cw 75s linear infinite;
 }
-.galaxy-stars { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
-.galaxy-stars-a {
-  opacity: 0.28;
-  background-image:
-    radial-gradient(1px 1px at 12% 18%, #e9d5ff 100%, transparent),
-    radial-gradient(1px 1px at 78% 12%, #c4b5fd 100%, transparent),
-    radial-gradient(1px 1px at 34% 72%, #a855f7 100%, transparent),
-    radial-gradient(1px 1px at 88% 58%, #e9d5ff 100%, transparent),
-    radial-gradient(1px 1px at 52% 40%, #d946ef 100%, transparent);
-  background-size: 640px 640px;
-  animation: twinkle-a 7s ease-in-out infinite;
-}
-.galaxy-stars-b {
-  opacity: 0.14;
-  background-image:
-    radial-gradient(1.5px 1.5px at 22% 44%, #c4b5fd 100%, transparent),
-    radial-gradient(1px 1px at 66% 28%, #e9d5ff 100%, transparent),
-    radial-gradient(1px 1px at 40% 86%, #a855f7 100%, transparent);
-  background-size: 900px 900px;
-  animation: twinkle-b 11s ease-in-out infinite;
-}
-@keyframes twinkle-a { 0%, 100% { opacity: 0.28; } 50% { opacity: 0.1; } }
-@keyframes twinkle-b { 0%, 100% { opacity: 0.14; } 50% { opacity: 0.32; } }
-
-/* Shooting stars: thin streaks that cross once per cycle then rest. The
-   travel+angle live in per-star custom properties so one keyframe serves all
-   three (vars in keyframes resolve per-element; fine on macOS 12 WebKit). */
-.shooting-star {
-  position: absolute; width: 140px; height: 1px; left: -12%;
-  pointer-events: none; z-index: 0; opacity: 0; border-radius: 1px;
-  background: linear-gradient(90deg, rgba(233, 213, 255, 0.9), rgba(196, 181, 253, 0.35), transparent);
-}
-.ss-1 { top: 12%; --ss-angle: 16deg; animation: shoot 9s linear infinite 2s; }
-.ss-2 { top: 38%; --ss-angle: 11deg; animation: shoot 14s linear infinite 7.5s; }
-.ss-3 { top: 64%; --ss-angle: 21deg; animation: shoot 19s linear infinite 12s; }
-@keyframes shoot {
-  0%   { opacity: 0;    transform: translate3d(0, 0, 0) rotate(var(--ss-angle, 15deg)); }
-  1.5% { opacity: 0.85; }
-  8%   { opacity: 0;    transform: translate3d(120vw, 30vh, 0) rotate(var(--ss-angle, 15deg)); }
-  100% { opacity: 0;    transform: translate3d(120vw, 30vh, 0) rotate(var(--ss-angle, 15deg)); }
+/* LIVE SKY canvas (LiveSky.tsx) — per-frame starfield. z-index 1: ABOVE the
+   stage artwork + the z-0 ambient/nebula layers, BELOW the main grid (2)
+   and topbar (3). Its rAF loop stops itself under ECO / reduced motion /
+   hidden tab; the canvas just holds its last pose. */
+.live-sky {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  pointer-events: none; z-index: 1;
 }
 
-/* Stillness switches — the galaxy holds its pose, never disappears. */
+/* ── REACTOR RINGS (2026-07-30) — the artwork's reactor core itself now
+   moves: three thin conic-arc annuli (2-3px band via radial mask) rotating
+   at 18s / 45s reverse / 90s, plus a breathing core glow. All centered on
+   --reactor-cx/--reactor-cy (#stage). Above artwork, below panels; ECO +
+   prefers-reduced-motion freeze them (rules below). ── */
+.reactor-ring {
+  position: absolute; left: var(--reactor-cx); top: var(--reactor-cy);
+  pointer-events: none; z-index: 1; border-radius: 50%;
+  background: conic-gradient(from 0deg,
+    transparent 24deg,
+    color-mix(in oklab, var(--purple) 85%, transparent) 24deg,
+    color-mix(in oklab, var(--purple) 85%, transparent) 94deg,
+    transparent 94deg,
+    transparent 204deg,
+    color-mix(in oklab, var(--star) 70%, transparent) 204deg,
+    color-mix(in oklab, var(--star) 70%, transparent) 274deg,
+    transparent 274deg);
+  -webkit-mask: radial-gradient(closest-side,
+    transparent calc(100% - 3px), #000 calc(100% - 2.5px), #000 100%);
+  mask: radial-gradient(closest-side,
+    transparent calc(100% - 3px), #000 calc(100% - 2.5px), #000 100%);
+}
+.reactor-ring-1 {
+  width: 40vmin; height: 40vmin; margin: -20vmin 0 0 -20vmin;
+  opacity: 0.75; animation: spin-cw 18s linear infinite;
+}
+.reactor-ring-2 {
+  width: 54vmin; height: 54vmin; margin: -27vmin 0 0 -27vmin;
+  opacity: 0.55; animation: spin-ccw 45s linear infinite;
+}
+.reactor-ring-3 {
+  width: 68vmin; height: 68vmin; margin: -34vmin 0 0 -34vmin;
+  opacity: 0.4; animation: spin-cw 90s linear infinite;
+}
+@keyframes core-breathe {
+  0%, 100% { transform: scale(1); opacity: 0.5; }
+  50%      { transform: scale(1.06); opacity: 0.8; }
+}
+.reactor-core-glow {
+  position: absolute; left: var(--reactor-cx); top: var(--reactor-cy);
+  width: 26vmin; height: 26vmin; margin: -13vmin 0 0 -13vmin;
+  border-radius: 50%; pointer-events: none; z-index: 1;
+  background: radial-gradient(circle,
+    color-mix(in oklab, var(--purple) 30%, transparent),
+    color-mix(in oklab, var(--magenta) 12%, transparent) 45%,
+    transparent 72%);
+  animation: core-breathe 4.5s ease-in-out infinite;
+}
+
+/* Stillness switches — nebula, rings and glow hold their pose, never
+   disappear. (The LiveSky canvas gates itself in JS the same way.) */
 body.low-power .galaxy-spin,
-body.low-power .galaxy-stars { animation: none; }
-body.low-power .shooting-star { display: none; }
+body.low-power .reactor-ring,
+body.low-power .reactor-core-glow { animation: none; }
 @media (prefers-reduced-motion: reduce) {
-  .galaxy-spin, .galaxy-stars { animation: none; }
-  .shooting-star { display: none; }
+  .galaxy-spin,
+  .reactor-ring,
+  .reactor-core-glow { animation: none; }
 }
 .reactor-stage {
   flex: 1 1 0;
