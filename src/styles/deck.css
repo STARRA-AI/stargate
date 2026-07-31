@@ -267,7 +267,78 @@ input::placeholder { color: #7a63a8; }
 .site-delta { font-family: var(--mono); font-size: 11px; color: var(--good); }
 
 /* ── center: reactor (4-layer eye rig) ── */
-.col-center { min-width: 0; overflow: visible; }
+/* Operator console BROUGHT DOWN (Classic's order, 2026-07-30): with the
+   reactor eye gone, the console anchors to the BOTTOM of the center column,
+   leaving the living galaxy visible above it. */
+.col-center { min-width: 0; overflow: visible; display: flex; flex-direction: column; justify-content: flex-end; }
+
+/* ── LIVING GALAXY (2026-07-30) — "a machine that's alive". Doctrine verbs
+   only: rotate (nebula), breathe (star twinkle), a rare streak. All layers
+   are transform/opacity, pointer-transparent, and z-indexed under the HUD.
+   ECO + prefers-reduced-motion freeze everything (rules below). ── */
+.galaxy-spin {
+  position: absolute; left: 50%; top: 50%;
+  width: 170vmax; height: 170vmax; margin: -85vmax 0 0 -85vmax;
+  pointer-events: none; z-index: 0; opacity: 0.55;
+  background:
+    radial-gradient(ellipse 42% 30% at 62% 44%, rgba(176, 77, 252, 0.14), transparent 70%),
+    radial-gradient(ellipse 30% 44% at 36% 60%, rgba(211, 139, 255, 0.09), transparent 70%),
+    radial-gradient(ellipse 55% 55% at 50% 50%, rgba(88, 28, 135, 0.16), transparent 75%),
+    conic-gradient(from 0deg at 50% 50%,
+      transparent 0deg, rgba(176, 77, 252, 0.05) 80deg, transparent 160deg,
+      rgba(217, 70, 239, 0.04) 240deg, transparent 330deg);
+  animation: spin-cw 240s linear infinite;
+}
+.galaxy-stars { position: absolute; inset: 0; pointer-events: none; z-index: 0; }
+.galaxy-stars-a {
+  opacity: 0.28;
+  background-image:
+    radial-gradient(1px 1px at 12% 18%, #e9d5ff 100%, transparent),
+    radial-gradient(1px 1px at 78% 12%, #c4b5fd 100%, transparent),
+    radial-gradient(1px 1px at 34% 72%, #a855f7 100%, transparent),
+    radial-gradient(1px 1px at 88% 58%, #e9d5ff 100%, transparent),
+    radial-gradient(1px 1px at 52% 40%, #d946ef 100%, transparent);
+  background-size: 640px 640px;
+  animation: twinkle-a 7s ease-in-out infinite;
+}
+.galaxy-stars-b {
+  opacity: 0.14;
+  background-image:
+    radial-gradient(1.5px 1.5px at 22% 44%, #c4b5fd 100%, transparent),
+    radial-gradient(1px 1px at 66% 28%, #e9d5ff 100%, transparent),
+    radial-gradient(1px 1px at 40% 86%, #a855f7 100%, transparent);
+  background-size: 900px 900px;
+  animation: twinkle-b 11s ease-in-out infinite;
+}
+@keyframes twinkle-a { 0%, 100% { opacity: 0.28; } 50% { opacity: 0.1; } }
+@keyframes twinkle-b { 0%, 100% { opacity: 0.14; } 50% { opacity: 0.32; } }
+
+/* Shooting stars: thin streaks that cross once per cycle then rest. The
+   travel+angle live in per-star custom properties so one keyframe serves all
+   three (vars in keyframes resolve per-element; fine on macOS 12 WebKit). */
+.shooting-star {
+  position: absolute; width: 140px; height: 1px; left: -12%;
+  pointer-events: none; z-index: 0; opacity: 0; border-radius: 1px;
+  background: linear-gradient(90deg, rgba(233, 213, 255, 0.9), rgba(196, 181, 253, 0.35), transparent);
+}
+.ss-1 { top: 12%; --ss-angle: 16deg; animation: shoot 9s linear infinite 2s; }
+.ss-2 { top: 38%; --ss-angle: 11deg; animation: shoot 14s linear infinite 7.5s; }
+.ss-3 { top: 64%; --ss-angle: 21deg; animation: shoot 19s linear infinite 12s; }
+@keyframes shoot {
+  0%   { opacity: 0;    transform: translate3d(0, 0, 0) rotate(var(--ss-angle, 15deg)); }
+  1.5% { opacity: 0.85; }
+  8%   { opacity: 0;    transform: translate3d(120vw, 30vh, 0) rotate(var(--ss-angle, 15deg)); }
+  100% { opacity: 0;    transform: translate3d(120vw, 30vh, 0) rotate(var(--ss-angle, 15deg)); }
+}
+
+/* Stillness switches — the galaxy holds its pose, never disappears. */
+body.low-power .galaxy-spin,
+body.low-power .galaxy-stars { animation: none; }
+body.low-power .shooting-star { display: none; }
+@media (prefers-reduced-motion: reduce) {
+  .galaxy-spin, .galaxy-stars { animation: none; }
+  .shooting-star { display: none; }
+}
 .reactor-stage {
   flex: 1 1 0;
   position: relative;
