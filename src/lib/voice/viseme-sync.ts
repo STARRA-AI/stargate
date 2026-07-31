@@ -100,10 +100,16 @@ export const POSE_CONFIDENCE_CUTOFF = 0.8;
 /**
  * How long smoothed openness may sit at zero, while she is supposed to be
  * speaking, before we conclude the analyser is dead and hide the patch.
- * Comfortably longer than a real inter-word pause (~100-150ms) so a natural
- * gap never flickers her filmed mouth back in.
+ *
+ * RAISED 250 → 700 (2026-07-31, Classic's field report: "mouth flickers in
+ * and out during speech"). 250ms cleared inter-WORD pauses but real speech is
+ * full of inter-PHRASE pauses at 250-600ms — every one of them tripped the
+ * gate, popped the patch off, then popped it back on the next word. The
+ * gate's true target is a DEAD analyser, where an extra 450ms costs nothing:
+ * on the v4 path the base clip's own mouth is AT REST, so nothing wrong is on
+ * screen while we wait the longer window.
  */
-export const OPENNESS_STALL_MS = 250;
+export const OPENNESS_STALL_MS = 700;
 
 /**
  * What counts as "no signal" for the stall gate.

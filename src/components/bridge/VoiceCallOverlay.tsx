@@ -9,6 +9,7 @@ import {
 } from "./StarraClipFace";
 import { StarraCallChat } from "./StarraCallChat";
 import { useStargateStream } from "@/lib/stargate-context";
+import { parseMcpCommand } from "@/lib/mcp/commands";
 import { decideSpicy, pickSpicyClip } from "@/lib/voice/spicy-mode";
 // ENGINE BUS — client-safe, secret-free. "@/lib/engine/bus" only.
 import { useEngineBus } from "@/lib/engine/bus";
@@ -160,6 +161,15 @@ export function VoiceCallOverlay({
   // brain+TTS path answer instead.
   const handleSend = useCallback(
     (t: string) => {
+      // TOOLS ON THE CALL (2026-07-31): `mcp tools` / `browse <url>` /
+      // `mcp <server> <tool>` are BRAIN work — the realtime session cannot run
+      // them. Route tool commands to the brain path even mid-call (the result
+      // lands in this same column and she can talk it through); everything
+      // else rides the live call as before.
+      if (parseMcpCommand(t)) {
+        void sendMessage(t);
+        return;
+      }
       if (sendText(t)) return;
       void sendMessage(t);
     },

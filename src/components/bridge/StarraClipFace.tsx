@@ -367,6 +367,24 @@ export function StarraClipFace({
 
     const scheduleBodyRetry = () => {
       if (disposed) return;
+      // SPURIOUS-ERROR GUARD (2026-07-31, Classic's field report: "flickers to
+      // a blurred close-up"): a/b/back all route their `error` events here,
+      // so a transient hiccup on the HIDDEN layer used to trigger a full
+      // retry → re-crossfade — both layers mid-blend, patch hidden, the
+      // blurred backdrop flashing through. If EITHER layer is currently
+      // healthy on the body clip, the visible face is fine: reset the backoff
+      // and do nothing.
+      const clipFile = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
+      const healthy = [a, b].some(
+        (el) =>
+          el.getAttribute("src") === clipFile &&
+          el.readyState >= 2 &&
+          !el.paused,
+      );
+      if (healthy) {
+        bodyAttempts = 0;
+        return;
+      }
       window.clearTimeout(bodyWatchdog);
       window.clearTimeout(bodyRetryTimer);
       bodyRetryTimer = window.setTimeout(() => {
@@ -977,6 +995,9 @@ export function StarraClipFace({
           opacity: 0,
           pointerEvents: "none",
           transformOrigin: "0 0",
+          // Soft-fade every show/hide (stall gate, blend gates, pose fade) —
+          // an opacity POP is exactly the flicker Classic filmed.
+          transition: "opacity 180ms ease",
           WebkitMaskImage: patchMask,
           maskImage: patchMask,
         }}
