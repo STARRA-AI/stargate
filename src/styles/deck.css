@@ -1509,3 +1509,45 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
 /* ── MORNING BRIEFING banner ── */
 .brief-banner { display: block; width: 100%; padding: 7px 12px; margin: 0 0 8px; font-family: var(--font-mono, monospace); font-size: 11px; letter-spacing: 0.14em; color: var(--star); background: rgba(176, 77, 252, 0.08); border: 1px solid rgba(176, 77, 252, 0.35); border-radius: 4px; cursor: pointer; text-align: center; }
 .brief-banner:hover { background: rgba(176, 77, 252, 0.16); }
+
+/* ── ALIVE PASS (2026-07-30) — doctrine verbs only: reveal on boot, breathe
+   on the status dots, brighten on hover. Subtle by design; ECO and
+   prefers-reduced-motion hold everything still. ── */
+
+/* Panels REVEAL once on boot — a soft rise, staggered down each column. */
+@keyframes panel-reveal {
+  from { opacity: 0; transform: translateY(7px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.main-grid .panel { animation: panel-reveal 420ms ease-out backwards; }
+.main-grid .col .panel:nth-of-type(1) { animation-delay: 60ms; }
+.main-grid .col .panel:nth-of-type(2) { animation-delay: 140ms; }
+.main-grid .col .panel:nth-of-type(3) { animation-delay: 220ms; }
+.main-grid .col .panel:nth-of-type(4) { animation-delay: 300ms; }
+.main-grid .col .panel:nth-of-type(5) { animation-delay: 380ms; }
+
+/* Status dots BREATHE — slow, offset per panel so the deck never pulses in
+   lockstep like a metronome. */
+@keyframes dot-breathe {
+  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--purple); }
+  50%      { opacity: 0.55; box-shadow: 0 0 1px transparent; }
+}
+.panel-head .dot { animation: dot-breathe 3.6s ease-in-out infinite; }
+.main-grid .col .panel:nth-of-type(2) .dot { animation-delay: 0.9s; }
+.main-grid .col .panel:nth-of-type(3) .dot { animation-delay: 1.8s; }
+.main-grid .col .panel:nth-of-type(4) .dot { animation-delay: 2.7s; }
+
+/* Panels BRIGHTEN under the cursor — border and glow only, no movement. */
+.main-grid .panel { transition: border-color 240ms ease, box-shadow 240ms ease; }
+.main-grid .panel:hover {
+  border-color: rgba(176, 77, 252, 0.45);
+  box-shadow: 0 0 18px rgba(176, 77, 252, 0.08);
+}
+
+body.low-power .main-grid .panel { animation: none; }
+body.low-power .panel-head .dot { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  .main-grid .panel { animation: none; }
+  .panel-head .dot { animation: none; }
+  .main-grid .panel:hover { box-shadow: none; }
+}
