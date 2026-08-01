@@ -12,6 +12,90 @@ import {
 } from "react";
 import type { HudState } from "@/lib/tokens";
 import { COPY, statusForState } from "@/lib/copy";
+import {
+  getBootGreeting,
+  getBootGreetingMuted,
+  getSyncReplies,
+} from "@/lib/voice/deck-prefs";
+
+/**
+ * G3 — SYNC REPLIES. Why the reply text is allowed to wait for her voice.
+ *
+ * Default OFF, and OFF is byte-for-byte today's behaviour: the read loop calls
+ * setStreaming per chunk and the text races ahead of the audio. That is the
+ * right default — for a long answer, reading ahead is a feature.
+ *
+ * ON holds the whole reveal until her voice ACTUALLY starts, so the words land
+ * with the sound instead of finishing thirty seconds before it.
+ */
+export type RevealReason =
+  /** Sync is off — text flows as it streams, exactly as it always has. */
+  | "stream"
+  /** The TTS bus reported real audio (`playing: true`). The happy path. */
+  | "audio"
+  /** Nothing ever started making noise. Show the text anyway. */
+  | "timeout"
+  /** Barge-in or a newer turn killed this one. */
+  | "abort"
+  /** speakStarra finished/failed without ever playing (e.g. engine "none"). */
+  | "silent";
+
+/**
+ * How long the reveal may wait on audio that never arrives.
+ *
+ * 2.5s is chosen against the actual TTS path, not picked round: speakStarra
+ * fetches synthesized audio from /api/tts (a network round trip to xAI) and
+ * only then does the element fire `playing`. A healthy synth lands well inside
+ * this; a wedged one does not, and past ~2.5s a reader has stopped believing
+ * the answer is coming.
+ *
+ * THIS TIMEOUT IS A SAFETY NET, NOT A TUNING KNOB. Its whole job is that a
+ * silent TTS failure can never leave Classic staring at a blank reply that
+ * already arrived. Every other exit (abort, engine "none", speakStarra
+ * resolving early) releases immediately and does not wait for it.
+ */
+export const SYNC_REPLY_RELEASE_TIMEOUT_MS = 2500;
+
+export interface ReplyRevealGate {
+  /** Feed the FULL accumulated text so far. Reveals immediately when not holding. */
+  push(full: string): void;
+  /** Release the held text. First call wins; later calls are ignored. */
+  release(reason: RevealReason): void;
+  /** True while text is being withheld. */
+  held(): boolean;
+  /** What released it, or null if it is still held / never held. */
+  reason(): RevealReason | null;
+}
+
+/**
+ * The gate, as a pure unit with no React and no browser in it — so
+ * tests/sync-replies-gate.test.ts can drive every path (chunk, audio, timeout,
+ * abort) directly instead of trying to fake an audio element.
+ */
+export function createReplyRevealGate(opts: {
+  syncReplies: boolean;
+  reveal: (text: string) => void;
+}): ReplyRevealGate {
+  let latest = "";
+  // Sync OFF starts already-open: nothing is ever withheld, so push() reveals.
+  let holding = opts.syncReplies;
+  let released: RevealReason | null = null;
+
+  return {
+    push(full: string) {
+      latest = full;
+      if (!holding) opts.reveal(full);
+    },
+    release(reason: RevealReason) {
+      if (released !== null) return; // exactly-once
+      released = reason;
+      holding = false;
+      opts.reveal(latest);
+    },
+    held: () => holding,
+    reason: () => released,
+  };
+}
 
 export type ActionLogEntry = {
   id: string;
@@ -159,6 +243,44 @@ export function StargateProvider({ children }: { children: ReactNode }) {
   const historyRef = useRef<Msg[]>(history);
   historyRef.current = history;
 
+  /**
+   * G2 — SPOKEN BOOT GREETING. She says one line once the deck finishes
+   * booting.
+   *
+   * FIRED FROM HERE, NOT FROM Bridge/DeckBoot, ON PURPOSE. `bootDone` is
+   * already the boot-complete signal in this provider (DeckBoot's `onDone`
+   * sets it), so an effect on it needs ZERO change to DeckBoot's
+   * `{ onDone: () => void }` prop and ZERO change to Bridge — the greeting
+   * costs no edit to anyone else's file.
+   *
+   * FIRES EXACTLY ONCE PER PAGE LOAD. The ref guard is not belt-and-braces:
+   * React StrictMode double-invokes effects in development, and without it she
+   * would greet him twice, over herself, every single boot.
+   *
+   * MUTED MEANS NEVER SYNTHESIZED — the check happens before the dynamic
+   * import, so a muted greeting does not even load the TTS module, let alone
+   * make a request to /api/tts.
+   *
+   * AND IT CAN NEVER BLOCK THE DECK: the whole thing is fire-and-forget behind
+   * a catch. If TTS is down, boot completes in silence and nothing else knows.
+   */
+  const bootGreetedRef = useRef(false);
+  useEffect(() => {
+    if (!bootDone || bootGreetedRef.current) return;
+    bootGreetedRef.current = true;
+    if (getBootGreetingMuted()) return;
+    const line = getBootGreeting().trim();
+    if (!line) return;
+    void (async () => {
+      try {
+        const { speakStarra } = await import("@/lib/voice/speak");
+        await speakStarra(line);
+      } catch {
+        /* a boot greeting is never worth a broken boot */
+      }
+    })();
+  }, [bootDone]);
+
   // ONE MEMORY: seed the visible conversation from the shared store on boot,
   // so a reload resumes the same continuous conversation the brain and the
   // call already remember (api/chat and the call leg both write it). Seeds
@@ -257,6 +379,14 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         let buffer = "";
         let full = "";
 
+        // G3. Read the pref ONCE per turn: flipping the toggle mid-reply must
+        // not strand half a reveal in a state neither branch expects.
+        const syncReplies = getSyncReplies();
+        const gate = createReplyRevealGate({
+          syncReplies,
+          reveal: (t) => setStreaming(t),
+        });
+
         while (true) {
           const { done, value } = await reader.read();
           if (done) break;
@@ -272,7 +402,9 @@ export function StargateProvider({ children }: { children: ReactNode }) {
               const json = JSON.parse(payload) as { text?: string };
               if (json.text) {
                 full += json.text;
-                setStreaming(full);
+                // OFF: reveals now, identical to the old setStreaming(full).
+                // ON: buffered — released below once her voice is real.
+                gate.push(full);
               }
             } catch {
               /* ignore */
@@ -282,11 +414,63 @@ export function StargateProvider({ children }: { children: ReactNode }) {
 
         setHudState("speaking");
         setLastReply(full);
-        // Speak immediately. `full` already rendered live via setStreaming()
-        // above during the read loop, so commit straight to history instead
-        // of re-typing it character-by-character.
-        const { speakStarra } = await import("@/lib/voice/speak");
+        // Speak immediately. With sync OFF, `full` already rendered live during
+        // the read loop, so commit straight to history instead of re-typing it
+        // character-by-character.
+        const { speakStarra, subscribeTtsAudio, getTtsAudio } = await import(
+          "@/lib/voice/speak"
+        );
         const speakPromise = speakStarra(full, ttsAc.signal);
+
+        // G3 ON: the reply is still buffered. Hold the commit until her voice
+        // is genuinely audible, then release everything at once.
+        //
+        // The commit below is what actually puts the reply on screen (the
+        // streaming mirror is cleared right after it), so holding the reveal
+        // means holding THIS, not just the mirror — releasing the mirror alone
+        // would be pointless because the commit two lines later would reveal
+        // the text anyway.
+        if (gate.held()) {
+          await new Promise<void>((resolve) => {
+            let settled = false;
+            let unsubscribe: (() => void) | null = null;
+            let timer: ReturnType<typeof setTimeout> | null = null;
+
+            const finish = (reason: RevealReason) => {
+              if (settled) return;
+              settled = true;
+              if (timer !== null) clearTimeout(timer);
+              unsubscribe?.();
+              ttsAc.signal.removeEventListener("abort", onAbort);
+              gate.release(reason);
+              resolve();
+            };
+
+            function onAbort() {
+              finish("abort");
+            }
+
+            // Barge-in during the hold must show the text immediately — an
+            // interrupted turn still said something worth reading.
+            if (ttsAc.signal.aborted) return finish("abort");
+            ttsAc.signal.addEventListener("abort", onAbort, { once: true });
+
+            // `playing` (not `play`) is the event behind this flag — it means
+            // sound is actually coming out. See speak.ts.
+            if (getTtsAudio().playing) return finish("audio");
+            unsubscribe = subscribeTtsAudio((s) => {
+              if (s.playing) finish("audio");
+            });
+
+            // speakStarra resolving without ever playing means there was no
+            // audio to sync to — engine "none", a failed synth, an empty
+            // utterance. Release at once rather than serving out the timeout.
+            void speakPromise.then(() => finish("silent")).catch(() => finish("silent"));
+
+            timer = setTimeout(() => finish("timeout"), SYNC_REPLY_RELEASE_TIMEOUT_MS);
+          });
+        }
+
         setHistory((h) => [...h, { role: "assistant", content: full }]);
         // Turn is committed to history now — clear the streaming mirror
         // immediately so MessageColumn doesn't render the reply twice for
@@ -375,9 +559,9 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         .map((e) => ({ role: e.role, content: e.content }));
       if (incoming.length === 0) return;
       setHistory((prev) => {
-        const seen = new Set(prev.map((m) => `${m.role} ${m.content}`));
+        const seen = new Set(prev.map((m) => `${m.role}\u0000${m.content}`));
         const fresh = incoming.filter(
-          (m) => !seen.has(`${m.role} ${m.content}`),
+          (m) => !seen.has(`${m.role}\u0000${m.content}`),
         );
         return fresh.length === 0 ? prev : [...prev, ...fresh];
       });
