@@ -10,6 +10,7 @@ import {
   loadPasskeys,
   savePasskeys,
   rpFromRequest,
+  passkeyBlocker,
   pubKeyToStore,
   RP_NAME,
 } from "@/lib/webauthn";
@@ -35,6 +36,10 @@ export async function GET(req: Request) {
     );
   }
   const { rpID } = rpFromRequest(req);
+  const blocked = passkeyBlocker(rpID);
+  if (blocked) {
+    return NextResponse.json({ error: blocked }, { status: 400 });
+  }
   const existing = loadPasskeys();
   const options = await generateRegistrationOptions({
     rpName: RP_NAME,

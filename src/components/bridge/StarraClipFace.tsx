@@ -20,12 +20,12 @@ import {
   containRect,
   createCrossfadeGate,
   createMouthSmoother,
+  createOpennessGate,
   createOpennessRing,
   createRoundnessSmoother,
   createStallGate,
   frameIndexAt,
   loadMouthPatchAssets,
-  opennessFromAudio,
   patchPlacement,
   pickVisemeFrame,
   pickVisemeFrame2,
@@ -268,20 +268,31 @@ export function StarraClipFace({
     };
 
     const crossfadeToBack = () => {
+      // INCOMING FADES IN OVER OUTGOING (2026-07-31 fix — hero-frame invariant:
+      // "no code path may leave both video layers at opacity<1 over the blurred
+      // backdrop at once"). The OLD code faded BOTH layers at once (back 0->1
+      // AND front 1->0 simultaneously), which meant that for the entire
+      // CROSSFADE_MS blend BOTH layers sat below opacity 1 together — a real
+      // double-exposure over the blurred backdrop, and exactly the "flickers to
+      // a blurred close-up" shape of bug. Fix: stack the incoming layer ABOVE
+      // the outgoing one (z-index), fade ONLY the incoming in, and leave the
+      // outgoing PINNED at opacity 1 for the whole blend — it is only dropped
+      // to 0 once the incoming has actually finished landing (settleFront,
+      // below). The composite is fully opaque at every instant: either the
+      // outgoing alone (start), or the incoming opaque on top of the still-
+      // opaque outgoing (mid-blend), or the incoming alone (end).
+      back.style.zIndex = "2";
+      front.style.zIndex = "1";
       back.style.opacity = "1";
-      front.style.opacity = "0";
       const incoming = back;
-      const t = front;
+      const outgoing = front;
       front = back;
-      back = t;
+      back = outgoing;
 
-      // CROSSFADE RACE (fixed): the layers carry `transition: opacity
-      // CROSSFADE_MS`, so for the next 320ms BOTH clips are partly visible and
-      // there is no single "frame on screen". Publishing the new layer to
-      // frontElRef synchronously (as this used to) made the mouth patch position
-      // itself with talking.mp4's 832x1248 geometry while the pixels underneath
-      // were still the idle clip. So: no visible layer during the blend (the
-      // patch hides itself), then publish once the fade has actually landed.
+      // No visible layer is published to frontElRef during the blend — the
+      // mouth patch hides itself rather than paint over a layer whose fade may
+      // not have landed yet (see the tick's isFullyOpaque check). Publish once
+      // the fade has actually landed.
       frontElRef.current = null;
       window.clearTimeout(fadeTimer);
       // STALE-LISTENER FIX: cancel the PREVIOUS crossfade completely — drop its
@@ -303,6 +314,12 @@ export function StarraClipFace({
         // A newer crossfade (or teardown) owns the layers now — say nothing.
         if (disposed || !fades.isCurrent(myGen)) return;
         frontElRef.current = incoming;
+        // Only now hide the outgoing layer. It has stayed fully opaque and
+        // covering nothing new (the incoming is already opaque on top of it),
+        // so dropping it is invisible — state hygiene, never a visible pop —
+        // and it frees `outgoing` to be reused as the next hidden back layer.
+        outgoing.style.opacity = "0";
+        outgoing.style.zIndex = "1";
       };
       // transitionend is the accurate signal; the timer is the fallback for the
       // case where the transition never runs (reduced motion, opacity already 1,
@@ -365,6 +382,21 @@ export function StarraClipFace({
     let bodyRetryTimer = 0;
     let bodyAttempts = 0;
 
+    // Is the body clip healthy on EITHER physical element right now? Checked
+    // against the raw `a`/`b` elements, never the `front`/`back` aliases —
+    // those are reassigned SYNCHRONOUSLY the instant a crossfade begins (see
+    // crossfadeToBack), so asking the aliases "is the hidden one OK?" mid-blend
+    // could actually be asking about the element that is currently the
+    // visible, healthy front. Testing `a`/`b` directly is immune to that.
+    const clipFile = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
+    const bodyPlaybackHealthy = () =>
+      [a, b].some(
+        (el) =>
+          el.getAttribute("src") === clipFile &&
+          el.readyState >= 2 &&
+          !el.paused,
+      );
+
     const scheduleBodyRetry = () => {
       if (disposed) return;
       // SPURIOUS-ERROR GUARD (2026-07-31, Classic's field report: "flickers to
@@ -374,14 +406,7 @@ export function StarraClipFace({
       // blurred backdrop flashing through. If EITHER layer is currently
       // healthy on the body clip, the visible face is fine: reset the backoff
       // and do nothing.
-      const clipFile = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
-      const healthy = [a, b].some(
-        (el) =>
-          el.getAttribute("src") === clipFile &&
-          el.readyState >= 2 &&
-          !el.paused,
-      );
-      if (healthy) {
+      if (bodyPlaybackHealthy()) {
         bodyAttempts = 0;
         return;
       }
@@ -389,6 +414,17 @@ export function StarraClipFace({
       window.clearTimeout(bodyRetryTimer);
       bodyRetryTimer = window.setTimeout(() => {
         if (disposed) return;
+        // RE-CHECK AT FIRE TIME — this is the guard EXTENDED (2026-07-31): the
+        // backoff delay is up to 8s, and the world can heal inside that
+        // window (a different retry landing, a stalled decoder recovering on
+        // its own). Retries touch ONLY the hidden back layer, and only while
+        // it is STILL actually unhealthy at the moment of mutation — never
+        // blank/reload a layer that has since become the healthy, visible
+        // front.
+        if (bodyPlaybackHealthy()) {
+          bodyAttempts = 0;
+          return;
+        }
         // Re-setting the same src is a no-op, and this element just FAILED with
         // that src — drop it first so play() assigns fresh and the browser
         // actually refetches.
@@ -514,6 +550,12 @@ export function StarraClipFace({
     let raf = 0;
     let patch: MouthPatchAssets | null = null;
     const smoother = createMouthSmoother();
+    // Hysteresis gate on the raw openness (2026-07-31): opens above
+    // SILENCE_FLOOR, only closes below the lower SILENCE_RELEASE_FLOOR, so
+    // level hovering right at the floor (mic noise, a fading breath) cannot
+    // chatter the raw signal open/closed block to block. One instance per
+    // engine run, matching every other per-run smoother/ring below.
+    const opennessGate = createOpennessGate();
     // Lip ROUNDING gets its own, SLOWER smoother (see ROUNDNESS_TAU_MS): the jaw
     // can drop between two frames but lips purse over a syllable, so sharing the
     // jaw's 35ms attack would make her lip width flicker. It rests at NEUTRAL
@@ -713,7 +755,7 @@ export function StarraClipFace({
         // uses it for sibilance damping, and roundness is an F1/F2 proxy over the
         // same bins, so the second axis costs no extra analyser work at all.
         const spectrum = readFreq();
-        const openness = smoother.step(opennessFromAudio(readTime(), spectrum), dt);
+        const openness = smoother.step(opennessGate.step(readTime(), spectrum), dt);
         ring.push(now, openness);
         const roundness = roundSmoother.step(
           roundnessFromAudio(spectrum, sampleRate),
@@ -980,6 +1022,50 @@ export function StarraClipFace({
         muted
         playsInline
         aria-hidden
+      />
+      {/* HERO-FRAME BACKSTOP (2026-07-31). The blurred backdrop above is
+          `object-fit: cover` + `object-position: center 22%` + `scale(1.15)` +
+          `blur(28px)` — i.e. a blurred CLOSE-UP. It is the very next thing
+          under the two live layers, so ANY instant where neither live layer
+          paints (this component's first mount, before `a` even has a `src`;
+          the retry path's `back.removeAttribute("src")`; an incoming clip at
+          readyState<2) puts that blurred close-up on screen as her face.
+          That is the flash Classic filmed.
+
+          This is a sharp, static, unfiltered frame of the SAME clip the live
+          layers play, pinned between them: it can only ever be revealed by
+          such a gap, and when it is, she reads as a still photo instead of a
+          smear. `.call-face-hero-still` is z-index 0 — the same level as the
+          backdrop — and wins by tree order (it comes second), which is why it
+          MUST stay immediately after the backdrop element.
+
+          It must be inside THIS component, not the stage: `.call-face-portrait`
+          is a stacking context, so a backstop rendered as its sibling would be
+          painted under the inner backdrop and never seen.
+
+          Pinned via autoplay->pause rather than a still image because no
+          prerendered frame of base_loop.mp4 exists in /public (only
+          starra-portrait.jpg, a different 640x960 asset that would not
+          register with the 552x720 clip), and the doctrine forbids generating
+          one. Muted autoplay is what forces a first frame to decode at all —
+          WebKit does not reliably paint an unstarted <video>. */}
+      <video
+        className="call-face-hero-still"
+        src={STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file}
+        autoPlay
+        muted
+        playsInline
+        preload="auto"
+        aria-hidden
+        onLoadedData={(e) => {
+          const el = e.currentTarget;
+          el.pause();
+          try {
+            el.currentTime = 0;
+          } catch {
+            /* not seekable yet — it is already showing frame 0 either way */
+          }
+        }}
       />
       <video ref={aRef} style={{ ...layer, opacity: 1, zIndex: 1 }} muted playsInline aria-label="STARRA" />
       <video ref={bRef} style={{ ...layer, opacity: 0, zIndex: 1 }} muted playsInline aria-hidden />

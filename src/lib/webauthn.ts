@@ -60,6 +60,20 @@ export function rpFromRequest(req: Request): { rpID: string; origin: string } {
   return { rpID, origin };
 }
 
+/**
+ * WebAuthn forbids an IP address as the Relying Party ID — passkeys bind to
+ * hostnames only. The deck is usually opened at http://127.0.0.1:3000 or the
+ * LAN IP, where credentials.create() throws a SecurityError before the browser
+ * ever shows the Touch ID sheet. Returns the operator-facing reason if this
+ * rpID can never work, or null if it's usable.
+ */
+export function passkeyBlocker(rpID: string): string | null {
+  if (/^\d{1,3}(\.\d{1,3}){3}$/.test(rpID) || rpID.includes(":")) {
+    return "Touch ID can't bind to an IP address. Open the deck at http://localhost:3000 — same deck, same login — and set it up there.";
+  }
+  return null;
+}
+
 // COSE public key is a Uint8Array on the wire; store/restore as base64url.
 export function pubKeyToStore(publicKey: Uint8Array): string {
   return Buffer.from(publicKey).toString("base64url");

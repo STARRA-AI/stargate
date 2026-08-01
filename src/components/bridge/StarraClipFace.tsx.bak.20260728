@@ -1,0 +1,147 @@
+"use client";
+
+import { useEffect, useRef } from "react";
+import {
+  STARRA_CLIPS,
+  SPEAKING_CLIP,
+  CROSSFADE_MS,
+  pickIdle,
+  type StarraClipKey,
+} from "@/lib/voice/starra-clip-map";
+
+type Mode = "speaking" | "listening" | "idle";
+
+/**
+ * StarraClipFace — her PHOTOREAL self, from the real STARRA ANGLES video clips,
+ * driven by the live call state (see starra-clip-map.ts for the trigger database).
+ *
+ * When she SPEAKS → her talking clip loops (mouth moving = photoreal "lip-sync" by
+ * playback). When she LISTENS / idles / first appears → the IDLE POOL: her idle clips
+ * played back-to-back, each crossfading into the next (shuffled, no immediate repeat)
+ * so she reads as one continuous living person, never a looping GIF. Two <video> layers
+ * crossfade on opacity; the incoming clip starts ~CROSSFADE_MS before the outgoing one
+ * ends, so both play during the blend and there's no hard cut, no black flash.
+ * Clips are SILENT — her voice is the xAI call audio; the video is just her face.
+ * $0, in-deck, no GPU, no tunnel.
+ */
+export function StarraClipFace({ active, mode }: { active: boolean; mode: Mode }) {
+  const aRef = useRef<HTMLVideoElement>(null);
+  const bRef = useRef<HTMLVideoElement>(null);
+  const modeRef = useRef<Mode>(mode);
+  modeRef.current = mode; // keep current without an effect-ordering race
+  const applyModeRef = useRef<() => void>(() => {});
+
+  useEffect(() => {
+    if (!active || typeof window === "undefined") return;
+    const a = aRef.current;
+    const b = bRef.current;
+    if (!a || !b) return;
+
+    let front = a;
+    let back = b;
+    let idleTimer = 0;
+    let idleGen = 0; // guards against double-advance (ended + fallback both firing)
+    let currentIdle: StarraClipKey | null = null;
+    let disposed = false;
+
+    const crossfadeToBack = () => {
+      back.style.opacity = "1";
+      front.style.opacity = "0";
+      const t = front;
+      front = back;
+      back = t;
+    };
+
+    // play `key` on the hidden layer, then crossfade it in (no black flash).
+    // onDone (non-looping clips) fires when the clip finishes playing.
+    const play = (key: StarraClipKey, onDone?: () => void) => {
+      const clip = STARRA_CLIPS[key];
+      back.loop = clip.loop;
+      back.onended = null;
+      back.oncanplay = null;
+      if (back.getAttribute("src") !== clip.file) back.src = clip.file;
+      try {
+        back.currentTime = 0;
+      } catch {
+        /* not seekable yet — fine */
+      }
+      const playingEl = back; // this element will carry this clip
+      const go = () => {
+        if (disposed) return;
+        void playingEl.play().catch(() => {});
+        crossfadeToBack();
+        if (!clip.loop && onDone) playingEl.onended = () => !disposed && onDone();
+      };
+      if (back.readyState >= 2) go();
+      else back.oncanplay = go;
+    };
+
+    // The idle POOL: play one idle clip FULLY, then crossfade to the next (shuffled,
+    // no immediate repeat) so each natural motion completes — continuous, not choppy.
+    // Advance is driven by the clip's own `ended`; a fallback timer covers a stall.
+    const playIdle = () => {
+      window.clearTimeout(idleTimer);
+      const myGen = ++idleGen;
+      const next = pickIdle(currentIdle, Math.random());
+      currentIdle = next;
+      const advance = () => {
+        if (disposed || myGen !== idleGen || modeRef.current === "speaking") return;
+        playIdle();
+      };
+      play(next, advance);
+      // fallback: if `ended` never fires (rare stall), move on a bit after its length
+      idleTimer = window.setTimeout(advance, STARRA_CLIPS[next].durationMs + 1500);
+    };
+
+    const applyMode = () => {
+      window.clearTimeout(idleTimer);
+      idleGen++; // invalidate any in-flight idle advance
+      if (modeRef.current === "speaking") {
+        play(SPEAKING_CLIP); // her talking clip loops while she speaks
+      } else {
+        playIdle(); // listening / idle / first appearance -> the idle pool
+      }
+    };
+    applyModeRef.current = applyMode;
+    applyMode();
+
+    return () => {
+      disposed = true;
+      window.clearTimeout(idleTimer);
+      a.onended = a.oncanplay = b.onended = b.oncanplay = null;
+      a.pause();
+      b.pause();
+    };
+  }, [active]);
+
+  // re-apply whenever the call state changes (speaking ⇄ listening/idle)
+  useEffect(() => {
+    if (active) applyModeRef.current();
+  }, [mode, active]);
+
+  const layer: React.CSSProperties = {
+    position: "absolute",
+    inset: 0,
+    width: "100%",
+    height: "100%",
+    objectFit: "contain",
+    transition: `opacity ${CROSSFADE_MS}ms ease`,
+  };
+
+  return (
+    <div className="call-face-portrait">
+      {/* blurred fill so a portrait clip has no black bars on a wide screen */}
+      <video
+        className="call-face-backdrop"
+        src="/avatar/clips/idle_a.mp4"
+        autoPlay
+        loop
+        muted
+        playsInline
+        aria-hidden
+      />
+      <video ref={aRef} style={{ ...layer, opacity: 1, zIndex: 1 }} muted playsInline aria-label="STARRA" />
+      <video ref={bRef} style={{ ...layer, opacity: 0, zIndex: 1 }} muted playsInline aria-hidden />
+    </div>
+  );
+}

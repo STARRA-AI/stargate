@@ -1,0 +1,318 @@
+"use client";
+
+import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useVoiceCall, type VoiceCallState } from "@/lib/voice/useVoiceCall";
+import { StarraClipFace } from "./StarraClipFace";
+import { StarraCallChat } from "./StarraCallChat";
+import { useStargateStream } from "@/lib/stargate-context";
+
+function statusCopy(state: VoiceCallState): string {
+  switch (state) {
+    case "listening":
+      return "Listening…";
+    case "speaking":
+      return "STARRA is speaking…";
+    case "reconnecting":
+      return "Reconnecting…";
+    case "error":
+      return "Voice link down.";
+    case "connecting":
+    case "idle":
+    default:
+      return "Connecting…";
+  }
+}
+
+/** True when connect()'s surfaced error is the "no xAI key linked" stub-mode
+ * message from /api/realtime (its stub copy reads "...link the xAI key in
+ * Settings → Link APIs"). The mic-blocked message deliberately says "System
+ * Preferences", not "Settings", so it never matches here. */
+function pointsToSettings(message: string): boolean {
+  return /settings/i.test(message);
+}
+
+/**
+ * FaceTime-style full-screen voice call with STARRA. Her face fills the screen;
+ * it switches clips on call state (idle ⇄ attentive-listening ⇄ talking). No
+ * transcript — just her, like a real call. All call/audio plumbing lives in
+ * useVoiceCall(); this drives connect()/disconnect() off the `open` prop and
+ * renders the engine's state.
+ */
+export function VoiceCallOverlay({
+  open,
+  onClose,
+}: {
+  open: boolean;
+  onClose: () => void;
+}) {
+  const {
+    state,
+    error,
+    transcript,
+    liveUser,
+    liveAssistant,
+    connect,
+    disconnect,
+    muted,
+    toggleMute,
+    lipSyncClip,
+    lipSyncRendering,
+    clearLipSyncClip,
+  } = useVoiceCall();
+
+  const panelRef = useRef<HTMLDivElement>(null);
+  const endBtnRef = useRef<HTMLButtonElement>(null);
+  const previouslyFocusedRef = useRef<HTMLElement | null>(null);
+  const ringbackRef = useRef<HTMLAudioElement>(null);
+
+  // Shared brain stream — typing in the call chat goes to her (Grok) brain with
+  // full memory, exactly like the deck console. One conversation everywhere.
+  const { history, streaming, sendMessage } = useStargateStream();
+  const handleSend = useCallback((t: string) => void sendMessage(t), [sendMessage]);
+  const sheReplying = streaming.trim().length > 0;
+
+  // One conversation in the chat: the live-call turns + the typed/brain turns.
+  const chatMessages = useMemo(
+    () => [
+      ...transcript.map((m) => ({ role: m.role, text: m.text })),
+      ...history.map((m) => ({ role: m.role, text: m.content })),
+    ],
+    [transcript, history],
+  );
+
+  // Mirror connect/disconnect in refs so the open/close effect reacts only to
+  // `open` itself, not to callback identity churn as the engine advances
+  // through its states — reacting to that churn would tear the call down.
+  const connectRef = useRef(connect);
+  const disconnectRef = useRef(disconnect);
+  useEffect(() => {
+    connectRef.current = connect;
+  }, [connect]);
+  useEffect(() => {
+    disconnectRef.current = disconnect;
+  }, [disconnect]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return; // SSR: nothing to connect to
+    if (open) {
+      void connectRef.current();
+    } else {
+      disconnectRef.current();
+    }
+  }, [open]);
+
+  // Belt-and-suspenders: tear the engine down if this unmounts mid-call.
+  useEffect(() => {
+    return () => {
+      disconnectRef.current();
+    };
+  }, []);
+
+  // Ringback: her song plays EXACTLY ONCE per summon — on the first connect —
+  // then fades out when she picks up. It never replays on a reconnect and never
+  // loops; it only plays again when the call is closed and re-summoned (the
+  // ringbackDoneRef resets when `open` goes false, below).
+  const ringbackDoneRef = useRef(false);
+  useEffect(() => {
+    const a = ringbackRef.current;
+    if (!a) return;
+    const opening = state === "connecting" || state === "idle";
+    if (opening && !ringbackDoneRef.current) {
+      ringbackDoneRef.current = true; // one play per summon — reconnects won't replay
+      a.volume = 0.35;
+      a.currentTime = 0;
+      void a.play().catch(() => {});
+    } else if (state === "listening" || state === "speaking") {
+      // she picked up — fade the song out over ~600ms, then stop
+      const start = a.volume;
+      const t0 = typeof performance !== "undefined" ? performance.now() : 0;
+      const fade = () => {
+        const el = ringbackRef.current;
+        if (!el) return;
+        const p = Math.min(1, ((typeof performance !== "undefined" ? performance.now() : 0) - t0) / 600);
+        el.volume = start * (1 - p);
+        if (p < 1) requestAnimationFrame(fade);
+        else { el.pause(); el.currentTime = 0; }
+      };
+      requestAnimationFrame(fade);
+    }
+  }, [state]);
+
+  // Reset the one-play latch + stop the song when the call closes, so re-summoning
+  // plays it fresh (once).
+  useEffect(() => {
+    if (!open) {
+      ringbackDoneRef.current = false;
+      const a = ringbackRef.current;
+      if (a) { a.pause(); a.currentTime = 0; }
+    }
+  }, [open]);
+
+  // (Her face no longer scales with live amplitude — that per-frame jitter was
+  // part of the "seizure" look. She holds still + breathes gently; the speaking
+  // glow is a slow calm CSS pulse.)
+
+  // Focus management: move focus into the call on open, trap Tab, restore on
+  // close. aria-modal is only a hint — the browser enforces none of this.
+  useEffect(() => {
+    if (typeof window === "undefined" || !open) return;
+
+    previouslyFocusedRef.current = document.activeElement as HTMLElement | null;
+    const focusTimer = window.setTimeout(() => {
+      (endBtnRef.current ?? panelRef.current)?.focus();
+    }, 0);
+
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key !== "Tab") return;
+      const panel = panelRef.current;
+      if (!panel) return;
+      const focusable = panel.querySelectorAll<HTMLElement>(
+        'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+      );
+      if (focusable.length === 0) return;
+      const first = focusable[0];
+      const last = focusable[focusable.length - 1];
+      const active = document.activeElement;
+
+      if (e.shiftKey) {
+        if (active === first || !panel.contains(active)) {
+          e.preventDefault();
+          last.focus();
+        }
+      } else if (active === last || !panel.contains(active)) {
+        e.preventDefault();
+        first.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+
+    return () => {
+      window.clearTimeout(focusTimer);
+      document.removeEventListener("keydown", handleKeyDown);
+      previouslyFocusedRef.current?.focus?.();
+      previouslyFocusedRef.current = null;
+    };
+  }, [open]);
+
+  const settingsLink = useMemo(
+    () => (error && pointsToSettings(error) ? "/settings#link-apis" : null),
+    [error],
+  );
+
+  if (!open) return null;
+
+  function endCall() {
+    disconnect();
+    onClose();
+  }
+
+  // Which face clip is showing: her talking loop, her attentive-listening face,
+  // or the calm idle (connecting / reconnecting / error all fall back to idle).
+  const faceMode =
+    state === "speaking" || sheReplying
+      ? "speaking"
+      : state === "listening"
+        ? "listening"
+        : "idle";
+  const statusText =
+    state === "error" && /microphone/i.test(error || "")
+      ? "Microphone blocked"
+      : lipSyncRendering
+        ? "STARRA is putting her face on…"
+        : statusCopy(state);
+
+  return (
+    <div
+      className="call-overlay call-facetime"
+      role="dialog"
+      aria-modal="true"
+      aria-label="Voice call with STARRA"
+      ref={panelRef}
+      tabIndex={-1}
+    >
+      {/* Her song as the ringback while the line connects (fades out on pickup). */}
+      <audio ref={ringbackRef} src="/avatar/starra-ringback.mp3" preload="auto" aria-hidden />
+
+      {/* LEFT/CENTER: her face. RIGHT: the live transcript, beside her (her
+          aspect ratio is untouched — the chat lives in its own column). */}
+      <div className="call-face-col">
+        <div className={`call-face-stage call-face-${faceMode}`}>
+          <img className="call-face-backdrop" src="/avatar/starra-portrait.jpg" alt="" aria-hidden />
+          {/* Her PHOTOREAL self from the real STARRA ANGLES clips, driven by call
+              state (talking clip while she speaks; idle + expressions otherwise). */}
+          <StarraClipFace active={open} mode={faceMode} />
+          {/* Lip-sync clip (flag-gated OFF): plays over her face if ever wired. */}
+          {lipSyncClip ? (
+            <video
+              className="call-face-video call-face-lipsync"
+              src={lipSyncClip}
+              autoPlay
+              playsInline
+              onEnded={clearLipSyncClip}
+              onError={clearLipSyncClip}
+              style={{ opacity: 1, zIndex: 2 }}
+            />
+          ) : null}
+          {/* speaking glow — a slow calm pulse while she talks (not amplitude) */}
+          <div className="call-face-glow" aria-hidden />
+          {/* readability scrim behind the top status + bottom controls */}
+          <div className="call-face-scrim" aria-hidden />
+        </div>
+
+        <div className="call-ft-top">
+          <span className="call-kicker">STARRA</span>
+          <span
+            className={`call-status${state === "error" ? " is-error" : ""}`}
+            aria-live="polite"
+          >
+            {statusText}
+          </span>
+        </div>
+
+        {state === "error" && error ? (
+          <div className="call-error-box call-ft-error" role="alert">
+            <span className="call-error-text">{error}</span>
+            {settingsLink ? (
+              <a className="call-error-link" href={settingsLink}>
+                Open Settings → Link APIs
+              </a>
+            ) : null}
+          </div>
+        ) : null}
+
+        <div className="call-ft-controls">
+          <button
+            type="button"
+            className={`call-mute-btn${muted ? " is-muted" : ""}`}
+            onClick={toggleMute}
+            aria-pressed={muted}
+          >
+            {muted ? "UNMUTE" : "MUTE"}
+          </button>
+
+          {state === "error" ? (
+            <button type="button" className="call-retry-btn" onClick={() => void connect()}>
+              RETRY
+            </button>
+          ) : null}
+
+          <button type="button" className="call-end-btn" onClick={endCall} ref={endBtnRef}>
+            END CALL
+          </button>
+        </div>
+      </div>
+
+      {/* RIGHT: one conversation — type to her (Grok brain + memory), attach
+          files, copy any line she says. Voice-call turns show here too. */}
+      <aside className="call-chat-pane">
+        <StarraCallChat
+          messages={chatMessages}
+          liveUser={liveUser}
+          liveAssistant={streaming || liveAssistant}
+          onSend={handleSend}
+          busy={sheReplying}
+        />
+      </aside>
+    </div>
+  );
+}

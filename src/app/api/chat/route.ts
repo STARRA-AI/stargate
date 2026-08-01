@@ -5,12 +5,10 @@ import {
   memoryForPrompt,
   recordExchange,
 } from "@/lib/memory/store";
-import { callMcpTool, listMcpServers } from "@/lib/mcp/client";
-import { parseMcpCommand } from "@/lib/mcp/commands";
 import { extractFactsFromExchange } from "@/lib/memory/extract";
 import { getVault, vaultForPrompt } from "@/lib/vault/store";
 import { obsidianForPrompt } from "@/lib/obsidian";
-import { runRepomix, readLatestPackPreview } from "@/lib/tools/repomix";
+import { readLatestPackPreview } from "@/lib/tools/repomix";
 import {
   webSearch,
   webSearchQuery,
@@ -18,10 +16,7 @@ import {
   weatherLocation,
   getWeather,
 } from "@/lib/tools/websearch";
-import {
-  briefForPipeline,
-  queueMontageJob,
-} from "@/lib/tools/openmontage";
+import { maybeToolReply } from "@/lib/tools/fastpath";
 import {
   ollamaStatus,
   ollamaConfig,
@@ -207,70 +202,6 @@ async function* stubStream(message: string) {
     yield c;
     await new Promise((r) => setTimeout(r, 12));
   }
-}
-
-/** Fast keyword tools — still count as a single agent turn (Phase 0). */
-async function maybeToolReply(lastUser: string): Promise<string | null> {
-  const q = lastUser.toLowerCase().trim();
-
-  // MCP BRIDGE (2026-07-31): her hands on Playwright + Composio. Exact
-  // operator fast-paths only — free-form intent stays with the LLM. Works
-  // identically mid-call (this route doesn't know or care that the overlay is
-  // open), and servers run concurrently on their own connections.
-  const mcp = parseMcpCommand(lastUser);
-  if (mcp?.kind === "list") {
-    const servers = await listMcpServers();
-    return servers
-      .map((sv) =>
-        sv.up
-          ? `${sv.name} (${sv.transport}) — ${sv.tools.length} tools: ${sv.tools.slice(0, 12).map((t) => t.name).join(", ")}${sv.tools.length > 12 ? "…" : ""}`
-          : `${sv.name} — ${sv.configured ? `DOWN: ${sv.error}` : `not linked: ${sv.error}`}`,
-      )
-      .join("\n");
-  }
-  if (mcp?.kind === "browse") {
-    const nav = await callMcpTool("playwright", "browser_navigate", { url: mcp.url });
-    if (!nav.ok) return `Couldn't open ${mcp.url} — ${nav.text}`;
-    const snap = await callMcpTool("playwright", "browser_snapshot", {});
-    return `Opened ${mcp.url}.\n${snap.text.slice(0, 3500)}`;
-  }
-  if (mcp?.kind === "call") {
-    const r = await callMcpTool(mcp.server, mcp.tool, mcp.args);
-    return r.ok ? r.text : `${mcp.server}.${mcp.tool} failed — ${r.text}`;
-  }
-
-  if (
-    /\b(pack (the )?repo|repomix|pack codebase|dump (the )?repo)\b/.test(q)
-  ) {
-    const result = await runRepomix();
-    if (!result.ok) {
-      return `Repomix failed. ${result.error ?? "Unknown error"}. Retry from Tools.`;
-    }
-    return `Repo packed, Classic — ${result.bytes} bytes at ${result.outputPath}. Open Tools for the preview.`;
-  }
-
-  if (
-    /\b(openmontage|queue (a )?short|silent shadow short|make (a )?short)\b/.test(
-      q,
-    )
-  ) {
-    const topicMatch = lastUser.match(/about[:\s]+(.+)$/i);
-    const topic = topicMatch?.[1]?.trim() || "one hard truth — stay standing";
-    const book =
-      /\bbook of starra\b/.test(q) || /\bbook-of-starra\b/.test(q);
-    const pipeline = book ? "book-of-starra" : "silent-shadow-short";
-    const job = await queueMontageJob({
-      brief: briefForPipeline(pipeline, topic),
-      pipeline,
-    });
-    return `Queued OpenMontage job ${job.id} (${pipeline}). Brief under data/openmontage-briefs/. Hand AGENT_GUIDE.md to the agent to render. Higgsfield retired. Standing by.`;
-  }
-
-  if (/\b(distill prompts|prompt structure|system prompts)\b/.test(q)) {
-    return `Prompt structure is distilled into src/lib/prompt-structure.ts (structure only — operator voice stays). Re-run from Tools or: npm run tools:distill.`;
-  }
-
-  return null;
 }
 
 /**

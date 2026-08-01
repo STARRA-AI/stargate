@@ -67,8 +67,22 @@ describe("bridge discipline, on the source", () => {
   });
 
   it("the chat brain exposes the fast-paths and stays call-independent", () => {
+    // Same intent as before, following the code to its new home: the MCP
+    // fast-path branches moved OUT of the chat route into the one shared
+    // module (src/lib/tools/fastpath.ts) so the voice call can reach the
+    // identical implementation through POST /api/tools/fastpath. The chat
+    // brain still exposes them — by importing that module, not by owning a
+    // private copy — and still knows nothing about the call.
     const route = read("src/app/api/chat/route.ts");
-    assert.match(route, /parseMcpCommand/);
-    assert.match(route, /browser_snapshot/);
+    const shared = read("src/lib/tools/fastpath.ts");
+    assert.match(route, /import\s*\{[^}]*\bmaybeToolReply\b[^}]*\}\s*from\s*["']@\/lib\/tools\/fastpath["']/);
+    assert.match(route, /await\s+maybeToolReply\s*\(/);
+    assert.match(shared, /parseMcpCommand/);
+    assert.match(shared, /browser_snapshot/);
+    // Call-independent: the server brain must not reach into the client hook.
+    assert.ok(
+      !/useVoiceCall|realtime session|conversation\.item\.create/.test(route),
+      "the chat route must stay independent of the voice call",
+    );
   });
 });

@@ -6,6 +6,22 @@ function redirectTarget(): string {
   return new URLSearchParams(window.location.search).get("next") || "/";
 }
 
+/**
+ * Why Touch ID can't run in THIS window, or null if it can. Two dead ends we
+ * hit for real: the dock app's WKWebView has no WebAuthn at all, and an
+ * IP-address host (127.0.0.1 / LAN) is forbidden as a passkey rpID — the
+ * browser throws before the Touch ID sheet ever appears.
+ */
+function passkeyUnavailable(): string | null {
+  if (!window.PublicKeyCredential) {
+    return "This window can't do Touch ID — open the deck in Safari or Chrome at http://localhost:3000.";
+  }
+  if (/^\d{1,3}(\.\d{1,3}){3}$|:/.test(window.location.hostname)) {
+    return "Touch ID needs http://localhost:3000 — open the deck there (same login) and set it up.";
+  }
+  return null;
+}
+
 export default function LoginPage() {
   const [pw, setPw] = useState("");
   const [err, setErr] = useState("");
@@ -39,6 +55,11 @@ export default function LoginPage() {
   }
 
   async function passkeyLogin() {
+    const blocked = passkeyUnavailable();
+    if (blocked) {
+      setErr(blocked);
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
@@ -69,11 +90,20 @@ export default function LoginPage() {
   }
 
   async function passkeyRegister() {
+    const blocked = passkeyUnavailable();
+    if (blocked) {
+      setErr(blocked);
+      return;
+    }
     setBusy(true);
     setErr("");
     try {
       const optRes = await fetch("/api/auth/passkey/register");
-      if (!optRes.ok) throw new Error("session expired");
+      if (!optRes.ok) {
+        const data = (await optRes.json().catch(() => ({}))) as { error?: string };
+        setErr(data.error || "Session expired — log in with your password again.");
+        return;
+      }
       const optionsJSON = await optRes.json();
       const { startRegistration } = await import("@simplewebauthn/browser");
       const attestation = await startRegistration({ optionsJSON });
@@ -86,7 +116,8 @@ export default function LoginPage() {
         window.location.href = redirectTarget();
         return;
       }
-      setErr("Touch ID setup failed.");
+      const data = (await verRes.json().catch(() => ({}))) as { error?: string };
+      setErr(data.error || "Touch ID setup failed.");
     } catch (e) {
       setErr(
         e instanceof Error && e.name === "NotAllowedError" ? "Cancelled." : "Touch ID setup failed.",

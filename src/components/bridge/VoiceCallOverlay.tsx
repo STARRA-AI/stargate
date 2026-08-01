@@ -442,6 +442,10 @@ export function VoiceCallOverlay({
       <div className="call-face-col">
         <div className={`call-face-stage call-face-${faceMode}`}>
           <img className="call-face-backdrop" src="/avatar/starra-portrait.jpg" alt="" aria-hidden />
+          {/* The HERO-FRAME backstop is NOT here. It has to live inside
+              StarraClipFace's own `.call-face-portrait`, which is a stacking
+              context — a backstop rendered as its sibling can never be seen
+              through it. See the `.call-face-hero-still` comment in deck.css. */}
           {/* Her PHOTOREAL self from the real STARRA ANGLES clips, driven by call
               state (talking clip while she speaks; idle + expressions otherwise).
               `analyser` is the live output-audio analyser (null when she's not

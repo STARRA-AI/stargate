@@ -139,6 +139,17 @@ export const MAX_OUTPUT_DELAY_MS = 400;
 
 /** Mic/line noise sits under this RMS; treat it as silence. */
 export const SILENCE_FLOOR = 0.006;
+/**
+ * The CLOSE side of the silence gate's hysteresis band (2026-07-31 fix for
+ * at-threshold chatter). `opennessFromAudio`'s raw gate at SILENCE_FLOOR has
+ * NO memory between calls — level sitting right at 0.006 (mic noise, a
+ * fading breath) crosses it back and forth block to block, and each crossing
+ * independently decides open/closed with nothing to damp the flip. Set to
+ * 70% of SILENCE_FLOOR: a dead band wide enough to absorb typical mic-noise
+ * jitter, narrow enough that true silence (ambient level far below either
+ * floor) is unaffected — see createOpennessGate.
+ */
+export const SILENCE_RELEASE_FLOOR = SILENCE_FLOOR * 0.7;
 /** RMS -> openness gain. Matches the existing reactive-face gain in
  *  useVoiceCall.ts (`rms(samples) * 6`) so both react at the same loudness. */
 export const LEVEL_GAIN = 6;
@@ -191,13 +202,65 @@ export function opennessFromAudio(
   time: Float32Array,
   freq?: Uint8Array | null,
 ): number {
-  const level = rmsLevel(time);
-  if (level <= SILENCE_FLOOR) return 0;
-  const base = clamp01((level - SILENCE_FLOOR) * LEVEL_GAIN);
+  return opennessAtLevel(rmsLevel(time), SILENCE_FLOOR, freq);
+}
+
+/**
+ * The openness curve itself, with the silence floor as a parameter. ONE copy of
+ * the gain + sibilance-damping math: `opennessFromAudio` and `createOpennessGate`
+ * both go through here, so the fixed-floor and hysteresis paths cannot drift
+ * apart the way two hand-kept copies would.
+ */
+function opennessAtLevel(
+  level: number,
+  floor: number,
+  freq?: Uint8Array | null,
+): number {
+  if (level <= floor) return 0;
+  const base = clamp01((level - floor) * LEVEL_GAIN);
   // sibilance damping: at most a 45% reduction, so she never goes fully shut
   // mid-word just because a fricative landed on this block.
   const sibilance = highBandRatio(freq);
   return clamp01(base * (1 - 0.45 * sibilance));
+}
+
+export interface OpennessGate {
+  /** Openness for one block, gated with hysteresis around SILENCE_FLOOR. */
+  step(time: Float32Array, freq?: Uint8Array | null): number;
+  reset(): void;
+}
+
+/**
+ * Stateful hysteresis wrapper around the SILENCE_FLOOR gate (2026-07-31 fix:
+ * "raw-openness gate can flip per-block around the floor"). `opennessFromAudio`
+ * itself stays untouched and pure — every existing caller/test of it keeps
+ * today's exact single-floor behaviour — this wraps it with memory:
+ *
+ *   - CLOSED -> OPEN needs level > SILENCE_FLOOR (unchanged trigger).
+ *   - OPEN -> CLOSED needs level <= SILENCE_RELEASE_FLOOR, the LOWER floor.
+ *   - While OPEN, the gain reference also shifts to the release floor, so a
+ *     level sitting in the dead band (between the two floors) draws a small
+ *     but genuinely non-zero mouth instead of snapping shut and reopening —
+ *     that snap-reopen, repeated every block, is exactly the chatter this
+ *     closes. True silence (level under BOTH floors) still gates to exactly 0.
+ *
+ * One instance per active engine run (mirrors createMouthSmoother /
+ * createStallGate / createOpennessRing — all per-run state, never module-level,
+ * so nothing leaks across calls, components, or tests).
+ */
+export function createOpennessGate(): OpennessGate {
+  let open = false;
+  return {
+    step(time: Float32Array, freq?: Uint8Array | null): number {
+      const level = rmsLevel(time);
+      const floor = open ? SILENCE_RELEASE_FLOOR : SILENCE_FLOOR;
+      open = level > floor;
+      return opennessAtLevel(level, floor, freq);
+    },
+    reset(): void {
+      open = false;
+    },
+  };
 }
 
 export interface MouthSmoother {

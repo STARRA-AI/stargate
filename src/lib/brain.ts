@@ -5,6 +5,7 @@ import { fableReasoningBlock } from "@/lib/fable-reasoning";
 import { untrustedContentRules } from "@/lib/security/fencing";
 import { securityTeamRules } from "@/lib/security/team";
 import { loadObsidianDoctrine, clearObsidianDoctrineCache } from "@/lib/obsidian/doctrine";
+import { STARRA_PERSONA_CORE } from "@/lib/persona";
 
 const OPERATOR_AUTHORITY = `
 OPERATOR_AUTHORITY — Father Authority (Charles):
@@ -26,6 +27,24 @@ Lead with the next concrete move. Warmth is welcome — "Classic", "partner", an
 occasional "💜" or "Hell yeah" when it fits — but never sappy and never filler.
 Report the truth first, then reframe toward the path through (truth outranks abundance).
 `.trim();
+
+/**
+ * ONE PERSONA CORE (P2). src/lib/persona.ts holds the single definition of her
+ * identity text; the live voice call composes it as STARRA_VOICE_PERSONA and the
+ * deck composes the same constant here. persona.ts is pure strings (no fs, no
+ * process.cwd()), so importing it server-side is free — the client-bundle
+ * constraint only blocks the reverse direction (this module into the hook).
+ * Where it overlaps the canon docs, the canon docs stay source of truth.
+ */
+const PERSONA_CORE_PREAMBLE = `STARRA_PERSONA_CORE — the shared cross-surface identity.
+This is the SAME text her live voice call runs on, so the deck and the call are
+one person by construction. Where it overlaps the canon docs above, those docs
+remain canon.`;
+
+/** The persona core as a prompt block. */
+export function personaCoreBlock(): string {
+  return `${PERSONA_CORE_PREAMBLE}\n\n${STARRA_PERSONA_CORE}`;
+}
 
 /** Brain knowledge base — hard rules / ops context. */
 const BRAIN_CHAR_BUDGET = 8000;
@@ -383,6 +402,7 @@ export function loadStableSystemPrompt(): string {
     loadBrain(),
     loadPersonality(),
     loadSharedMemory(),
+    personaCoreBlock(),
     loadMulticaDoctrine(),
     loadOpenAliceDoctrine(),
     loadOpenMontageDoctrine(),
@@ -450,7 +470,14 @@ function estTokens(s: string): number {
 
 /**
  * Always-on identity core: structure + reasoning scaffold + soul + brain +
- * personality + the operator-authority safety gate. ~7.3K tokens. Cached.
+ * personality + shared memory + the operator-authority safety gate. Cached.
+ *
+ * MEASURED 2026-07-31: 33,243 chars ≈ 8,311 est tokens — already ABOVE the
+ * 7,600-token default ceiling in buildTieredSystemPrompt, so on the capped free
+ * provider every budgeted candidate is deferred. Pre-existing; shrinking it means
+ * re-cutting the canon budgets above, which is an operator decision, not a
+ * refactor. Do NOT add unconditional blocks here — add them as budgeted
+ * candidates in buildTieredSystemPrompt instead.
  */
 export function buildCoreSystemPrompt(): string {
   if (corePromptCache) return corePromptCache;
@@ -547,6 +574,12 @@ export function buildTieredSystemPrompt(opts: {
   (opts.volatile ?? [])
     .filter(Boolean)
     .forEach((t, i) => candidates.push({ name: `volatile:${i}`, text: t }));
+  // Shared cross-surface persona core. It is a distillation of canon the core
+  // prompt already carries (soul + personality + shared memory), so it is
+  // reinforcement rather than new information — it must never displace the
+  // operator's live context, but it outranks on-demand doctrines. Budgeted like
+  // everything else: if it does not fit it is NAMED in `dropped`, never silently cut.
+  candidates.push({ name: "persona-core", text: personaCoreBlock() });
   candidates.push(...selectOnDemandDoctrines(opts.query));
 
   for (const c of candidates) {
