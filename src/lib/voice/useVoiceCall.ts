@@ -155,6 +155,27 @@ export type VoiceCallState =
 const MAX_RECONNECT_ATTEMPTS = 5;
 
 /**
+ * Fire-and-forget line on the AGENT OPS feed. Used ONLY for tool-call
+ * visibility (see toolCallCountRef) — never on the audio path.
+ *
+ * HARD CONSTRAINT: this must never be able to break her voice. It is not
+ * awaited, both the sync throw and the async rejection are swallowed, and no
+ * caller branches on its result. A dead /api/feed costs a missing log line and
+ * nothing else. Text is truncated and redacted server-side (src/lib/feed.ts).
+ */
+function postFeedLine(tag: string, text: string): void {
+  try {
+    void fetch("/api/feed", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ tag, text }),
+    }).catch(() => {});
+  } catch {
+    /* visibility is never worth a broken call */
+  }
+}
+
+/**
  * How long the call may sit in "speaking" with an EMPTY playback queue and no
  * further audio before we conclude her turn is over. Re-armed on every audio
  * delta and on every finished source (armDrainWatchdog), and it refuses to fire
@@ -684,6 +705,26 @@ export function useVoiceCall(): UseVoiceCallResult {
   const toolReplyInFlightRef = useRef(0);
 
   /**
+   * How many tool invocations actually RAN on this call.
+   *
+   * WHY IT EXISTS: her tool use during a live call is otherwise completely
+   * silent — the fast-path fires, returns, and she just says the answer. That
+   * is exactly the shape of spend Classic cannot see. Every run gets a feed
+   * line, and the session total is emitted on teardown, so tool use on a call
+   * is always on screen in AGENT OPS.
+   *
+   * COUNTS RUNS, NOT PROBES: incremented only when the fast-path reports
+   * `handled` — i.e. a route actually matched and did work. Counting every
+   * POST would count the many no-op probes commitUser makes per utterance,
+   * which would flood the feed and make the number meaningless.
+   *
+   * PER SOCKET SEGMENT, deliberately: cleanupInternal flushes and resets it,
+   * and connect() calls cleanupInternal — so a mid-call reconnect emits its
+   * partial total, exactly like the elapsed-time billing beside it does.
+   */
+  const toolCallCountRef = useRef(0);
+
+  /**
    * Hand a tool result to the live session at a moment when it is SAFE to open
    * a new response. This is not optional bookkeeping — it is the difference
    * between the fast-path working and silently dying:
@@ -748,6 +789,13 @@ export function useVoiceCall(): UseVoiceCallResult {
         })
           .then((r) => (r.ok ? r.json() : null))
           .then((data: { handled?: boolean; reply?: string | null } | null) => {
+            if (data?.handled) {
+              // A tool actually ran mid-call — put it on screen. Outside the
+              // reply branch on purpose: a handled route that returns nothing
+              // to say still did work and still must be visible.
+              const n = (toolCallCountRef.current += 1);
+              postFeedLine("THNK", `Call tool run #${n} — "${t.slice(0, 60)}"`);
+            }
             const reply = data && data.handled ? data.reply?.trim() : "";
             if (reply) {
               deliverToolReply(
@@ -1064,6 +1112,14 @@ export function useVoiceCall(): UseVoiceCallResult {
     }
     // Never leave the speaking-stall watchdog behind on teardown/unmount.
     clearDrainWatchdog();
+    // Session total for tool use — same once-per-session shape as the elapsed
+    // billing below (emit, then reset, so a later teardown can't double-post).
+    // Silent when nothing ran, so an ordinary no-tool call adds no noise.
+    if (toolCallCountRef.current > 0) {
+      const n = toolCallCountRef.current;
+      toolCallCountRef.current = 0;
+      postFeedLine("THNK", `Voice call ended — ${n} tool run${n === 1 ? "" : "s"} this session`);
+    }
     // Bill the elapsed connection time to the voice meter before teardown —
     // once per session (callStartRef is nulled so retries/unmount can't
     // double-count).

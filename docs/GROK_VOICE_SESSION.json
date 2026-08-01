@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$comment": "STARGATE handoff — xAI Voice Agent session template. Paste STARRA_GROK_SYSTEM.md body into session.instructions before connect. WebSocket: wss://api.x.ai/v1/realtime?model=grok-voice-latest",
-  "websocket_url": "wss://api.x.ai/v1/realtime?model=grok-voice-latest",
+  "$comment": "STARGATE handoff — xAI Voice Agent session template. Paste STARRA_GROK_SYSTEM.md body into session.instructions before connect. WebSocket: wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0",
+  "websocket_url": "wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0",
   "auth": {
     "header": "Authorization",
     "value": "Bearer ${XAI_API_KEY}",
@@ -85,18 +85,18 @@
     }
   },
   "bridge_proxy_target": {
-    "comment": "When STARGATE Bridge hosts the Realtime client, replace OpenAI stub at POST /api/realtime with xAI client_secrets + model grok-voice-latest, voice ara.",
+    "comment": "When STARGATE Bridge hosts the Realtime client, replace OpenAI stub at POST /api/realtime with xAI client_secrets + model grok-voice-think-fast-1.0, voice eve. The model is applied as ?model= on the WebSocket URL, not in the client_secrets body.",
     "route": "/api/realtime",
     "expected_response_live": {
       "mode": "live",
       "client_secret": "<ephemeral>",
-      "model": "grok-voice-latest",
-      "voice": "ara"
+      "model": "grok-voice-think-fast-1.0",
+      "voice": "eve"
     }
   },
   "notes": [
-    "Ara = xAI built-in voice (consensus: Aria maps to Ara in xAI roster).",
-    "grok-voice-latest tracks current recommended model (e.g. grok-voice-think-fast-1.0).",
+    "Eve = her voice, xAI built-in (female, British). Matches the code: src/app/api/realtime/route.ts sends voice \"eve\". Earlier drafts of this file said \"ara\" — that was doc drift, never what shipped.",
+    "PINNED to grok-voice-think-fast-1.0. grok-voice-latest is an ALIAS xAI repoints from 1.0 to 2.0 on 2026-08-05 ($0.05/min -> $0.08/min audio, docs.x.ai/docs/models fetched 2026-07-31), so the alias must not be used. The WS ?model= query param is what selects the model; POST /v1/realtime/client_secrets accepts only expires_after/session and ignores a top-level model.",
     "OpenAI Realtime-compatible — same event types (session.update, input_audio_buffer.append, response.output_audio.delta).",
     "See docs/VOICE-INTEGRATION.md for Bridge swap spec."
   ]

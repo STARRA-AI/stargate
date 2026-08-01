@@ -47,7 +47,7 @@ Grok Build does **not** replace `npm run starra` or the Bridge PWA.
 1. Create `XAI_API_KEY` at [console.x.ai](https://console.x.ai).
 2. Open Voice Agent playground (or connect via WebSocket).
 3. Paste contents of [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md) into **instructions**, or load [`GROK_VOICE_SESSION.json`](GROK_VOICE_SESSION.json) as your `session.update` payload (replace the `instructions` placeholder with the system file body).
-4. Set `voice: "ara"`, `model: grok-voice-latest`.
+4. Set `voice: "eve"`, `model: grok-voice-think-fast-1.0` (pass the model as `?model=` on the WebSocket URL — that is what selects it).
 5. Attach tools from [`GROK_TOOLS_SCHEMA.json`](GROK_TOOLS_SCHEMA.json) if your client supports `function` tools — wire handlers to STARGATE `/api/*` when Bridge is running.
 
 Test operator voice: responses should open with "Copy." only when followed by substance. Never emoji. Never "Sure!".
@@ -84,9 +84,11 @@ No secrets in this pack. Never commit `data/keys.json` or `.env.local`.
 
 ### Path A — Realtime Ara (recommended)
 
-Full-duplex speech-to-speech via `wss://api.x.ai/v1/realtime?model=grok-voice-latest`.
+Full-duplex speech-to-speech via `wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0`.
 
-- Voice: **Ara** (xAI built-in; not Piper Cori).
+> **PIN, do not use the alias.** `grok-voice-latest` repoints from Think Fast 1.0 to 2.0 on **2026-08-05**, taking audio from $0.05/min to $0.08/min (docs.x.ai/docs/models, fetched 2026-07-31). The `?model=` query parameter on the socket is the only thing that selects the model — `POST /v1/realtime/client_secrets` accepts only `expires_after`/`session`, so a `model` in that body is ignored.
+
+- Voice: **Eve** (xAI built-in, female British; not Piper Cori). This matches the code — `src/app/api/realtime/route.ts` sends `voice: "eve"`.
 - Instructions: [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md).
 - Client: STARGATE Bridge (replace OpenAI Realtime stub) or xAI playground for testing.
 - Barge-in: server VAD (`turn_detection.type: server_vad`).

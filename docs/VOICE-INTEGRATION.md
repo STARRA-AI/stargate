@@ -61,10 +61,14 @@ Bridge Realtime client (new or extended useVoiceLoop)
     │
     ├─ POST /api/realtime  →  xAI client_secret (ephemeral)
     │
-    ├─ WebSocket wss://api.x.ai/v1/realtime?model=grok-voice-latest
+    ├─ WebSocket wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0
+    │     (PINNED — ?model= on the socket is what selects the model; a bare URL
+    │      defaults to the grok-voice-latest alias, which xAI repoints to 2.0
+    │      on 2026-08-05 at $0.08/min vs $0.05/min. docs.x.ai/docs/models,
+    │      fetched 2026-07-31.)
     │     Authorization: Bearer <ephemeral OR server-side key in dev>
     │
-    ├─ session.update { voice: "ara", instructions: STARRA_GROK_SYSTEM, tools: [...] }
+    ├─ session.update { voice: "eve", instructions: STARRA_GROK_SYSTEM, tools: [...] }
     │
     ├─ input_audio_buffer.append (PCM 24kHz base64)
     │
@@ -99,25 +103,25 @@ Recommend **A1** for latency; inject tier-1/memory via tool calls or periodic co
 ```typescript
 // Pseudocode — implement when operator approves wire-up
 const key = process.env.XAI_API_KEY ?? (await getKey("xai"));
-const model = process.env.XAI_REALTIME_MODEL ?? "grok-voice-latest";
+const model = process.env.XAI_REALTIME_MODEL ?? "grok-voice-think-fast-1.0";
 
 POST https://api.x.ai/v1/realtime/client_secrets
 Authorization: Bearer ${key}
 Body: {
   model,
-  voice: "ara",
+  voice: "eve",
   instructions: "<loaded from STARRA_GROK_SYSTEM or truncated>",
   // optional: tools from GROK_TOOLS_SCHEMA
 }
 
-Return: { mode: "live", client_secret, model, voice: "ara" }
+Return: { mode: "live", client_secret, model, voice: "eve", url: "wss://api.x.ai/v1/realtime?model=<model>" }
 ```
 
 **Env additions (document in `.env.example`):**
 
 ```
 XAI_API_KEY=
-XAI_REALTIME_MODEL=grok-voice-latest
+XAI_REALTIME_MODEL=grok-voice-think-fast-1.0
 ```
 
 Keep OpenAI path behind feature flag or remove after xAI validated.

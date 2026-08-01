@@ -9,7 +9,21 @@
  * is free or negligible, so it's deliberately not metered here.
  */
 
-/** xAI Grok Realtime voice list price, USD per minute of connection time. */
+/**
+ * xAI Grok Realtime voice list price, USD per minute of connection time.
+ *
+ * THIS NUMBER IS ONLY CORRECT WHILE THE MODEL PIN HOLDS. It is the
+ * `grok-voice-think-fast-1.0` rate — "$0.05 / min ($3.00 / hr) audio" per
+ * https://docs.x.ai/docs/models (fetched 2026-07-31). The same page lists
+ * `grok-voice-think-fast-2.0` at "$0.08 / min ($4.80 / hr) audio".
+ *
+ * So: unpinning to 2.0 makes this 0.08, not 0.05 — a 60% under-report if it is
+ * left alone. The pin lives at
+ * src/app/api/realtime/route.ts::XAI_REALTIME_DEFAULT_MODEL and is applied to
+ * the socket as `?model=`. If that pin is ever moved to 2.0 (or relaxed back to
+ * the `grok-voice-latest` alias, which xAI repoints to 2.0 on 2026-08-05),
+ * this constant MUST move to 0.08 in the same commit or the meter lies.
+ */
 export const VOICE_RATE_PER_MIN = 0.05;
 
 const STORAGE_KEY = "starra-voice-usage";
