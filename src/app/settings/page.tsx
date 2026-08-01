@@ -1,5 +1,6 @@
 "use client";
 
+import { RoutinesTable } from "@/components/bridge/RoutinesTable";
 import { ScreenShell } from "@/components/hud/ScreenShell";
 import type { Tier1Data } from "@/lib/context/tier1";
 import { KEY_GROUP_LABELS, KEY_SLOTS } from "@/lib/keys";
@@ -675,6 +676,8 @@ export default function SettingsPage() {
             </>
           )}
         </section>
+
+        <RoutinesTable />
       </div>
     </ScreenShell>
   );
