@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, type KeyboardEvent } from "react";
+import { MicStateBadge } from "./MicStateBadge";
 
 function SendIcon() {
   return (
@@ -45,6 +46,9 @@ function CallWaveIcon() {
  * Enter submits, Shift+Enter inserts a newline. There is a SINGLE voice entry —
  * the call button — which opens the full-screen call with her face (`onCall`).
  * The old redundant "mic" launcher was removed (it duplicated the call button).
+ *
+ * MicStateBadge (G4) sits above the pill, still inside `.composer-dock`, so
+ * it stays alongside the composer without disturbing the call button.
  */
 export function Composer({
   value,
@@ -78,36 +82,39 @@ export function Composer({
   }
 
   return (
-    <form
-      className="composer"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit();
-      }}
-    >
-      <button
-        type="button"
-        className={`call-btn${recording ? " recording" : ""}`}
-        title="Call STARRA"
-        onClick={onCall}
-        aria-label="Call STARRA"
+    <>
+      <MicStateBadge />
+      <form
+        className="composer"
+        onSubmit={(e) => {
+          e.preventDefault();
+          onSubmit();
+        }}
       >
-        <CallWaveIcon />
-      </button>
-      <textarea
-        ref={taRef}
-        className="composer-input"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        onKeyDown={onKeyDown}
-        rows={1}
-        placeholder={placeholder}
-        autoComplete="off"
-        aria-label="Console input"
-      />
-      <button type="submit" className="send-btn" aria-label="Send">
-        <SendIcon />
-      </button>
-    </form>
+        <button
+          type="button"
+          className={`call-btn${recording ? " recording" : ""}`}
+          title="Call STARRA"
+          onClick={onCall}
+          aria-label="Call STARRA"
+        >
+          <CallWaveIcon />
+        </button>
+        <textarea
+          ref={taRef}
+          className="composer-input"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          onKeyDown={onKeyDown}
+          rows={1}
+          placeholder={placeholder}
+          autoComplete="off"
+          aria-label="Console input"
+        />
+        <button type="submit" className="send-btn" aria-label="Send">
+          <SendIcon />
+        </button>
+      </form>
+    </>
   );
 }

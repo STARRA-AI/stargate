@@ -676,6 +676,44 @@ body.low-power .star-ring { animation: none; }
   50% { box-shadow: 0 0 24px color-mix(in oklab, var(--magenta) 70%, transparent), 0 0 8px #fff; }
 }
 
+/* ── mic-state control (G4 — composer dock, never scrolls away) ── */
+.mic-state { display: flex; flex-direction: column; gap: 6px; }
+.mic-state-row { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mic-mode-btn {
+  font-family: var(--display); font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+  padding: 4px 9px; border-radius: 4px; cursor: pointer; text-transform: uppercase;
+  background: transparent; border: 1px solid var(--border); color: var(--text-dim);
+  transition: background 0.18s ease-out, color 0.18s ease-out, border-color 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.mic-mode-btn:hover { border-color: var(--accent-glow); color: var(--text); }
+.mic-mode-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
+.mic-mode-btn[aria-pressed="true"] { background: rgba(176,77,252,0.22); border-color: var(--accent-glow); color: var(--text); }
+.mic-mode-open { border-color: color-mix(in oklab, var(--danger) 55%, var(--border)); color: var(--danger); }
+.mic-mode-open.on { background: var(--danger); border-color: var(--danger); color: #1a0410; }
+.mic-confirm { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.mic-confirm-copy { font-family: var(--mono); font-size: 10px; color: var(--warn); }
+.mic-confirm-yes { border-color: var(--danger); color: var(--danger); }
+.mic-confirm-yes:hover { background: var(--danger); color: #1a0410; }
+
+/* Persistent, high-contrast, TEXT-carrying banner — the only visual state
+   that is not just a color swap. Dot animation is decorative only; both
+   ECO/low-power and prefers-reduced-motion hold it still (rules below),
+   the text itself never depends on the animation to be understood. */
+.mic-open-banner {
+  display: flex; align-items: center; gap: 7px;
+  padding: 6px 10px; border-radius: 6px;
+  background: var(--danger); color: #1a0410;
+  font-family: var(--display); font-size: 10.5px; font-weight: 700; letter-spacing: 1.2px;
+  text-transform: uppercase;
+}
+.mic-open-dot { width: 7px; height: 7px; border-radius: 50%; background: #1a0410; flex-shrink: 0; animation: mic-open-blink 1.1s ease-in-out infinite; }
+@keyframes mic-open-blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.35; } }
+body.low-power .mic-open-dot { animation: none; opacity: 1; }
+@media (prefers-reduced-motion: reduce) {
+  .mic-open-dot { animation: none; opacity: 1; }
+}
+
 /* ── Agent Ops / feed ── */
 .feed-list { flex: 1; overflow-y: auto; overflow-x: hidden; display: flex; flex-direction: column; gap: 5px; min-height: 0; }
 .feed-line { display: flex; gap: 8px; align-items: baseline; font-family: var(--mono); font-size: 11px; line-height: 1.5; animation: feed-in 0.22s ease-out; }
