@@ -315,6 +315,19 @@ export function Bridge() {
     }
   }
 
+  // G10 — Agent B's /api/context adds mrrLive/mrrSource to the snap payload
+  // (SHARED CONTRACT §7). The shared `SnapStats` type (src/lib/
+  // stargate-context.tsx, not owned by this worker) doesn't declare them
+  // yet, so they're read off a local cast rather than editing that file.
+  // SnapHydrator forwards the raw fetch response as-is, so this resolves
+  // correctly at runtime the moment B's route ships the fields, with zero
+  // change required to stargate-context.tsx or SnapHydrator.tsx.
+  const mrrLive = (snap as unknown as { mrrLive?: boolean }).mrrLive === true;
+  const mrrSource =
+    (snap as unknown as { mrrSource?: "stripe" | "manual" }).mrrSource ??
+    "manual";
+  const mrrUnlinkedStripe = mrrSource === "stripe" && !mrrLive;
+
   const activeVotes = tank.filter((t) => t.vote === "LONG" || t.vote === "SHORT" || t.vote === "HOLD");
   const longs = activeVotes.filter((t) => t.vote === "LONG").length;
   const avgConf = activeVotes.length
@@ -429,12 +442,21 @@ export function Bridge() {
                 <div className="mobile-block">
                   <div className="mobile-block-head">
                     <span>BUSINESS SNAP</span>
-                    <Link href="/settings">EDIT</Link>
+                    <span style={{ display: "flex", gap: 10 }}>
+                      {mrrUnlinkedStripe ? (
+                        <Link href="/settings#link-apis" style={{ color: "var(--warn)" }}>
+                          LINK
+                        </Link>
+                      ) : null}
+                      <Link href="/settings">EDIT</Link>
+                    </span>
                   </div>
                   <div className="mobile-stat-list">
                     <div className="mobile-stat-row">
                       <span>MRR</span>
-                      <strong>{snap.mrrLabel}</strong>
+                      <strong style={mrrUnlinkedStripe ? { color: "var(--warn)" } : undefined}>
+                        {mrrUnlinkedStripe ? "— LINK —" : snap.mrrLabel}
+                      </strong>
                     </div>
                     <div className="mobile-stat-row">
                       <span>TASKS DUE</span>
@@ -684,6 +706,15 @@ export function Bridge() {
                 <span className="dot" />
                 <span className="panel-title">BUSINESS SNAP</span>
                 <div className="spacer" />
+                {mrrLive ? (
+                  <span className="panel-tag pulse" style={{ color: "#6ee7a0" }}>
+                    ● LIVE MRR
+                  </span>
+                ) : mrrUnlinkedStripe ? (
+                  <Link href="/settings#link-apis" className="panel-tag warn">
+                    ▲ LINK STRIPE
+                  </Link>
+                ) : null}
                 <Link href="/settings" className="panel-tag">
                   EDIT
                 </Link>
@@ -691,7 +722,9 @@ export function Bridge() {
               <div className="snap-metrics">
                 <div className="snap-metric">
                   <span className="snap-label">MRR</span>
-                  <span className="snap-value">{snap.mrrLabel}</span>
+                  <span className="snap-value">
+                    {mrrUnlinkedStripe ? "— LINK —" : snap.mrrLabel}
+                  </span>
                 </div>
                 <div className="snap-metric">
                   <span className="snap-label">TASKS DUE</span>
