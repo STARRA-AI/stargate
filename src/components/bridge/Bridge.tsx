@@ -13,6 +13,7 @@ import { DeckBoot } from "./DeckBoot";
 import { DeckConsole } from "./DeckConsole";
 import { FlipRadar } from "./FlipRadar";
 import { FundingPanel } from "./FundingPanel";
+import { InstagramApproval } from "./InstagramApproval";
 import { LiveSky } from "./LiveSky";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
@@ -1013,6 +1014,7 @@ export function Bridge() {
 
             <ShadowPanel />
             <FundingPanel />
+            <InstagramApproval />
             <div className="panel" id="panel-ventures">
               <div className="panel-head">
                 <span className="dot" />
