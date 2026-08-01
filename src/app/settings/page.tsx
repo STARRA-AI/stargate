@@ -96,6 +96,217 @@ function WakeWordToggle() {
   );
 }
 
+/**
+ * BOOT GREETING + MUTE ON BOOT (G2). Backed by Agent A's
+ * `@/lib/voice/deck-prefs` (SHARED CONTRACT §2), imported dynamically the
+ * same way WakeWordToggle imports wake-word above.
+ */
+function BootGreetingSettings() {
+  const [text, setText] = useState("Evening, Classic.");
+  const [muted, setMuted] = useState(false);
+  const [saved, setSaved] = useState(false);
+
+  useEffect(() => {
+    void import("@/lib/voice/deck-prefs").then(
+      ({ getBootGreeting, getBootGreetingMuted }) => {
+        setText(getBootGreeting());
+        setMuted(getBootGreetingMuted());
+      },
+    );
+  }, []);
+
+  async function save() {
+    const { setBootGreeting } = await import("@/lib/voice/deck-prefs");
+    setBootGreeting(text);
+    setSaved(true);
+    window.setTimeout(() => setSaved(false), 1500);
+  }
+
+  async function toggleMuted() {
+    const { setBootGreetingMuted, getBootGreetingMuted } = await import(
+      "@/lib/voice/deck-prefs"
+    );
+    const next = !getBootGreetingMuted();
+    setBootGreetingMuted(next);
+    setMuted(next);
+  }
+
+  return (
+    <div className="space-y-2 border-t border-[var(--border)] pt-3">
+      <label className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
+        Boot greeting
+        <input
+          type="text"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-[var(--chrome)]"
+        />
+      </label>
+      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+        Spoken once after boot.
+      </p>
+      <button
+        type="button"
+        onClick={() => void save()}
+        className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+      >
+        {saved ? "Saved" : "Save greeting"}
+      </button>
+      <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-body)] text-xs text-[var(--chrome)]">
+        <span>Mute on boot — skip the spoken greeting</span>
+        <button
+          type="button"
+          onClick={() => void toggleMuted()}
+          className="focus-magenta shrink-0 border border-[var(--border)] px-3 py-1 text-[10px] tracking-widest uppercase"
+          aria-pressed={muted}
+        >
+          {muted ? "ON" : "OFF"}
+        </button>
+      </label>
+    </div>
+  );
+}
+
+/**
+ * SYNC REPLIES (G3). Default OFF per contract. Backed by
+ * `@/lib/voice/deck-prefs` (SHARED CONTRACT §2).
+ */
+function SyncRepliesToggle() {
+  const [on, setOn] = useState(false);
+
+  useEffect(() => {
+    void import("@/lib/voice/deck-prefs").then(({ getSyncReplies }) => {
+      setOn(getSyncReplies());
+    });
+  }, []);
+
+  async function toggle() {
+    const { setSyncReplies, getSyncReplies } = await import(
+      "@/lib/voice/deck-prefs"
+    );
+    const next = !getSyncReplies();
+    setSyncReplies(next);
+    setOn(next);
+  }
+
+  return (
+    <div className="space-y-1 border-t border-[var(--border)] pt-3">
+      <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-body)] text-xs text-[var(--chrome)]">
+        <span>Sync replies to voice</span>
+        <button
+          type="button"
+          onClick={() => void toggle()}
+          className="focus-magenta shrink-0 border border-[var(--border)] px-3 py-1 text-[10px] tracking-widest uppercase"
+          aria-pressed={on}
+        >
+          {on ? "ON" : "OFF"}
+        </button>
+      </label>
+      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+        ON holds the text until her voice actually starts; OFF streams text
+        first (better for long answers).
+      </p>
+    </div>
+  );
+}
+
+/**
+ * MIC MODE (G3) — three-way selector bound to Agent A's
+ * `@/lib/voice/mic-state` (SHARED CONTRACT §1). Mirrors the same deliberate
+ * two-step ARM/CONFIRM gate as MicStateBadge (src/components/bridge/
+ * MicStateBadge.tsx) — OPEN MIC is a hard-rule state, reachable only by a
+ * deliberate operator action everywhere it can be set, not just the deck
+ * composer.
+ */
+function MicModeSetting() {
+  const [mode, setMode] = useState<"muted" | "wake" | "open">("wake");
+  const [confirming, setConfirming] = useState(false);
+
+  useEffect(() => {
+    let unsubscribe: (() => void) | undefined;
+    void import("@/lib/voice/mic-state").then((m) => {
+      setMode(m.getMicMode());
+      unsubscribe = m.subscribeMicMode(setMode);
+    });
+    return () => unsubscribe?.();
+  }, []);
+
+  async function choose(next: "muted" | "wake" | "open") {
+    const { setMicMode } = await import("@/lib/voice/mic-state");
+    setMicMode(next);
+    setMode(next);
+    setConfirming(false);
+  }
+
+  const pillBase =
+    "focus-magenta border px-3 py-1 font-[family-name:var(--font-display)] text-[10px] tracking-widest uppercase";
+
+  return (
+    <div className="space-y-2 border-t border-[var(--border)] pt-3">
+      <span className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
+        Mic mode
+      </span>
+      <div className="flex flex-wrap items-center gap-2">
+        <button
+          type="button"
+          onClick={() => void choose("muted")}
+          aria-pressed={mode === "muted"}
+          className={`${pillBase} ${mode === "muted" ? "border-[var(--magenta)] text-[var(--magenta)]" : "border-[var(--border)] text-[var(--chrome)]"}`}
+        >
+          MUTED
+        </button>
+        <button
+          type="button"
+          onClick={() => void choose("wake")}
+          aria-pressed={mode === "wake"}
+          className={`${pillBase} ${mode === "wake" ? "border-[var(--magenta)] text-[var(--magenta)]" : "border-[var(--border)] text-[var(--chrome)]"}`}
+        >
+          WAKE WORD
+        </button>
+        {mode === "open" ? (
+          <button
+            type="button"
+            onClick={() => void choose("wake")}
+            aria-pressed
+            className={`${pillBase} border-[var(--danger)] bg-[var(--danger)] text-[#1a0410]`}
+          >
+            DISARM (OPEN MIC ARMED)
+          </button>
+        ) : confirming ? (
+          <span className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => void choose("open")}
+              className={`${pillBase} border-[var(--danger)] text-[var(--danger)]`}
+            >
+              CONFIRM ARM
+            </button>
+            <button
+              type="button"
+              onClick={() => setConfirming(false)}
+              className={`${pillBase} border-[var(--border)] text-[var(--chrome)]`}
+            >
+              CANCEL
+            </button>
+          </span>
+        ) : (
+          <button
+            type="button"
+            onClick={() => setConfirming(true)}
+            aria-pressed={false}
+            className={`${pillBase} border-[var(--danger)] text-[var(--danger)]`}
+          >
+            ARM OPEN MIC…
+          </button>
+        )}
+      </div>
+      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+        OPEN MIC never survives a reload — it always comes back as WAKE WORD.
+      </p>
+    </div>
+  );
+}
+
 function VoicePicker() {
   const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [selected, setSelected] = useState<string>("");
@@ -177,6 +388,9 @@ function VoicePicker() {
       >
         Test voice
       </button>
+      <BootGreetingSettings />
+      <SyncRepliesToggle />
+      <MicModeSetting />
     </section>
   );
 }
