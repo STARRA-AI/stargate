@@ -1,15 +1,23 @@
-import { getMemory, memoryForPrompt, recordExchange } from "@/lib/memory/store";
+import { getMemory, recordExchange, reviseExchange } from "@/lib/memory/store";
+import { callDigest } from "@/lib/memory/call-digest";
 
 export const runtime = "nodejs";
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
-  // ?digest=1 → the SAME continuity block the chat brain injects
-  // (memoryForPrompt), so the voice call and the chat read ONE memory in ONE
-  // shape. The call leg appends this to her realtime instructions on connect.
+  // ?digest=1 → the continuity block the LIVE VOICE CALL injects into her
+  // realtime session instructions on connect. Same store, same tier shape as
+  // the chat brain's `memoryForPrompt` — but with her OWN styled replies
+  // withheld and a computed overuse guard on top, because in a realtime
+  // instruction block her past lines stop being memory and start being a
+  // few-shot style prompt. See src/lib/memory/call-digest.ts for the measured
+  // case (856 "baby", 421 "right here" in the store as of 2026-07-31).
+  //
+  // DECK CHAT IS UNAFFECTED: api/chat calls memoryForPrompt itself, server
+  // side, and never comes through this route.
   if (url.searchParams.get("digest") === "1") {
     const store = await getMemory();
-    return Response.json({ digest: memoryForPrompt(store, "") });
+    return Response.json({ digest: callDigest(store) });
   }
   const q = (url.searchParams.get("q") ?? "").toLowerCase();
   const store = await getMemory();
@@ -36,7 +44,11 @@ export async function POST(req: Request) {
   } catch {
     return Response.json({ error: "invalid JSON body" }, { status: 400 });
   }
-  const { role, content } = (body ?? {}) as { role?: unknown; content?: unknown };
+  const { role, content, supersede } = (body ?? {}) as {
+    role?: unknown;
+    content?: unknown;
+    supersede?: unknown;
+  };
   if (role !== "user" && role !== "assistant") {
     return Response.json({ error: "role must be user|assistant" }, { status: 400 });
   }
@@ -45,6 +57,17 @@ export async function POST(req: Request) {
   }
   // Bound a single turn so a runaway transcript can't bloat the store; the
   // store's own rolling windows do the long-term compaction.
-  await recordExchange(role, content.slice(0, 2000));
+  const text = content.slice(0, 2000);
+  // `supersede` = "this is the SAME utterance I just sent you, further along".
+  // The live call has no reliable end-of-user-turn event, so it commits the
+  // cumulative partial whenever any of its flush triggers fires and marks the
+  // follow-ups as revisions. reviseExchange only replaces when the stored turn
+  // really is a prefix of this one — a genuinely new line always appends, so a
+  // buggy or malicious `supersede: true` can never delete an unrelated turn.
+  if (supersede === true) {
+    await reviseExchange(role, text);
+    return Response.json({ ok: true, superseded: true });
+  }
+  await recordExchange(role, text);
   return Response.json({ ok: true });
 }

@@ -135,6 +135,62 @@ export function nextBodyRetryDelay(attempt: number): number {
 }
 
 /**
+ * FLOOR on how often the retry path may actually MUTATE a layer, independent of
+ * the backoff above.
+ *
+ * The backoff alone is not enough, and the gap is what Classic filmed as
+ * "flickering worse": `bodyAttempts` was reset to 0 by every healthy check, so
+ * a FLAPPING decoder (error, heal, error, heal — the shape memory pressure
+ * actually produces on this machine) restarted the ladder at 1000ms every
+ * single time and never climbed. Each mutation is a src drop + reload +
+ * crossfade, so a flap became a visible re-blend roughly once a second,
+ * forever. Two changes close it: mutations are spaced by at least this floor,
+ * and a healthy check now DECAYS the attempt count by one instead of zeroing it
+ * — so a burst keeps climbing the ladder and a genuinely recovered face still
+ * walks back down to a fast first retry.
+ */
+export const MIN_BODY_RETRY_GAP_MS = 1500;
+
+/**
+ * How often the body loop's health is re-checked, and how many consecutive
+ * checks a frozen `currentTime` must survive before it is treated as a real
+ * freeze rather than a sampling artifact.
+ *
+ * THIS IS THE RECOVERY PATH FOR "everything else frozen or gone" (Classic,
+ * live call 2026-07-31, with her own reply confirming "the only thing moving is
+ * your lips sometimes"). That symptom is a body loop that stopped advancing
+ * while the mouth canvas — which has its own rAF and is driven by AUDIO, not by
+ * the video clock — kept animating on top of it.
+ *
+ * Before this, the readiness watchdog was a ONE-SHOT `setTimeout`: it fired
+ * once 6s after the first load attempt, found the front layer healthy, took the
+ * `bodyAttempts = 0` branch and was NEVER RE-ARMED. From that moment the only
+ * failure detector left on the whole face was the `error` event — and a stalled
+ * or suspended decoder does not fire `error`. It fires `stalled` / `waiting` /
+ * `suspend`, or simply stops advancing with `paused` still false. So a freeze
+ * was permanent for the rest of the call, with nothing watching.
+ */
+export const BODY_HEALTH_TICK_MS = 2000;
+export const BODY_STUCK_TICKS = 2;
+
+/**
+ * FRAME 0 OF base_loop.mp4, as a real image.
+ *
+ * REAL FOOTAGE — a literal `ffmpeg -vf "select=eq(n\,0)" -frames:v 1` grab of
+ * the shipped clip (552x720, matching the clip's own pixel size exactly, so it
+ * registers with the live layers under the same `object-fit: contain`). Nothing
+ * about it is generated; her face is never synthesized.
+ *
+ * WHY IT EXISTS: the hero backstop and the blurred letterbox fill used to be
+ * two more <video> elements pointed at base_loop.mp4, taking the stage to FOUR
+ * simultaneous decoders of the same file. Both are STATIC by design — one is
+ * pinned at frame 0, the other is blurred 28px and dimmed to 42% — so neither
+ * needs a decoder at all. As <img> they cannot stall, cannot error into the
+ * retry path, and cannot be reclaimed by the media engine mid-call.
+ */
+export const BODY_HERO_STILL = "/avatar/body/base_loop_frame0.jpg";
+
+/**
  * Is this layer ACTUALLY fully opaque right now — i.e. is it the only thing the
  * viewer is seeing?
  *
@@ -255,6 +311,16 @@ export function StarraClipFace({
     let disposed = false;
     frontElRef.current = a;
 
+    // Hoisted above the crossfade because settleFront needs it: the ONE
+    // definition of "this element is actually showing the body clip right now".
+    // `!el.paused` is deliberate — a paused layer is the freeze symptom, not a
+    // healthy one — and `!el.error` catches a decoder that failed after the
+    // canplay that let it in.
+    const clipFile = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
+    const layerLanded = (el: HTMLVideoElement): boolean =>
+      el.getAttribute("src") === clipFile && el.readyState >= 2 && !el.error;
+    const layerHealthy = (el: HTMLVideoElement): boolean => layerLanded(el) && !el.paused;
+
     // One crossfade may own the layers at a time. See createCrossfadeGate.
     const fades = createCrossfadeGate();
     let fadeSettle: (() => void) | null = null;
@@ -313,6 +379,28 @@ export function StarraClipFace({
         }
         // A newer crossfade (or teardown) owns the layers now — say nothing.
         if (disposed || !fades.isCurrent(myGen)) return;
+        // THE HERO-FRAME INVARIANT, ENFORCED RATHER THAN ASSUMED (2026-07-31,
+        // second pass). The block below hides the outgoing layer on the
+        // strength of a comment that says the incoming "is already opaque on
+        // top of it". Opaque in CSS is not the same as PAINTING: `go()` only
+        // gates on readyState>=2 at the moment the fade STARTS, and the
+        // incoming has the whole CROSSFADE_MS blend in which to error, get its
+        // decoder reclaimed, or drop back to readyState 0. Hiding a healthy,
+        // visible outgoing layer for an incoming one that is showing nothing
+        // blanks the stage down to the backstop — which is precisely the
+        // invariant this file claims to hold. So: verify the incoming actually
+        // landed, and if it did not, ROLL THE SWAP BACK and keep the layer that
+        // is genuinely on screen. No dimming, no gap, no churn.
+        if (!layerLanded(incoming)) {
+          incoming.style.opacity = "0";
+          incoming.style.zIndex = "1";
+          outgoing.style.opacity = "1";
+          outgoing.style.zIndex = "2";
+          front = outgoing;
+          back = incoming;
+          frontElRef.current = layerLanded(outgoing) ? outgoing : null;
+          return;
+        }
         frontElRef.current = incoming;
         // Only now hide the outgoing layer. It has stayed fully opaque and
         // covering nothing new (the incoming is already opaque on top of it),
@@ -381,6 +469,9 @@ export function StarraClipFace({
     let bodyWatchdog = 0;
     let bodyRetryTimer = 0;
     let bodyAttempts = 0;
+    let lastBodyMutateAt = 0;
+    let lastFrontTime = -1;
+    let stuckTicks = 0;
 
     // Is the body clip healthy on EITHER physical element right now? Checked
     // against the raw `a`/`b` elements, never the `front`/`back` aliases —
@@ -388,14 +479,9 @@ export function StarraClipFace({
     // crossfadeToBack), so asking the aliases "is the hidden one OK?" mid-blend
     // could actually be asking about the element that is currently the
     // visible, healthy front. Testing `a`/`b` directly is immune to that.
-    const clipFile = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
-    const bodyPlaybackHealthy = () =>
-      [a, b].some(
-        (el) =>
-          el.getAttribute("src") === clipFile &&
-          el.readyState >= 2 &&
-          !el.paused,
-      );
+    // (`clipFile` / `layerHealthy` are hoisted to the top of this effect —
+    // settleFront needs them too.)
+    const bodyPlaybackHealthy = () => [a, b].some(layerHealthy);
 
     const scheduleBodyRetry = () => {
       if (disposed) return;
@@ -404,13 +490,13 @@ export function StarraClipFace({
       // so a transient hiccup on the HIDDEN layer used to trigger a full
       // retry → re-crossfade — both layers mid-blend, patch hidden, the
       // blurred backdrop flashing through. If EITHER layer is currently
-      // healthy on the body clip, the visible face is fine: reset the backoff
-      // and do nothing.
+      // healthy on the body clip, the visible face is fine: DECAY the backoff
+      // (never reset it — see MIN_BODY_RETRY_GAP_MS for why a reset is what
+      // let a flapping decoder re-blend once a second forever) and do nothing.
       if (bodyPlaybackHealthy()) {
-        bodyAttempts = 0;
+        bodyAttempts = Math.max(0, bodyAttempts - 1);
         return;
       }
-      window.clearTimeout(bodyWatchdog);
       window.clearTimeout(bodyRetryTimer);
       bodyRetryTimer = window.setTimeout(() => {
         if (disposed) return;
@@ -422,30 +508,87 @@ export function StarraClipFace({
         // blank/reload a layer that has since become the healthy, visible
         // front.
         if (bodyPlaybackHealthy()) {
-          bodyAttempts = 0;
+          bodyAttempts = Math.max(0, bodyAttempts - 1);
           return;
         }
+        lastBodyMutateAt = Date.now();
         // Re-setting the same src is a no-op, and this element just FAILED with
         // that src — drop it first so play() assigns fresh and the browser
         // actually refetches.
         back.removeAttribute("src");
         startContinuousBody();
-      }, nextBodyRetryDelay(bodyAttempts++));
+        // CHURN FLOOR, applied to the DELAY rather than as a second timer so
+        // the fire-time health re-check above stays the first thing the retry
+        // path does. Whatever the backoff says, two mutations can never land
+        // closer together than MIN_BODY_RETRY_GAP_MS.
+      }, Math.max(
+        nextBodyRetryDelay(bodyAttempts++),
+        MIN_BODY_RETRY_GAP_MS - (Date.now() - lastBodyMutateAt),
+      ));
+    };
+
+    /**
+     * THE HEARTBEAT. A REPEATING interval, deliberately — the thing it replaced
+     * was a one-shot `setTimeout` that fired once 6s after the first attempt,
+     * found the face healthy, and was never re-armed, leaving the `error` event
+     * as the only failure detector on the whole face for the rest of the call.
+     * A frozen or media-engine-suspended decoder never fires `error`, so
+     * "everything else frozen or gone" had nothing watching it. See
+     * BODY_HEALTH_TICK_MS.
+     *
+     * Three escalating outcomes, cheapest first, and NONE of them ever pauses
+     * or unmounts the loop:
+     *   - advancing        -> decay the backoff, do nothing.
+     *   - paused / stalled -> ask it to resume in place (`play()`); no reload,
+     *                         no crossfade, nothing visible.
+     *   - still stuck      -> only then hand it to the retry path.
+     */
+    const bodyHeartbeat = () => {
+      if (disposed) return;
+      const el = frontElRef.current;
+      // Mid-crossfade (frontElRef null) there is no single front to measure.
+      // Fall back to "is anything alive", and never accuse a blend of freezing.
+      if (!el) {
+        if (!bodyPlaybackHealthy()) scheduleBodyRetry();
+        return;
+      }
+      if (!layerLanded(el)) {
+        stuckTicks = 0;
+        scheduleBodyRetry();
+        return;
+      }
+      if (el.paused) {
+        stuckTicks = 0;
+        void el.play().catch(() => scheduleBodyRetry());
+        return;
+      }
+      // Playing, but is the clock actually moving? This is the freeze that
+      // reports no error and leaves `paused` false. The loop is 11.08s and the
+      // tick is 2s, so a healthy layer always advances by ~2s between samples
+      // (a loop wrap changes it too); two consecutive samples inside 50ms of
+      // each other is a real stall, not sampling noise.
+      const t = el.currentTime;
+      if (Math.abs(t - lastFrontTime) < 0.05) {
+        stuckTicks += 1;
+        if (stuckTicks >= BODY_STUCK_TICKS) {
+          stuckTicks = 0;
+          void el.play().catch(() => {});
+          scheduleBodyRetry();
+        }
+      } else {
+        stuckTicks = 0;
+        bodyAttempts = Math.max(0, bodyAttempts - 1);
+      }
+      lastFrontTime = t;
     };
 
     const startContinuousBody = () => {
-      const clip = STARRA_CLIPS[CONTINUOUS_BODY_CLIP];
-      // Readiness watchdog: if the loop is not visibly playable 6s after this
-      // attempt, the asset or network is wrong — try again. Never a clip switch.
-      window.clearTimeout(bodyWatchdog);
-      bodyWatchdog = window.setTimeout(() => {
-        const el = frontElRef.current;
-        if (!el || el.getAttribute("src") !== clip.file || el.readyState < 2) {
-          scheduleBodyRetry();
-        } else {
-          bodyAttempts = 0; // healthy — the next failure starts the backoff over
-        }
-      }, 6000);
+      // The heartbeat is armed ONCE and runs for the life of the effect; every
+      // attempt just resets the stall sampler so a fresh layer is not judged on
+      // the previous one's clock.
+      lastFrontTime = -1;
+      stuckTicks = 0;
+      if (!bodyWatchdog) bodyWatchdog = window.setInterval(bodyHeartbeat, BODY_HEALTH_TICK_MS);
       back.onerror = scheduleBodyRetry;
       a.onerror = scheduleBodyRetry;
       b.onerror = scheduleBodyRetry;
@@ -457,7 +600,8 @@ export function StarraClipFace({
     return () => {
       disposed = true;
       window.clearTimeout(fadeTimer);
-      window.clearTimeout(bodyWatchdog);
+      window.clearInterval(bodyWatchdog);
+      bodyWatchdog = 0;
       window.clearTimeout(bodyRetryTimer);
       fades.cancelAll();
       dropFadeListener();
@@ -1012,15 +1156,24 @@ export function StarraClipFace({
   return (
     <div className="call-face-portrait" ref={hostRef}>
       {/* blurred fill so a portrait clip has no black bars on a wide screen.
-          The SAME continuous body the face plays — one asset, no idle clip
-          anywhere on this path, and the blur always matches the visible her. */}
-      <video
+          FRAME 0 OF THE SAME CONTINUOUS BODY, as a still (see BODY_HERO_STILL)
+          — it used to be a fourth <video> decoding base_loop.mp4 alongside the
+          hero backstop and both live layers.
+
+          A STILL IS VISUALLY IDENTICAL HERE, and that is measured, not assumed:
+          deck.css renders this element at `blur(28px) brightness(0.42)` and
+          `scale(1.15)`, while her head travels 10x17px across the ENTIRE
+          11.08s loop (starra-clip-map.ts, CONTINUOUS_BODY_CLIP). Motion an
+          order of magnitude smaller than the blur radius, at 42% brightness,
+          behind an opaque sharp copy of the same face, is not visible — and a
+          decorative letterbox fill is never worth a decoder on a dual-core
+          machine that is simultaneously running the call, the mic worklet and
+          the mouth canvas. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
         className="call-face-backdrop"
-        src={STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file}
-        autoPlay
-        loop
-        muted
-        playsInline
+        src={BODY_HERO_STILL}
+        alt=""
         aria-hidden
       />
       {/* HERO-FRAME BACKSTOP (2026-07-31). The blurred backdrop above is
@@ -1043,29 +1196,24 @@ export function StarraClipFace({
           is a stacking context, so a backstop rendered as its sibling would be
           painted under the inner backdrop and never seen.
 
-          Pinned via autoplay->pause rather than a still image because no
-          prerendered frame of base_loop.mp4 exists in /public (only
-          starra-portrait.jpg, a different 640x960 asset that would not
-          register with the 552x720 clip), and the doctrine forbids generating
-          one. Muted autoplay is what forces a first frame to decode at all —
-          WebKit does not reliably paint an unstarted <video>. */}
-      <video
+          IT IS AN <img>, NOT A PAUSED <video> (2026-07-31, second pass). The
+          first version of this backstop was `<video autoPlay muted>` paused at
+          frame 0 in onLoadedData, because no prerendered frame of base_loop.mp4
+          existed in /public. One now does — BODY_HERO_STILL, a literal ffmpeg
+          frame-0 grab at the clip's own 552x720, so it registers exactly — and
+          that removes the worst element on the stage: a full-bleed, PAUSED,
+          background-less video sitting at z-index 0 under everything. A paused
+          video element is exactly what a media engine reclaims first under
+          memory pressure, and a reclaimed compositing layer with no decoded
+          frame and no background is a blank rectangle the full size of her
+          face. An <img> cannot be reclaimed, cannot stall, cannot error into
+          the retry path, and holds no decoder. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
         className="call-face-hero-still"
-        src={STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file}
-        autoPlay
-        muted
-        playsInline
-        preload="auto"
+        src={BODY_HERO_STILL}
+        alt=""
         aria-hidden
-        onLoadedData={(e) => {
-          const el = e.currentTarget;
-          el.pause();
-          try {
-            el.currentTime = 0;
-          } catch {
-            /* not seekable yet — it is already showing frame 0 either way */
-          }
-        }}
       />
       <video ref={aRef} style={{ ...layer, opacity: 1, zIndex: 1 }} muted playsInline aria-label="STARRA" />
       <video ref={bRef} style={{ ...layer, opacity: 0, zIndex: 1 }} muted playsInline aria-hidden />

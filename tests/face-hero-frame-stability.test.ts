@@ -29,7 +29,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import { join, resolve } from "node:path";
 
 import {
@@ -38,6 +38,7 @@ import {
   createMouthSmoother,
   createOpennessGate,
 } from "../src/lib/voice/viseme-sync";
+import { MIN_BODY_RETRY_GAP_MS } from "../src/components/bridge/StarraClipFace";
 
 const REPO = resolve(import.meta.dirname, "..");
 const FACE_SRC = readFileSync(
@@ -115,6 +116,155 @@ describe("structural: crossfade is incoming-over-outgoing, never a double-fade",
         "BEFORE it starts fading in, so a partly-faded incoming layer is never " +
         "rendered underneath a still-opaque outgoing one",
     );
+  });
+});
+
+/**
+ * THE HOLE THIS SUITE ORIGINALLY LEFT OPEN (2026-07-31, second pass).
+ *
+ * The crossfade block above hid the outgoing layer on the strength of a comment
+ * asserting the incoming "is already opaque on top of it". CSS-opaque is not
+ * the same as PAINTING: `go()` gates on readyState>=2 only at the instant the
+ * fade STARTS, and the incoming layer has the whole CROSSFADE_MS blend in which
+ * to error, drop to readyState 0, or have its decoder reclaimed. Dropping a
+ * healthy visible layer for one that is showing nothing blanks the stage — the
+ * very invariant the suite is named after. So the settle must VERIFY the
+ * landing, and roll the swap back when it did not happen.
+ */
+describe("structural: the settle verifies the incoming layer actually landed", () => {
+  const crossfadeBody = extractBlock(FACE_CODE, "const crossfadeToBack = () => {");
+  const settleBlock = extractBlock(crossfadeBody, "const settleFront = () => {");
+
+  it("checks the incoming layer landed BEFORE hiding the outgoing one", () => {
+    const checkIdx = settleBlock.search(/if\s*\(\s*!layerLanded\(incoming\)\s*\)/);
+    assert.ok(
+      checkIdx >= 0,
+      "the settle must test layerLanded(incoming) — a readyState/error check " +
+        "on the element that is about to become the only visible layer",
+    );
+    const hideIdx = settleBlock.indexOf('outgoing.style.opacity = "0"');
+    assert.ok(hideIdx >= 0, "expected the settle to hide the outgoing layer");
+    assert.ok(
+      checkIdx < hideIdx,
+      "the landing check must run BEFORE the outgoing layer is dimmed — " +
+        "otherwise a failed incoming leaves the stage with nothing on it",
+    );
+  });
+
+  it("rolls the swap back rather than leaving both layers hidden", () => {
+    const guard = extractBlock(settleBlock, "if (!layerLanded(incoming))");
+    assert.match(
+      guard,
+      /outgoing\.style\.opacity\s*=\s*"1"/,
+      "the still-good outgoing layer must be restored to fully opaque",
+    );
+    assert.match(
+      guard,
+      /front\s*=\s*outgoing/,
+      "the alias swap must be undone, or the next crossfade retries the dead layer",
+    );
+    assert.ok(
+      !/frontElRef\.current\s*=\s*incoming/.test(guard),
+      "a layer that never landed must never be published as the front — the " +
+        "mouth patch would then paint over nothing",
+    );
+  });
+});
+
+/**
+ * THE HEARTBEAT. The readiness watchdog used to be a one-shot `setTimeout`: it
+ * fired once 6s after the first load attempt, found the face healthy, took the
+ * `bodyAttempts = 0` branch, and was never re-armed. From that point the ONLY
+ * failure detector on the entire face was the `error` event — and a stalled,
+ * suspended, or memory-reclaimed decoder does not fire `error`. It stops
+ * advancing with `paused` still false, or pauses silently. So a frozen body
+ * loop was PERMANENT for the rest of the call, with nothing watching it, while
+ * the mouth canvas (its own rAF, driven by audio rather than the video clock)
+ * kept animating on top. That is Classic's filmed "everything else frozen or
+ * gone... the only thing moving is your lips".
+ */
+describe("structural: the body loop is watched continuously, and a freeze recovers", () => {
+  const effect = FACE_CODE.slice(
+    FACE_CODE.indexOf("const bodyHeartbeat = () => {"),
+  );
+  const heartbeat = extractBlock(FACE_CODE, "const bodyHeartbeat = () => {");
+  const start = extractBlock(FACE_CODE, "const startContinuousBody = () => {");
+
+  it("arms a REPEATING interval, never a one-shot timeout", () => {
+    assert.match(
+      start,
+      /window\.setInterval\(bodyHeartbeat/,
+      "the health check must repeat for the life of the call — a one-shot " +
+        "leaves `error` as the only detector, and a freeze fires no error",
+    );
+    assert.ok(
+      !/bodyWatchdog\s*=\s*window\.setTimeout/.test(effect),
+      "the watchdog must not be re-introduced as a one-shot setTimeout",
+    );
+  });
+
+  it("detects a stalled clock, not just a missing/errored layer", () => {
+    assert.match(
+      heartbeat,
+      /currentTime/,
+      "a frozen layer reports readyState 4 and paused=false — only the clock " +
+        "tells you it stopped",
+    );
+    assert.match(
+      heartbeat,
+      /stuckTicks/,
+      "a single sample cannot distinguish a stall from sampling noise",
+    );
+  });
+
+  it("recovers in place first and NEVER pauses or unmounts the loop", () => {
+    assert.match(
+      heartbeat,
+      /el\.play\(\)/,
+      "the cheapest recovery is resuming the element itself — no reload, no " +
+        "crossfade, nothing visible",
+    );
+    assert.ok(
+      !/\.pause\(\)/.test(heartbeat) && !/removeAttribute/.test(heartbeat),
+      "the heartbeat must never pause or blank the body loop — escalation to " +
+        "the retry path is scheduleBodyRetry's job, under its own guards",
+    );
+  });
+
+  it("does not accuse a mid-crossfade blend of freezing", () => {
+    assert.match(
+      heartbeat,
+      /if\s*\(!el\)/,
+      "frontElRef is null for the whole blend by design — the heartbeat must " +
+        "fall back to the either-layer check there, not report a stall",
+    );
+  });
+});
+
+describe("structural: retry churn is floored and the backoff cannot be reset by a flap", () => {
+  const retryBody = extractBlock(FACE_CODE, "const scheduleBodyRetry = () => {");
+
+  it("never resets bodyAttempts to 0 — a flapping decoder must keep climbing", () => {
+    assert.ok(
+      !/bodyAttempts\s*=\s*0/.test(retryBody),
+      "resetting the ladder on every healthy check is what let an error/heal " +
+        "flap re-blend roughly once a second forever; decay it instead",
+    );
+    assert.match(
+      retryBody,
+      /bodyAttempts\s*=\s*Math\.max\(0,\s*bodyAttempts\s*-\s*1\)/,
+      "a healthy check should walk the backoff DOWN one rung, not zero it",
+    );
+  });
+
+  it("floors the gap between two actual layer mutations", () => {
+    assert.match(
+      retryBody,
+      /MIN_BODY_RETRY_GAP_MS\s*-\s*\(Date\.now\(\)\s*-\s*lastBodyMutateAt\)/,
+      "whatever the backoff says, two src-drop+reload+crossfade cycles must " +
+        "never land closer together than MIN_BODY_RETRY_GAP_MS",
+    );
+    assert.ok(MIN_BODY_RETRY_GAP_MS >= 1000, "the floor must be a real floor");
   });
 });
 
@@ -279,17 +429,76 @@ describe("structural: the hero-frame backstop is inside the portrait stacking co
     );
   });
 
-  it("uses the same clip and geometry as the live layers, never played", () => {
+  it("is a real still IMAGE of the body clip, not a fifth video decoder", () => {
     const still = FACE_CODE.indexOf('className="call-face-hero-still"');
-    const block = FACE_CODE.slice(still, still + 600);
+    const block = FACE_CODE.slice(still, still + 400);
     assert.ok(
-      /src=\{STARRA_CLIPS\[CONTINUOUS_BODY_CLIP\]\.file\}/.test(block),
-      "the backstop must show the SAME clip the live layers play, or the " +
-        "still would not register with her face",
+      /src=\{BODY_HERO_STILL\}/.test(block),
+      "the backstop must show BODY_HERO_STILL — the ffmpeg frame-0 grab of the " +
+        "SAME clip the live layers play, or the still would not register with " +
+        "her face",
     );
-    assert.ok(/\.pause\(\)/.test(block), "it must pause — it is a still, not a second playing copy");
+    // A paused, background-less, full-bleed <video> at z-index 0 is the single
+    // most reclaimable element on the stage: a media engine under memory
+    // pressure drops its decoder and its compositing layer, and what is left is
+    // a blank rectangle the size of her face. An <img> has no decoder to lose.
+    assert.ok(
+      !/<video/.test(FACE_CODE.slice(still - 120, still)),
+      "the backstop must be an <img>, never a <video> — see BODY_HERO_STILL",
+    );
     assert.ok(!/\bloop\b/.test(block), "a backstop must never loop");
-    assert.ok(/\bmuted\b/.test(block), "unmuted autoplay would be blocked and would add a second audio source");
+    assert.ok(
+      !/\.pause\(\)/.test(block) && !/autoPlay/.test(block),
+      "an <img> neither plays nor pauses; leftover playback wiring means a " +
+        "<video> crept back in",
+    );
+  });
+
+  it("the blurred letterbox fill is the same still, not a decoder either", () => {
+    const backdrop = FACE_CODE.indexOf('className="call-face-backdrop"');
+    const block = FACE_CODE.slice(backdrop, backdrop + 400);
+    assert.ok(
+      /src=\{BODY_HERO_STILL\}/.test(block),
+      "the decorative blurred fill must be the frame-0 still — deck.css blurs " +
+        "it 28px at 42% brightness, and her head travels 10x17px across the " +
+        "whole 11.08s loop, so motion there is invisible by measurement",
+    );
+    assert.ok(
+      !/autoPlay|\bloop\b/.test(block),
+      "the blurred fill must not be a playing video",
+    );
+  });
+
+  it("the stage holds AT MOST TWO video decoders — the two live layers only", () => {
+    const videos = FACE_CODE.match(/<video\b/g) ?? [];
+    assert.equal(
+      videos.length,
+      2,
+      `expected exactly 2 <video> elements (the aRef/bRef live pair), found ` +
+        `${videos.length}. Every extra decoder of base_loop.mp4 is another ` +
+        `element competing for hardware decode on a 2013 dual-core while the ` +
+        `call, the mic worklet and the mouth canvas are all running — and a ` +
+        `decorative layer is never worth one. Backstop and blurred fill are ` +
+        `BODY_HERO_STILL <img>s.`,
+    );
+    // ...and they are the live pair, not two decorative ones.
+    assert.ok(
+      /<video ref=\{aRef\}/.test(FACE_CODE) && /<video ref=\{bRef\}/.test(FACE_CODE),
+      "the two remaining <video> elements must be the aRef/bRef crossfade pair",
+    );
+  });
+
+  it("BODY_HERO_STILL points at a file that actually exists in /public", () => {
+    // A missing backstop image is invisible in every structural check and shows
+    // up only as a blank stage on a live call — the exact failure class this
+    // whole suite exists to prevent.
+    const m = FACE_SRC.match(/export const BODY_HERO_STILL\s*=\s*"([^"]+)"/);
+    assert.ok(m, "BODY_HERO_STILL must be an exported string literal");
+    const rel = m![1].replace(/^\//, "");
+    assert.ok(
+      existsSync(join(REPO, "public", rel)),
+      `public/${rel} is referenced by StarraClipFace but does not exist`,
+    );
   });
 
   it("is painted below the live layers and above the blur, per deck.css", () => {

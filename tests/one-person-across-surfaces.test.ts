@@ -37,6 +37,7 @@ const brain = read("src/lib/brain.ts");
 const chatRoute = read("src/app/api/chat/route.ts");
 const memoryRoute = read("src/app/api/memory/route.ts");
 const memoryStore = read("src/lib/memory/store.ts");
+const callDigestSrc = read("src/lib/memory/call-digest.ts");
 
 /** The exact length of her locked spoken persona before the core was extracted. */
 const LOCKED_VOICE_PERSONA_CHARS = 7445;
@@ -69,9 +70,33 @@ describe("one person across the Call and the Deck", () => {
     );
     // Deck: injects the continuity block straight into the system prompt.
     assert.match(chatRoute, /memoryForPrompt\(/);
-    // Call: fetches the SAME block from the SAME function over HTTP, because a
-    // client hook cannot touch the store directly.
-    assert.match(memoryRoute, /memoryForPrompt\(store, ""\)/);
+    // Call: fetches its block from the SAME store over HTTP, because a client
+    // hook cannot touch the store directly.
+    //
+    // THE PROJECTION DIFFERS, THE MEMORY DOES NOT (2026-07-31). The call leg
+    // now serves `callDigest` instead of `memoryForPrompt` verbatim, and that
+    // is a deliberate, scoped change — NOT the drift this suite exists to
+    // catch. Both still read one store, one 24-turn window, one set of tiers.
+    // What the call withholds is HER OWN styled replies, because a realtime
+    // model treats its instruction block as few-shot examples and was mirroring
+    // her comfort phrases back at Classic ("baby" 856x in the store). See
+    // src/lib/memory/call-digest.ts. His turns, the facts tier and the
+    // summaries — the actual continuity — still cross.
+    assert.match(memoryRoute, /callDigest\(store\)/);
+    assert.match(
+      memoryRoute,
+      /from "@\/lib\/memory\/store"/,
+      "the digest must still come off the ONE shared store",
+    );
+    assert.match(callDigestSrc, /from "\.\/store"/);
+    for (const [re, tier] of [
+      [/store\.facts/, "facts"],
+      [/store\.working\.filter\(\(e\) => e\.role === "user"\)/, "his working turns"],
+      [/store\.summaries/, "summaries"],
+      [/store\.archival/, "archival"],
+    ] as const) {
+      assert.match(callDigestSrc, re, `the call digest must still carry ${tier}`);
+    }
     assert.match(hook, /\/api\/memory\?digest=1/);
     // ...and writes its turns back into that same store.
     assert.match(hook, /fetch\("\/api\/memory"/);

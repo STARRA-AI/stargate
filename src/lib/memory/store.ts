@@ -1,6 +1,12 @@
 import { promises as fs } from "fs";
 import path from "path";
 import { redact } from "@/lib/security/redact";
+// Pure predicates, shared verbatim with the CLIENT call hook — they live in
+// their own dependency-free module because this file imports `node:fs` and can
+// never be pulled into the browser bundle. See turn-revision.ts.
+import { isTurnRevision } from "./turn-revision";
+
+export { isTurnRevision, normalizeTurn } from "./turn-revision";
 
 export type Exchange = {
   role: "user" | "assistant";
@@ -127,6 +133,40 @@ async function recordExchangeUnserialized(
   }
 
   return saveMemory(store);
+}
+
+/**
+ * Record a turn that may be a longer revision of the one just stored, instead
+ * of a new one. Replaces the last working entry in place when it is the same
+ * role and `isTurnRevision` holds; otherwise this is an ordinary append.
+ *
+ * Serialized on the SAME chain as recordExchange — a revision that raced the
+ * append it revises would otherwise read a store without it and duplicate the
+ * row it exists to collapse.
+ */
+export function reviseExchange(
+  role: "user" | "assistant",
+  content: string,
+): Promise<MemoryStore> {
+  const run = async () => {
+    const store = await getMemory();
+    const last = store.working[store.working.length - 1];
+    if (last && last.role === role && isTurnRevision(last.content, content)) {
+      store.working[store.working.length - 1] = {
+        role,
+        content: redact(content),
+        at: new Date().toISOString(),
+      };
+      return saveMemory(store);
+    }
+    return recordExchangeUnserialized(role, content);
+  };
+  const p = memoryWriteChain.then(run, run);
+  memoryWriteChain = p.then(
+    () => undefined,
+    () => undefined,
+  );
+  return p;
 }
 
 export function memoryForPrompt(store: MemoryStore, query: string): string {

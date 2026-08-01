@@ -10,6 +10,13 @@ import {
 import { addVoiceSeconds } from "@/lib/voice/voiceCost";
 import { STARRA_VOICE_PERSONA } from "@/lib/persona";
 import { pcm16ToWavBase64 } from "@/lib/voice/wav";
+// CLIENT-SAFE by construction — turn-revision.ts imports nothing. Never
+// "@/lib/memory/store" from here: that module imports node:fs.
+import {
+  isTurnRevision,
+  normalizeTurn,
+  USER_TURN_REVISION_MS,
+} from "@/lib/memory/turn-revision";
 import { renderLipSync, LIPSYNC_ENABLED } from "@/lib/voice/lipsync";
 // ENGINE BUS — client-safe and secret-free by construction. "@/lib/engine/bus"
 // only, never "@/lib/engine": that barrel reaches the credential resolvers.
@@ -67,14 +74,31 @@ export function requestBriefingCall(): void {
 // answered — still fire-and-forget to the caller, still failure-swallowed.
 let recordCallChain: Promise<unknown> = Promise.resolve();
 
-function recordCallTurn(role: "user" | "assistant", content: string): void {
+/**
+ * How long the tool fast-path waits for an utterance to stop growing before it
+ * runs. Sized off the MEASURED flush cadence of a real sentence (0.55s-1.7s
+ * between commits, data/memory.json 2026-08-01): comfortably longer than the
+ * typical inter-flush gap, so one utterance produces one lookup, and short
+ * enough that a spoken command still feels immediate against the several
+ * seconds the reply then waits for a safe injection window anyway
+ * (deliverToolReply polls on a 1s tick).
+ */
+const TOOL_FASTPATH_DEBOUNCE_MS = 1800;
+
+function recordCallTurn(
+  role: "user" | "assistant",
+  content: string,
+  opts?: { supersede?: boolean },
+): void {
   try {
     recordCallChain = recordCallChain
       .then(() =>
         fetch("/api/memory", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ role, content }),
+          body: JSON.stringify(
+            opts?.supersede ? { role, content, supersede: true } : { role, content },
+          ),
         }),
       )
       .then(
@@ -484,6 +508,9 @@ export function useVoiceCall(): UseVoiceCallResult {
   // moment it's committed, so any of the multiple commit triggers below is
   // a safe no-op once already committed.
   const userTurnPendingRef = useRef(false);
+  /** The last user turn actually committed, and when — the whole basis of the
+   *  one-row-per-utterance guard. See commitUser for the measured defect. */
+  const lastUserCommitRef = useRef<{ text: string; at: number } | null>(null);
 
   const intentionalDisconnectRef = useRef(false);
 
@@ -617,6 +644,10 @@ export function useVoiceCall(): UseVoiceCallResult {
       if (opts?.log !== false) {
         setTranscript((prev) => [...prev, { role: "user", text: t }]);
         recordCallTurn("user", t);
+        // A TYPED line is its own turn and can never be a revision of a spoken
+        // partial (or vice versa). Close the window so the two paths cannot
+        // supersede each other's rows.
+        lastUserCommitRef.current = null;
       }
       return true;
     },
@@ -736,19 +767,98 @@ export function useVoiceCall(): UseVoiceCallResult {
     [deliverToolReply],
   );
 
+  /**
+   * DEBOUNCED entry point to the fast-path — the ONLY one commitUser uses.
+   *
+   * commitUser is reached speculatively several times per utterance (see its
+   * header), and it used to call the fast-path on every one of them. On the
+   * measured 18-flush sentence that is EIGHTEEN POSTs to /api/tools/fastpath in
+   * eighteen seconds, each one carrying a TRUNCATED fragment ("Remember when,
+   * uh, hold on"). The load was not just wasted: half-sentences were being
+   * matched against keyword routes on words Classic had not finished saying.
+   * Waiting for the utterance to settle costs a little latency on a spoken tool
+   * command and buys back both the load and the accuracy.
+   */
+  const toolDebounceRef = useRef(0);
+
+  const scheduleToolFastpath = useCallback(
+    (text: string) => {
+      const t = text.trim();
+      if (!t) return;
+      if (typeof window === "undefined") return;
+      window.clearTimeout(toolDebounceRef.current);
+      toolDebounceRef.current = window.setTimeout(() => {
+        toolDebounceRef.current = 0;
+        fireToolFastpath(t);
+      }, TOOL_FASTPATH_DEBOUNCE_MS);
+    },
+    [fireToolFastpath],
+  );
+
   // ---- transcript commits -------------------------------------------
 
+  /**
+   * ONE ROW PER UTTERANCE — the guard, and why a guard is the only fix.
+   *
+   * This protocol has no confirmed end-of-user-turn event (see schedulePlayback
+   * below, which says so in its own comment), so `commitUser` is reached
+   * SPECULATIVELY from three independent triggers — the assistant starting to
+   * talk back, server VAD's `speech_started`, and the transcription
+   * `completed`/`done` events. Meanwhile the user transcript that arrives is
+   * CUMULATIVE: every update re-sends the whole utterance so far.
+   *
+   * Put those two facts together and every speculative flush writes the partial
+   * sentence as if it were a finished turn, and the next one writes a superset.
+   * MEASURED in data/memory.json: ONE 18-second sentence from Classic
+   * ("Remember when, uh, hold on...") produced EIGHTEEN rows, 00:48:05.433
+   * through 00:48:23.361, each a longer prefix of the last. 222 such runs exist
+   * across the store going back to 2026-07-30 — this is long-standing, not new
+   * tonight, and it is why the deck showed "Then I don't know" four times.
+   *
+   * The guard is deliberately protocol-agnostic rather than a fix to whichever
+   * trigger is firing, because the triggers are all legitimate and the set of
+   * them is not something this client controls:
+   *   - IDENTICAL to what was just committed -> drop it entirely.
+   *   - a longer REVISION of it -> replace, in the transcript AND in memory
+   *     (the store's reviseExchange only replaces a genuine prefix).
+   *   - anything else -> a real new turn, appended as before.
+   *
+   * (`lastUserCommitRef` is declared with the other call refs above, because
+   * injectLiveTurn and commitAssistant both close the window too.)
+   */
   const commitUser = useCallback(() => {
     if (!userTurnPendingRef.current) return;
     userTurnPendingRef.current = false;
     const text = liveUserRef.current.trim();
     setLiveUserBoth("");
-    if (text) {
-      setTranscript((prev) => [...prev, { role: "user", text }]);
-      recordCallTurn("user", text);
-      fireToolFastpath(text);
+    if (!text) return;
+
+    const prev = lastUserCommitRef.current;
+    const continues =
+      prev !== null && Date.now() - prev.at <= USER_TURN_REVISION_MS;
+    if (continues && normalizeTurn(prev.text) === normalizeTurn(text)) {
+      // Nothing was added since the last commit — a pure re-flush. Refresh the
+      // window so a long pause mid-sentence cannot age the guard out from
+      // under the utterance it is protecting.
+      lastUserCommitRef.current = { text, at: Date.now() };
+      return;
     }
-  }, [setLiveUserBoth, fireToolFastpath]);
+    const revises = continues && isTurnRevision(prev.text, text);
+    lastUserCommitRef.current = { text, at: Date.now() };
+
+    if (revises) {
+      setTranscript((p) =>
+        p.length > 0 && p[p.length - 1].role === "user"
+          ? [...p.slice(0, -1), { role: "user", text }]
+          : [...p, { role: "user", text }],
+      );
+      recordCallTurn("user", text, { supersede: true });
+    } else {
+      setTranscript((p) => [...p, { role: "user", text }]);
+      recordCallTurn("user", text);
+    }
+    scheduleToolFastpath(text);
+  }, [setLiveUserBoth, scheduleToolFastpath]);
 
   const commitAssistant = useCallback(
     (responseId: string | undefined, explicitText?: string, fallbackText?: string) => {
@@ -767,6 +877,12 @@ export function useVoiceCall(): UseVoiceCallResult {
       if (text) {
         setTranscript((prev) => [...prev, { role: "assistant", text }]);
         recordCallTurn("assistant", text);
+        // HER REPLY CLOSES HIS TURN. Whatever he says next is a new utterance
+        // by definition, so the revision window ends here rather than waiting
+        // out USER_TURN_REVISION_MS. Without this, a short answer that happened
+        // to begin with the same words as his previous one ("okay" ... "okay,
+        // do it") could be folded into a turn she has already responded to.
+        lastUserCommitRef.current = null;
       }
     },
     [setLiveAssistantBoth],
@@ -1016,6 +1132,11 @@ export function useVoiceCall(): UseVoiceCallResult {
     assistantResponseDoneRef.current = true;
     lastAssistantResponseIdRef.current = null;
     userTurnPendingRef.current = false;
+    // The revision window must not survive the call: the first thing said on
+    // the NEXT call is a new turn, whatever it happens to start with.
+    lastUserCommitRef.current = null;
+    if (typeof window !== "undefined") window.clearTimeout(toolDebounceRef.current);
+    toolDebounceRef.current = 0;
   }, [clearDrainWatchdog, stopAllPlayback]);
 
   const handleFatalError = useCallback(
