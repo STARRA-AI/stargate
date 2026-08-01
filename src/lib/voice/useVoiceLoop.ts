@@ -8,6 +8,12 @@ import {
   matchWakeWord,
   setWakeWordEnabled,
 } from "@/lib/voice/wake-word";
+import {
+  MIC_MODE_EVENT,
+  getMicMode,
+  subscribeMicMode,
+  type MicMode,
+} from "@/lib/voice/mic-state";
 
 type RecogResultEvent = {
   results: { 0: { transcript: string }; isFinal?: boolean }[];
@@ -89,6 +95,37 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
     return () => window.removeEventListener("stargate-wake-word", onPref);
   }, []);
 
+  /**
+   * G4 — the OUTER mic machine (mic-state.ts, SHARED CONTRACT §1).
+   *
+   * MUTED = no recognizer at all.
+   * WAKE  = everything below behaves exactly as it did before this existed.
+   * OPEN  = continuous transcription; every final result becomes a turn.
+   *
+   * `wakeWordOn` above stays the WAKE-mode sub-preference — it is not the mode.
+   * Subscribed BOTH ways (module subscriber + window event) because the module
+   * subscriber catches setMicMode() calls from anything that imported the
+   * module, and the event catches any surface that only dispatches.
+   */
+  const [micMode, setMicModeState] = useState<MicMode>("wake");
+  const micModeRef = useRef<MicMode>("wake");
+  useEffect(() => {
+    micModeRef.current = micMode;
+  }, [micMode]);
+
+  useEffect(() => {
+    setMicModeState(getMicMode());
+    const unsubscribe = subscribeMicMode(setMicModeState);
+    function onEvt() {
+      setMicModeState(getMicMode());
+    }
+    window.addEventListener(MIC_MODE_EVENT, onEvt);
+    return () => {
+      unsubscribe();
+      window.removeEventListener(MIC_MODE_EVENT, onEvt);
+    };
+  }, []);
+
   const sendToChat = useCallback(
     async (text: string) => {
       const myTurn = ++turnIdRef.current;
@@ -107,6 +144,14 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
     [sendMessage],
   );
 
+  /**
+   * Which mode started the ambient recognizer currently holding the mic, or
+   * null when nothing is listening. Without this, switching WAKE -> OPEN would
+   * hit `if (wakeRecogRef.current) return;` in the new starter and open mic
+   * would silently never arm while the wake listener kept the microphone.
+   */
+  const ambientOwnerRef = useRef<MicMode | null>(null);
+
   const stopWakeListener = useCallback(() => {
     try {
       wakeRecogRef.current?.abort?.();
@@ -115,6 +160,7 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
       /* ignore */
     }
     wakeRecogRef.current = null;
+    ambientOwnerRef.current = null;
   }, []);
 
   const wake = useCallback(async () => {
@@ -203,8 +249,87 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
     }
   }, [pushLog, sendToChat, setHudState, setLastReply, stopSpeaking, stopWakeListener]);
 
+  /**
+   * OPEN MIC — continuous transcription with no wake phrase in front of it.
+   *
+   * Shares `wakeRecogRef` with the wake-word listener deliberately: they are
+   * the same thing, the ambient listener, and only ONE of them may ever hold
+   * the microphone. Sharing the ref means `stopWakeListener()` tears down
+   * whichever is running, so a mode switch can never leave two recognizers
+   * racing for the mic.
+   *
+   * YIELDS THE MIC ENTIRELY WHEN SUSPENDED — the full-duplex call owns the
+   * microphone while it is up, and an open mic that kept running would fight
+   * it for the device. Same `suspendedRef` gate the wake listener uses.
+   */
+  const startOpenMicListener = useCallback(() => {
+    if (suspendedRef.current) return;
+    if (micModeRef.current !== "open") return;
+    if (sessionActive.current) return;
+    if (hudStateRef.current === "speaking") return;
+    if (wakeRecogRef.current) return;
+
+    const SR = getSR();
+    if (!SR) return;
+
+    const recog = new SR();
+    wakeRecogRef.current = recog;
+    ambientOwnerRef.current = "open";
+    recog.continuous = true;
+    recog.interimResults = false;
+    recog.lang = "en-US";
+
+    recog.onresult = (ev) => {
+      const idx = ev.resultIndex ?? ev.results.length - 1;
+      const text = (ev.results[idx]?.[0]?.transcript ?? "").trim();
+      if (!text) return;
+
+      // BARGE-IN, identical in shape to wake(): bump the turn token FIRST so
+      // the interrupted sendToChat's `finally` cannot clobber the state this
+      // new turn is about to claim, then cut her off.
+      if (hudStateRef.current === "speaking") {
+        turnIdRef.current++;
+        stopSpeaking();
+        sessionActive.current = false;
+      }
+
+      // A turn is already running and she is not merely speaking — let it
+      // finish. The mode effect below tears this recognizer down as hudState
+      // leaves idle anyway; this just avoids stacking turns in the gap.
+      if (sessionActive.current) return;
+
+      pushLog("open mic");
+      void sendToChat(text);
+    };
+
+    recog.onerror = () => {
+      wakeRecogRef.current = null;
+    };
+
+    recog.onend = () => {
+      wakeRecogRef.current = null;
+      // Web Speech ends a continuous session on its own schedule; open mic is
+      // only "continuous" if it restarts itself. Re-checks the mode so a
+      // disarm during the gap does not resurrect it.
+      if (
+        micModeRef.current === "open" &&
+        !suspendedRef.current &&
+        !sessionActive.current
+      ) {
+        window.setTimeout(() => startOpenMicListener(), 400);
+      }
+    };
+
+    try {
+      recog.start();
+    } catch {
+      wakeRecogRef.current = null;
+    }
+  }, [pushLog, sendToChat, stopSpeaking]);
+
   const startWakeListener = useCallback(() => {
     if (suspendedRef.current) return;
+    if (micModeRef.current !== "wake") return;
     if (!getWakeWordEnabled()) return;
     if (sessionActive.current) return;
     if (hudStateRef.current === "speaking") return;
@@ -215,6 +340,7 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
 
     const recog = new SR();
     wakeRecogRef.current = recog;
+    ambientOwnerRef.current = "wake";
     recog.continuous = true;
     recog.interimResults = false;
     recog.lang = "en-US";
@@ -263,6 +389,9 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
       // wake() — that would spin up the command recognizer against the same
       // microphone the call is capturing.
       if (suspendedRef.current) return;
+      // MUTED means no recognizer at all, and the hotkey is a recognizer. The
+      // badge says MUTED; the hotkey must not quietly contradict it.
+      if (micModeRef.current === "muted") return;
       if (e.code === "Space" && e.altKey) {
         e.preventDefault();
         void wake();
@@ -272,12 +401,27 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
     return () => window.removeEventListener("keydown", onKey);
   }, [wake]);
 
-  // Wake-word loop when idle
+  // Ambient listener when idle — which one depends on the mic mode.
   const suspended = opts?.suspended ?? false;
   useEffect(() => {
-    // While the full-duplex call owns the mic, never start the wake-word
+    // While the full-duplex call owns the mic, never start an ambient
     // listener — stop any running one and bail so the two don't contend.
+    // This applies to OPEN MIC exactly as it does to the wake word: the call
+    // gets the microphone, whole.
     if (suspended) {
+      stopWakeListener();
+      return;
+    }
+
+    // A mode switch must hand the microphone over cleanly. The starters below
+    // refuse to run while another recognizer is live, so the outgoing mode's
+    // listener has to be torn down here or the incoming one never arms.
+    if (ambientOwnerRef.current !== null && ambientOwnerRef.current !== micMode) {
+      stopWakeListener();
+    }
+
+    // MUTED — no recognizer at all. Nothing is listening.
+    if (micMode === "muted") {
       stopWakeListener();
       return;
     }
@@ -291,7 +435,21 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
       hudState === "speaking" ||
       hudState === "tool";
 
-    if (!wakeWordOn || busy) {
+    if (busy) {
+      stopWakeListener();
+      return;
+    }
+
+    // OPEN MIC — continuous transcription, no wake phrase.
+    if (micMode === "open") {
+      const t = window.setTimeout(() => startOpenMicListener(), 500);
+      return () => {
+        window.clearTimeout(t);
+      };
+    }
+
+    // WAKE — unchanged from before G4, including the wake-word sub-preference.
+    if (!wakeWordOn) {
       stopWakeListener();
       return;
     }
@@ -300,7 +458,15 @@ export function useVoiceLoop(opts?: { suspended?: boolean }) {
     return () => {
       window.clearTimeout(t);
     };
-  }, [hudState, wakeWordOn, suspended, startWakeListener, stopWakeListener]);
+  }, [
+    hudState,
+    wakeWordOn,
+    suspended,
+    micMode,
+    startWakeListener,
+    startOpenMicListener,
+    stopWakeListener,
+  ]);
 
   // Cleanup on unmount
   useEffect(() => {
