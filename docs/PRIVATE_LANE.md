@@ -29,7 +29,7 @@ scripts/private-gpt-down.sh    # stops by pid file
 ```
 
 `private-gpt-up.sh` forces `--host 127.0.0.1` (the vendor's own default is
-`0.0.0.0` with auth disabled — left as-is that would publish an
+`0.0.0.0` with auth disabled — left as-is, this would publish an
 unauthenticated document/RAG API to the whole LAN the moment this Mac is on
 Wi-Fi). It is not wired into `starra-up.sh` or the watchdog; it does not
 autostart. `.env.local` carries:
@@ -134,9 +134,16 @@ only a bare `private docs` (optionally with a colon) lists.
   process (pid noted in `.superpowers/sdd/task-1-report.md`) was pinning a
   full core throughout testing, unrelated to this build and left untouched.
   The route allows up to 900 seconds per request
-  (`PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS=900`, set in `private-gpt-up.sh`) and
-  streams `ping` frames the whole time so the connection doesn't go idle and
-  die. Expect a genuine wait, not a hang.
+  (`PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS=900`, set in `private-gpt-up.sh`).
+  Long silences on the deck/call stream during that wait are NORMAL, not a
+  hang: private-gpt sends `ping` frames the whole time, which keep the
+  route's *internal* fetch to private-gpt alive, but `streamPrivateChat`
+  (`src/app/api/chat/route.ts`) only forwards `text_delta` and `error`
+  events to the browser — pings are dropped, not relayed — so the
+  client-facing stream is genuinely byte-idle until the next real token. If
+  a future client-side idle timeout ever kills long private replies, this is
+  the first place to look: the route would need to forward its own
+  keep-alive to the browser, since the vendor's pings never reach it today.
 
 ## Vendor citations
 
