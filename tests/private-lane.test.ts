@@ -8,6 +8,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parsePrivateCommand } from "../src/lib/private/commands";
+import { isLoopbackBase } from "../src/app/api/chat/route";
 import {
   buildUserTurn,
   classifyChatFrame,
@@ -636,5 +637,295 @@ describe("silence gate — live call (useVoiceCall.ts)", () => {
       /setTranscript\(\(prev\) => \[\.\.\.prev, \{ role: "assistant", text: reply \}\]\)/,
       "she stays silent, but the text belongs on screen",
     );
+  });
+});
+
+/* ─────────────────── FIX WAVE — isLoopbackBase, the egress gate ───────────────
+ * `PRIVATE_GPT_BASE` is the ONLY host the private branch ever talks to, so the
+ * check on that value IS the privacy boundary. The first cut tested the URL's
+ * host with `/^127\./`, which is a PREFIX test on a NAME: it accepts
+ * `127.0.0.1.evil.example.com` and `127.attacker.example.com`, both ordinary
+ * DNS-resolvable hosts that route straight off this Mac. The rule is now
+ * numeric-literal loopback only — and `localhost` is deliberately gone with it,
+ * because a name is only ever whatever a resolver says it is.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe("isLoopbackBase — only numeric loopback literals", () => {
+  const ACCEPT = [
+    // The shipped default (PRIVATE_GPT_DEFAULT_BASE) and what .env.local carries.
+    "http://127.0.0.1:8080/v1",
+    // WHATWG URL normalizes IPv4 shorthand to dotted-quad, so this IS 127.0.0.1.
+    "http://127.1/v1",
+    "http://[::1]:8080/v1",
+    "http://127.0.0.1/v1",
+    "https://127.0.0.1:8080/v1",
+  ];
+
+  const REJECT = [
+    // The bug: a DNS-resolvable name that merely STARTS with `127.`
+    "http://127.0.0.1.evil.com/v1",
+    "http://127.evil.com/v1",
+    // Deliberately dropped: `localhost` is a resolver lookup (/etc/hosts, search
+    // domains), not a guaranteed loopback address.
+    "http://localhost:8080/v1",
+    "http://localhost.evil.com/v1",
+    // IPv4-mapped IPv6 — loopback in practice, refused on purpose: one alternate
+    // spelling invites the rest. URL serializes it as [::ffff:7f00:1].
+    "http://[::ffff:127.0.0.1]/v1",
+    // Credential trick — the authority's LAST `@` wins, so the host is evil.com.
+    "http://user@127.0.0.1@evil.com/v1",
+    // Non-http schemes and garbage.
+    "file:///etc/passwd",
+    "not-a-url",
+    "",
+    "http://10.0.0.5:8080/v1",
+    "http://128.0.0.1/v1",
+  ];
+
+  for (const base of ACCEPT) {
+    it(`accepts ${JSON.stringify(base)}`, () => {
+      assert.equal(isLoopbackBase(base), true);
+    });
+  }
+
+  for (const base of REJECT) {
+    it(`refuses ${JSON.stringify(base)}`, () => {
+      assert.equal(
+        isLoopbackBase(base),
+        false,
+        `${base} is not a numeric loopback literal — the private lane must refuse to start`,
+      );
+    });
+  }
+
+  it("proves the live deck's real default still passes", () => {
+    // Sanity for the running service: the value in .env.local and in the runbook.
+    assert.equal(isLoopbackBase("http://127.0.0.1:8080/v1"), true);
+  });
+});
+
+/* ──────────────── FIX WAVE — `private ingest` is deck-local only ──────────────
+ * `private ingest <path>` reads ANY absolute path on this Mac server-side and
+ * ships it into the index. The shell primitive already refuses that class of
+ * power for a request that arrived over the LAN/phone (route.ts, maybeShellReply)
+ * — the ingest arm has to refuse it the same way, BEFORE the read. The two
+ * read-free commands are untouched on purpose: `private <ask>` and `private docs`
+ * expose answers, not new file reads, and he uses them from the phone.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe("private lane — `private ingest` refuses non-local requests", () => {
+  const ROUTE = "src/app/api/chat/route.ts";
+
+  it("uses the SHARED helper, not a third copy of the host idiom", async () => {
+    const src = stripComments(await readSrc(ROUTE));
+    assert.match(
+      src,
+      /import \{[^}]*\bisLocalRequest\b[^}]*\} from "@\/lib\/auth-lockout"/,
+      "isLocalRequest lives in src/lib/auth-lockout.ts — import it so the two cannot drift",
+    );
+  });
+
+  it("gates the ingest arm before privateIngest can touch the disk", async () => {
+    const src = stripComments(await readSrc(ROUTE));
+    const arm = between(src, 'cmd.kind === "ingest"', "privateIngest(");
+    assert.match(
+      arm,
+      /isLocalRequest\(/,
+      "a LAN caller must not be able to drive an arbitrary server-side file read",
+    );
+  });
+
+  it("puts the file read in the local-only arm, never on the refusal path", async () => {
+    const src = stripComments(await readSrc(ROUTE));
+    assert.match(
+      src,
+      /isLocalRequest\(host\)\s*\?\s*await privateIngest\(/,
+      "privateIngest must be reachable ONLY when the request is local",
+    );
+  });
+
+  it("streams a refusal line in the shell primitive's voice", async () => {
+    const src = await readSrc(ROUTE);
+    assert.match(
+      src,
+      /disabled over the network for safety[\s\S]{0,120}localhost/,
+      "the refusal should read like maybeShellReply's, not like an error",
+    );
+  });
+
+  it("leaves `private <ask>` and `private docs` LAN-usable", async () => {
+    const src = stripComments(await readSrc(ROUTE));
+    const banner = src.indexOf("const PRIVATE_GPT_DEFAULT_BASE");
+    const branchSrc = src.slice(banner, src.indexOf("export async function POST"));
+    const chatArm = between(branchSrc, 'cmd.kind === "chat"', 'cmd.kind === "ingest"');
+    assert.equal(
+      /isLocalRequest\(/.test(chatArm),
+      false,
+      "the chat arm must stay reachable from the phone — it exposes answers, not file reads",
+    );
+    const hits = branchSrc.match(/isLocalRequest\(/g) ?? [];
+    assert.equal(
+      hits.length,
+      1,
+      "exactly one gate, on the ingest arm — docs listing stays LAN-usable",
+    );
+  });
+});
+
+/* ───────────────── FIX WAVE — the composed read loop, end to end ──────────────
+ * Every unit below is already tested alone. What was NOT tested is the way
+ * sendMessage COMPOSES them (src/lib/stargate-context.tsx): buildUserTurn marks
+ * the ask at commit time, the read loop splits the SSE byte stream on "\n\n" and
+ * feeds each `data:` payload to classifyChatFrame, and withoutPrivateTurns
+ * strips the marked turns out of the NEXT outbound body.
+ *
+ * This drives that exact composition over a synthetic frame sequence — including
+ * an abort mid-stream, which is the failure that leaked the ask in fix wave 2.
+ * Pure node:test: no React, no fetch, no network.
+ * ──────────────────────────────────────────────────────────────────────────── */
+type DriveResult = {
+  /** The read loop's silence flag. */
+  privateTurn: boolean;
+  /** Text accumulated from `text` frames. */
+  full: string;
+  /** Was the silence gate ALREADY armed when the first character existed? */
+  privateAtFirstText: boolean | null;
+  /** Did the loop end by abort (sendMessage's `if (name === "AbortError") return`)? */
+  aborted: boolean;
+};
+
+/**
+ * A byte-faithful stand-in for sendMessage's read loop
+ * (src/lib/stargate-context.tsx:512-532) — same buffering, same `data:` guard,
+ * same classifier, same flag. `abortAtChunk` throws an AbortError where
+ * `reader.read()` would when the operator hits stop / barges in / navigates.
+ */
+function driveChatStream(
+  chunks: string[],
+  opts: { abortAtChunk?: number } = {},
+): DriveResult {
+  let buffer = "";
+  let full = "";
+  let privateTurn = false;
+  let privateAtFirstText: boolean | null = null;
+  let aborted = false;
+
+  try {
+    for (let i = 0; i < chunks.length; i++) {
+      if (opts.abortAtChunk === i) {
+        const err = new Error("The user aborted a request.");
+        err.name = "AbortError";
+        throw err;
+      }
+      buffer += chunks[i];
+      const parts = buffer.split("\n\n");
+      buffer = parts.pop() ?? "";
+      for (const part of parts) {
+        const line = part.trim();
+        if (!line.startsWith("data:")) continue;
+        const frame = classifyChatFrame(line.slice(5).trim());
+        if (frame.kind === "private") {
+          privateTurn = true;
+        } else if (frame.kind === "text") {
+          if (privateAtFirstText === null) privateAtFirstText = privateTurn;
+          full += frame.text;
+        }
+      }
+    }
+  } catch (err) {
+    // sendMessage's catch: an aborted turn RETURNS — no history commit, no
+    // reply, no re-mark. Anything the ask needed must already be true.
+    if ((err as Error).name !== "AbortError") throw err;
+    aborted = true;
+  }
+
+  return { privateTurn, full, privateAtFirstText, aborted };
+}
+
+/** The route's own frame shapes (route.ts sse / sseFrame). */
+const marker = () => `data: ${JSON.stringify({ private: true })}\n\n`;
+const textFrame = (t: string) => `data: ${JSON.stringify({ text: t })}\n\n`;
+
+describe("private lane — composed stream drive (marker → text → abort)", () => {
+  it("arms the silence gate BEFORE the first character exists", () => {
+    const res = driveChatStream([
+      marker(),
+      textFrame("the code "),
+      textFrame("is 1234"),
+      "data: [DONE]\n\n",
+    ]);
+    assert.equal(res.privateTurn, true);
+    assert.equal(
+      res.privateAtFirstText,
+      true,
+      "marker-before-text is the whole contract — a gate armed after one text frame protects nothing",
+    );
+    assert.equal(res.full, "the code is 1234");
+  });
+
+  it("holds across frames split at arbitrary byte boundaries", () => {
+    // The marker itself arrives in two reads, then a text frame is torn in half.
+    const res = driveChatStream([
+      'data: {"priv',
+      'ate": true}\n\n' + 'data: {"text": "half',
+      ' a line"}\n\ndata: [DONE]\n\n',
+    ]);
+    assert.equal(res.privateTurn, true);
+    assert.equal(res.privateAtFirstText, true);
+    assert.equal(res.full, "half a line");
+  });
+
+  it("still marks and strips the ask when the stream aborts mid-reply", () => {
+    const ask = "private what is my SSN";
+    const priorHistory: Msg[] = [
+      { role: "user", content: "hey" },
+      { role: "assistant", content: "hey back" },
+    ];
+    // Commit time — before any fetch exists (stargate-context.tsx:461-463).
+    const userMsg = buildUserTurn(ask);
+    const nextHistory: Msg[] = [...priorHistory, userMsg];
+
+    const res = driveChatStream(
+      [marker(), textFrame("your SSN is "), textFrame("078-05-1120")],
+      { abortAtChunk: 2 },
+    );
+    assert.equal(res.aborted, true, "the loop must end by abort, not by [DONE]");
+    assert.equal(res.privateTurn, true);
+    assert.notEqual(res.full, "your SSN is 078-05-1120");
+
+    // The reply is never committed on an aborted turn — the ask survives, and it
+    // is ALREADY marked, because the mark came from the parser and not the stream.
+    assert.equal(nextHistory.at(-1)?.private, true);
+
+    // The next NORMAL turn's outbound body, built exactly the way sendMessage
+    // builds it (stargate-context.tsx:478-483).
+    const outbound = {
+      messages: [
+        ...withoutPrivateTurns(nextHistory),
+        { role: "user", content: "what's the weather" },
+      ],
+    };
+    assert.deepEqual(outbound.messages, [
+      { role: "user", content: "hey" },
+      { role: "assistant", content: "hey back" },
+      { role: "user", content: "what's the weather" },
+    ]);
+    assert.equal(
+      JSON.stringify(outbound).includes("SSN"),
+      false,
+      "the aborted private ask must not ride the next request to the hosted brain",
+    );
+  });
+
+  it("marks the ask even when the abort beats the marker frame", () => {
+    // Worst case: he hits stop before private-gpt sends a single byte. Nothing
+    // in the stream ever said `private` — the mark cannot depend on it.
+    const ask = "private ingest /Users/work/taxes.pdf";
+    const userMsg = buildUserTurn(ask);
+    const res = driveChatStream([marker(), textFrame("ingesting…")], {
+      abortAtChunk: 0,
+    });
+    assert.equal(res.aborted, true);
+    assert.equal(res.privateTurn, false, "no frame was ever read");
+    assert.equal(userMsg.private, true);
+    assert.deepEqual(withoutPrivateTurns([userMsg]), []);
   });
 });

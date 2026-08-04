@@ -41,6 +41,12 @@ PRIVATE_GPT_BASE=http://127.0.0.1:8080/v1
 read by the route at request time — no restart needed beyond Next's own env
 reload.
 
+**The port lives in two places — keep them equal.** The script binds
+`PRIVATE_GPT_PORT` (default `8080`, `scripts/private-gpt-up.sh`), and the route
+dials whatever port is inside `PRIVATE_GPT_BASE`. Change one without the other
+and the deck is pointed at nothing: every `private …` turn answers
+`Private lane is down.` while the service is in fact up on the other port.
+
 ## The three commands
 
 Typed into the deck chat, or into a live call:
@@ -48,7 +54,11 @@ Typed into the deck chat, or into a live call:
 - `private <ask>` — RAG chat against whatever has been ingested.
 - `private ingest <path>` — reads a local file (absolute path, or `~/...`)
   and indexes it. Replies with `Ingested <name> — N documents indexed.`
-  (see "N documents, not N chunks" below).
+  (see "N documents, not N chunks" below). **Deck-local only**: it reads any
+  absolute path on this Mac server-side, so — exactly like `run:`/`$` shell
+  commands — a request that arrived over the LAN/phone is refused before the
+  read, with `Private ingest is disabled over the network for safety.` Ask and
+  `docs` stay usable from the phone; they expose answers, not new file reads.
 - `private docs` — lists what's currently indexed.
 
 The prefix must be followed by whitespace or a colon — `privateer stories`,
@@ -65,8 +75,15 @@ only a bare `private docs` (optionally with a colon) lists.
   shell/tool fast-paths) sits lexically downstream of that return and is
   unreachable from inside it. The only host the branch ever talks to is
   `PRIVATE_GPT_BASE`, and a loopback check (`isLoopbackBase`) refuses to run
-  at all if that value isn't `127.0.0.1`/`localhost`/`::1` — a typo'd or
-  tampered env var cannot silently turn this into an exfiltration channel.
+  at all unless that value is a **numeric loopback literal** — dotted `127.x`
+  or `::1`, nothing else — so a typo'd or tampered env var cannot silently
+  turn this into an exfiltration channel. **Host NAMES are refused,
+  `localhost` included**, on purpose: a name is only ever what a resolver says
+  it is (`/etc/hosts`, a search domain, a hijacked resolver), and a prefix test
+  on a name is worse still — `127.0.0.1.evil.example.com` and
+  `127.attacker.example.com` are ordinary DNS-resolvable hosts that such a test
+  would wave through. Use the literal IP, which is what the default,
+  `.env.local`, and `private-gpt-up.sh` all use anyway.
 - **Replies are silent text, never spoken.** Both clients (deck chat and the
   live call) read the SSE stream's first frame, `data: {"private": true}`,
   before any text arrives, and skip TTS entirely for that turn — the deck
@@ -108,6 +125,16 @@ only a bare `private docs` (optionally with a colon) lists.
   stored copy of the exchange, but it cannot un-hear a sentence xAI's ears
   already transcribed. **Type `private …` on a call instead of speaking it**
   if the ask itself must never reach xAI.
+- **A private ask SPOKEN at the deck has already been heard by Google.** Not
+  just on a call — the deck's own wake-word and open-mic paths run through
+  Chrome's `SpeechRecognition` (`src/lib/voice/useVoiceLoop.ts`, `getSR()`),
+  which is a *server-based* recognizer: the audio goes to Google and comes back
+  as text, and only then does that text reach `sendMessage` and this lane. By
+  the time the word `private` exists as a string, the sentence has already left
+  the Mac. The lane still does its whole job on that text — local answer, no
+  TTS, nothing stored — but it cannot un-send the audio. **Type `private …`
+  into the deck instead of speaking it** when the ask itself must never leave
+  the machine.
 - **If `STARRA_CALL_BRAIN=grok` is ever set** (the emergency rollback for the
   locked Kimi call brain — see `CLAUDE.md`), typed private asks on a call are
   **not** protected. That rollback path runs through xAI's own `grok`
@@ -133,8 +160,14 @@ only a bare `private docs` (optionally with a colon) lists.
   ran 291-680 seconds under CPU contention — an orphaned `llama-server`
   process (pid noted in `.superpowers/sdd/task-1-report.md`) was pinning a
   full core throughout testing, unrelated to this build and left untouched.
-  The route allows up to 900 seconds per request
-  (`PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS=900`, set in `private-gpt-up.sh`).
+  The 900-second ceiling is **private-gpt's**, not the route's — it is that
+  service's own scheduler timeout (`PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS=900`,
+  exported by `private-gpt-up.sh`). The route sets no timeout of its own: its
+  fetch to private-gpt is aborted only by an operator disconnect, and the
+  `maxDuration = 180` at the top of `src/app/api/chat/route.ts` is an inert
+  hint here — Next only reads it at build time to hand a deployment platform
+  (Vercel) a function timeout; nothing under `next/dist/server/` enforces it,
+  so self-hosted `next start` ignores it entirely.
   Long silences on the deck/call stream during that wait are NORMAL, not a
   hang: private-gpt sends `ping` frames the whole time, which keep the
   route's *internal* fetch to private-gpt alive, but `streamPrivateChat`

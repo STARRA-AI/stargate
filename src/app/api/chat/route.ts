@@ -17,6 +17,7 @@ import {
   getWeather,
 } from "@/lib/tools/websearch";
 import { maybeToolReply } from "@/lib/tools/fastpath";
+import { isLocalRequest } from "@/lib/auth-lockout";
 import {
   parsePrivateCommand,
   type PrivateCommand,
@@ -292,6 +293,15 @@ const PRIVATE_COLLECTION = "pgpt_collection";
 const PRIVATE_MODEL = "qwen2.5:3b";
 const PRIVATE_DOWN_LINE =
   "Private lane is down. Run: scripts/private-gpt-up.sh";
+/**
+ * `private ingest <path>` reads ANY absolute path on this Mac server-side. That
+ * is the same class of power maybeShellReply holds, so it gets the same answer
+ * for a request that arrived over the LAN/phone, in the same voice. The two
+ * read-free commands are NOT gated: `private <ask>` and `private docs` expose
+ * answers over an already-authenticated deck, not new file reads.
+ */
+const PRIVATE_INGEST_REMOTE_LINE =
+  "Private ingest is disabled over the network for safety. Open the deck on this Mac (localhost) to ingest a file.";
 /** Base64 inflates ~4/3 and a 3B model on 8GB is the real bottleneck. */
 const PRIVATE_MAX_INGEST_BYTES = 8 * 1024 * 1024;
 
@@ -305,14 +315,34 @@ function privateGptBase(): string {
 /**
  * Privacy is the spec, so it is ENFORCED rather than assumed: a typo'd or
  * tampered PRIVATE_GPT_BASE pointing off-box would quietly turn the private
- * lane into an exfiltration channel. Only loopback targets are allowed.
+ * lane into an exfiltration channel.
+ *
+ * The rule is NUMERIC LOOPBACK LITERALS ONLY — dotted `127.x` (WHATWG URL
+ * normalizes shorthand like `127.1` to `127.0.0.1` before this sees it) or
+ * `::1`. Anything else is refused, and two refusals are deliberate:
+ *
+ *   - A PREFIX TEST ON A NAME is not a loopback test. The first cut used
+ *     `/^127\./` on the host, which accepts `127.0.0.1.evil.example.com` and
+ *     `127.attacker.example.com` — ordinary DNS-resolvable names that route
+ *     straight off this Mac. Anchoring to digits closes that.
+ *   - `localhost` IS DROPPED ON PURPOSE. A name is only ever what a resolver
+ *     says it is (/etc/hosts, a search domain, a hijacked resolver), so it is
+ *     not a guarantee of loopback. Nothing breaks: PRIVATE_GPT_DEFAULT_BASE
+ *     is the literal IP, .env.local carries the literal IP, and the runbook
+ *     (docs/PRIVATE_LANE.md) documents the literal IP.
+ *
+ * `::ffff:127.0.0.1` (IPv4-mapped IPv6, which URL serializes as
+ * `[::ffff:7f00:1]`) is refused too — it is loopback in practice, but
+ * accepting one alternate spelling invites the rest for no gain here.
  */
-function isLoopbackBase(base: string): boolean {
+export function isLoopbackBase(base: string): boolean {
   try {
     const u = new URL(base);
     if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-    const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
-    return host === "localhost" || host === "::1" || /^127\./.test(host);
+    // `hostname` keeps IPv6 bracketed; accept either spelling of ::1.
+    const host = u.hostname.toLowerCase();
+    if (host === "::1" || host === "[::1]") return true;
+    return /^127(?:\.\d{1,3}){1,3}$/.test(host);
   } catch {
     return false;
   }
@@ -568,8 +598,11 @@ async function privateDocs(opts: {
 async function privateLaneResponse(
   cmd: PrivateCommand,
   lastUser: string,
-  signal: AbortSignal,
+  req: Request,
 ): Promise<Response> {
+  const signal = req.signal;
+  // Only `private ingest` consults this — see PRIVATE_INGEST_REMOTE_LINE.
+  const host = req.headers.get("host");
   const base = privateGptBase();
   const system = clipSystemForLocal(PRIVATE_SYSTEM_CORE);
 
@@ -606,7 +639,7 @@ async function privateLaneResponse(
       try {
         if (!isLoopbackBase(base)) {
           for await (const c of stubStream(
-            `Private lane refused to start: PRIVATE_GPT_BASE must point at loopback (127.0.0.1). Got "${base}". Fix it in .env.local, then run: scripts/private-gpt-up.sh`,
+            `Private lane refused to start: PRIVATE_GPT_BASE must be a numeric loopback address (127.0.0.1 or ::1) — host names, "localhost" included, are refused. Got "${base}". Fix it in .env.local, then run: scripts/private-gpt-up.sh`,
           ))
             push(c);
           finish();
@@ -628,11 +661,13 @@ async function privateLaneResponse(
               push(c);
           }
         } else if (cmd.kind === "ingest") {
-          const line = await privateIngest({
-            base,
-            rawPath: cmd.path,
-            signal,
-          });
+          // DECK-LOCAL ONLY — mirrors maybeShellReply's refusal through the
+          // shared helper (src/lib/auth-lockout.ts), so the two host checks
+          // cannot drift. The read sits in the local arm: a LAN/phone request
+          // never reaches readFile at all, it just gets the sentence.
+          const line = isLocalRequest(host)
+            ? await privateIngest({ base, rawPath: cmd.path, signal })
+            : PRIVATE_INGEST_REMOTE_LINE;
           for await (const c of stubStream(line)) push(c);
         } else {
           const line = await privateDocs({ base, signal });
@@ -722,7 +757,7 @@ export async function POST(req: Request) {
   // construction, not by a conditional someone can later forget to update.
   const privateCmd = lastUser ? parsePrivateCommand(lastUser) : null;
   if (privateCmd) {
-    return privateLaneResponse(privateCmd, lastUser, req.signal);
+    return privateLaneResponse(privateCmd, lastUser, req);
   }
 
   const [tier1, memory, vault, obsidianVolatile] = await Promise.all([
