@@ -275,7 +275,7 @@ async function maybeShellReply(
  *     -> getMemory -> memoryForPrompt (route.ts:753) -> volatileExtras
  *     -> the system prompt -> Kimi/Grok/FreeLLM/Anthropic;
  *   the same store -> callDigest (api/memory/route.ts:18-20)
- *     -> useVoiceCall.ts:1898-1902 -> the xAI realtime session instructions.
+ *     -> the call client (src/lib/voice) -> the xAI session instructions.
  * Private CHAT turns are ephemeral by design; his durable private memory is
  * the private-gpt artifact store itself, which `private ingest` writes to and
  * `private docs` lists. Metering (addTokens) and the content-free feed line
