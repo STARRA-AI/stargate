@@ -43,6 +43,7 @@ yarn-error.log*
 /vendor/OpenMontage/
 /vendor/multica/
 /vendor/openalice/
+/vendor/private-gpt/
 /docs/reference/system_prompts_leaks/
 
 # Repomix default dumps
