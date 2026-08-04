@@ -156,13 +156,34 @@ only a bare `private docs` (optionally with a colon) lists.
   not `N chunks`. A re-ingest of an already-indexed file returns 0 entries
   (the vendor's de-dupe path, not a failure) and is reported as `already in
   the private index — nothing new to add.`
-- **Local replies can take minutes.** Verified completions on this machine
-  ran 291-680 seconds under CPU contention — an orphaned `llama-server`
-  process (pid noted in `.superpowers/sdd/task-1-report.md`) was pinning a
-  full core throughout testing, unrelated to this build and left untouched.
-  The 900-second ceiling is **private-gpt's**, not the route's — it is that
-  service's own scheduler timeout (`PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS=900`,
-  exported by `private-gpt-up.sh`). The route sets no timeout of its own: its
+- **The active model now stays resident — cold loads are the exception, not
+  the norm.** `scripts/starra`'s `start_ollama()` exports
+  `OLLAMA_KEEP_ALIVE=-1` (Ollama's own default is `5m`, confirmed via
+  `ollama serve --help`), so the model is never unloaded for idling —
+  `ollama ps` shows `UNTIL Forever` once it's loaded. Measured on this
+  machine 2026-08-04 (private-gpt `:8080` `/v1/messages`, `stream: true`,
+  plain chat, no RAG — the previous 291-680s numbers below were recorded
+  while an unrelated orphaned `llama-server` process was pinning a full CPU
+  core; that process is gone now, so this is a clean re-measurement, not
+  just a keep-alive effect):
+
+  | | time-to-first-token | total |
+  |---|---|---|
+  | **cold** (model not loaded) | 22.1s | 24.3s |
+  | **warm** (model resident) | 2.4s | 4.5s |
+
+  Undo the residency setting: `export OLLAMA_KEEP_ALIVE=5m` (or unset it)
+  before `starra up`, or edit the line directly in `start_ollama()`. Full
+  method, raw output, and `ollama ps` evidence in
+  `.superpowers/sdd/p2-task-1-report.md`.
+- **Local replies can still take a while under load.** The previous
+  measurement (291-680 seconds) was recorded under heavy, unrelated CPU
+  contention — see `.superpowers/sdd/task-1-report.md` — not a property of
+  private-gpt itself; treat the table above as the realistic baseline on an
+  otherwise-idle Mac. The 900-second ceiling is **private-gpt's**, not the
+  route's — it is that service's own scheduler timeout
+  (`PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS=900`, exported by
+  `private-gpt-up.sh`). The route sets no timeout of its own: its
   fetch to private-gpt is aborted only by an operator disconnect, and the
   `maxDuration = 180` at the top of `src/app/api/chat/route.ts` is an inert
   hint here — Next only reads it at build time to hand a deployment platform

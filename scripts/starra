@@ -235,6 +235,12 @@ start_ollama() {
     echo "→ Ollama models: default (Storage not mounted)"
   fi
   export OLLAMA_HOST="127.0.0.1:11434"
+  # Speed pack (P2 Task 1, 2026-08-04): keep the active model resident so the
+  # PRIVATE LANE's first ask after any idle gap doesn't pay a full cold model
+  # load (Ollama's own default OLLAMA_KEEP_ALIVE is "5m" — verified via
+  # `ollama serve --help`). -1 = never unload. Undo: `export
+  # OLLAMA_KEEP_ALIVE=5m` (or unset it) before `starra up`, or edit this line.
+  export OLLAMA_KEEP_ALIVE="${OLLAMA_KEEP_ALIVE:--1}"
   local bin="/usr/local/bin/ollama"
   [[ -x "$bin" ]] || bin="$(command -v ollama || true)"
   if [[ -z "$bin" ]]; then
