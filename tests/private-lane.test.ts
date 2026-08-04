@@ -8,6 +8,11 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parsePrivateCommand } from "../src/lib/private/commands";
+import {
+  classifyChatFrame,
+  withoutPrivateTurns,
+  type Msg,
+} from "../src/lib/stargate-context";
 
 describe("parsePrivateCommand — chat", () => {
   it("strips a whitespace-separated `private` prefix", () => {
@@ -256,6 +261,241 @@ describe("private lane parser — macOS 12 WebKit safety", () => {
       /\(\?<[=!]/.test(src),
       false,
       "lookbehind assertions crash Safari/WebKit on macOS 12",
+    );
+  });
+});
+
+/* ───────────────────────── TASK 3 — CLIENT SILENCE GATES ─────────────────────
+ * The route's half of the contract is a marker: `data: {"private": true}` is
+ * the FIRST frame of every private reply (src/app/api/chat/route.ts:603-604).
+ * A marker nobody reads protects nothing, so the two clients that consume
+ * /api/chat — the deck chat (stargate-context.tsx) and the live call
+ * (useVoiceCall.ts) — must both classify it and go silent for that turn.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+describe("classifyChatFrame — the SSE silence marker", () => {
+  it("classifies the private marker frame", () => {
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ private: true })), {
+      kind: "private",
+    });
+  });
+
+  it("classifies a text delta", () => {
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ text: "hi" })), {
+      kind: "text",
+      text: "hi",
+    });
+  });
+
+  it("takes `private` over `text` if a frame ever carried both", () => {
+    // The safe direction is silence: a frame that says private is private,
+    // whatever else rides on it.
+    assert.deepEqual(
+      classifyChatFrame(JSON.stringify({ private: true, text: "leak" })),
+      { kind: "private" },
+    );
+  });
+
+  it("demands a literal `true` — a truthy lookalike is not the marker", () => {
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ private: "true" })), {
+      kind: "ignore",
+    });
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ private: 1 })), {
+      kind: "ignore",
+    });
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ private: false })), {
+      kind: "ignore",
+    });
+  });
+
+  it("ignores [DONE], empty payloads and malformed frames", () => {
+    for (const payload of ["[DONE]", "", "   ", "{", "not json", "null", "[]"]) {
+      assert.deepEqual(
+        classifyChatFrame(payload),
+        { kind: "ignore" },
+        `payload ${JSON.stringify(payload)} must be inert`,
+      );
+    }
+  });
+
+  it("ignores an empty text delta, exactly like the old `if (json.text)`", () => {
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ text: "" })), {
+      kind: "ignore",
+    });
+    assert.deepEqual(classifyChatFrame(JSON.stringify({ text: 7 })), {
+      kind: "ignore",
+    });
+  });
+});
+
+describe("withoutPrivateTurns — the outbound-body filter", () => {
+  it("drops private-marked turns and keeps the order of the rest", () => {
+    const history: Msg[] = [
+      { role: "user", content: "hey" },
+      { role: "assistant", content: "hey back" },
+      { role: "user", content: "private what is the code", private: true },
+      { role: "assistant", content: "the code is 1234", private: true },
+      { role: "user", content: "what's the weather" },
+    ];
+    assert.deepEqual(withoutPrivateTurns(history), [
+      { role: "user", content: "hey" },
+      { role: "assistant", content: "hey back" },
+      { role: "user", content: "what's the weather" },
+    ]);
+  });
+
+  it("keeps every turn when none is marked (the normal lane is untouched)", () => {
+    const history: Msg[] = [
+      { role: "user", content: "a" },
+      { role: "assistant", content: "b" },
+    ];
+    assert.deepEqual(withoutPrivateTurns(history), history);
+  });
+
+  it("does not mutate the visible history it is given", () => {
+    const history: Msg[] = [
+      { role: "user", content: "secret", private: true },
+      { role: "user", content: "public" },
+    ];
+    withoutPrivateTurns(history);
+    assert.equal(history.length, 2, "visible history keeps private turns");
+    assert.equal(history[0].private, true);
+  });
+});
+
+/** Strip block + line comments so prose mentions can't mask a real call. */
+const stripComments = (src: string) =>
+  src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+const readSrc = async (rel: string) => {
+  const { readFile } = await import("node:fs/promises");
+  return readFile(new URL(`../${rel}`, import.meta.url), "utf8");
+};
+
+/** Slice [from, to) and prove the slice is real, so a rename fails loudly. */
+const between = (src: string, from: string, to: string) => {
+  const start = src.indexOf(from);
+  const end = src.indexOf(to, start + from.length);
+  assert.ok(start >= 0, `slice start not found: ${from}`);
+  assert.ok(end > start, `slice end not found after start: ${to}`);
+  return src.slice(start, end);
+};
+
+describe("silence gate — deck chat (stargate-context.tsx)", () => {
+  const CTX = "src/lib/stargate-context.tsx";
+
+  it("strips private turns out of every /api/chat body", async () => {
+    const src = stripComments(await readSrc(CTX));
+    assert.match(
+      src,
+      /body: JSON\.stringify\(\{ messages: withoutPrivateTurns\(nextHistory\) \}\)/,
+      "the outbound body must be filtered — an unfiltered nextHistory ships the private ask to the hosted brain",
+    );
+  });
+
+  it("never hands a private reply to the TTS path", async () => {
+    const branch = stripComments(
+      between(await readSrc(CTX), "if (privateTurn) {", 'setHudState("speaking")'),
+    );
+    assert.equal(
+      /\bspeakStarra\s*\(/.test(branch),
+      false,
+      "speakStarra POSTs the text to /api/tts, which sends it to xAI",
+    );
+    assert.equal(
+      /\bimport\s*\(\s*["']@\/lib\/voice\/speak["']\s*\)/.test(branch),
+      false,
+      "a private reply must not even load the TTS module",
+    );
+  });
+
+  it("releases the reveal gate so private text is never held back", async () => {
+    const branch = stripComments(
+      between(await readSrc(CTX), "if (privateTurn) {", 'setHudState("speaking")'),
+    );
+    assert.match(
+      branch,
+      /gate\.release\("silent"\)/,
+      'the G3 gate must release on the existing "silent" reason — nothing waits on audio that will never play',
+    );
+  });
+
+  it("logs the private landing line", async () => {
+    const src = await readSrc(CTX);
+    assert.match(src, /\[ORACLE\] private reply landed · local only/);
+  });
+
+  it("marks BOTH sides of a private turn in visible history", async () => {
+    const branch = stripComments(
+      between(await readSrc(CTX), "if (privateTurn) {", 'setHudState("speaking")'),
+    );
+    assert.match(branch, /private: true/, "the assistant commit carries the mark");
+    assert.match(
+      branch,
+      /role: "assistant", content: full, private: true/,
+      "the reply enters history marked, so the next turn's body filter sees it",
+    );
+  });
+});
+
+describe("silence gate — live call (useVoiceCall.ts)", () => {
+  const HOOK = "src/lib/voice/useVoiceCall.ts";
+
+  /** runKimiTurn's body — the only user-commit path on a kimi call. */
+  const kimiTurn = async () =>
+    between(
+      await readSrc(HOOK),
+      "const runKimiTurn = useCallback(",
+      "runKimiTurnRef.current = runKimiTurn;",
+    );
+
+  it("decides the ask is private BEFORE the optimistic user commit", async () => {
+    const body = stripComments(await kimiTurn());
+    const decided = body.indexOf("parsePrivateCommand(t)");
+    const committed = body.indexOf('recordCallTurn("user", t)');
+    assert.ok(decided >= 0, "runKimiTurn must classify the ask itself");
+    assert.ok(
+      decided < committed,
+      "recordCallTurn fires before the fetch — a POST cannot be recalled once the marker frame arrives",
+    );
+  });
+
+  it("keeps a private ask out of the store and out of the hosted context", async () => {
+    const body = stripComments(await kimiTurn());
+    assert.match(
+      body,
+      /if \(!privateAsk\) \{[\s\S]{0,200}?recordCallTurn\("user", t\);[\s\S]{0,200}?callTurnsRef\.current\.push\(\{ role: "user", text: t \}\);/,
+      "both the shared-store write and the hosted-bound context push must sit behind the private guard",
+    );
+  });
+
+  it("never speaks a private reply and never stores it", async () => {
+    const src = await readSrc(HOOK);
+    const branch = stripComments(
+      between(src, "if (privateReply) {", "speakForced(spoken, reply);"),
+    );
+    for (const forbidden of ["speakForced", "recordCallTurn"]) {
+      assert.equal(
+        new RegExp(`\\b${forbidden}\\s*\\(`).test(branch),
+        false,
+        `the private reply branch must not call ${forbidden} — force_message hands text to the xAI socket, recordCallTurn to the shared store`,
+      );
+    }
+    assert.equal(
+      /callTurnsRef\.current\.push\s*\(/.test(branch),
+      false,
+      "callTurnsRef rides later /api/chat bodies to the hosted Kimi brain",
+    );
+  });
+
+  it("still shows the private reply in the call column", async () => {
+    const branch = stripComments(
+      between(await readSrc(HOOK), "if (privateReply) {", "speakForced(spoken, reply);"),
+    );
+    assert.match(
+      branch,
+      /setTranscript\(\(prev\) => \[\.\.\.prev, \{ role: "assistant", text: reply \}\]\)/,
+      "she stays silent, but the text belongs on screen",
     );
   });
 });
