@@ -13,6 +13,10 @@ import {
 import type { HudState } from "@/lib/tokens";
 import { COPY, statusForState } from "@/lib/copy";
 import { speakableText } from "@/lib/voice/code-speech";
+// PRIVATE LANE — pure and client-safe by construction (commands.ts imports
+// nothing). The deck classifies the ask with the SAME function the route gates
+// on, so the mark exists before any abort can strand it.
+import { parsePrivateCommand } from "@/lib/private/commands";
 import {
   getBootGreeting,
   getBootGreetingMuted,
@@ -178,6 +182,31 @@ export function classifyChatFrame(payload: string): ChatFrame {
  */
 export function withoutPrivateTurns(msgs: Msg[]): Msg[] {
   return msgs.filter((m) => m.private !== true);
+}
+
+/**
+ * Build the user turn, ALREADY CLASSIFIED.
+ *
+ * The marker frame cannot mark the ask: it arrives mid-stream, and everything
+ * between the commit and the end of the stream can abort. Barge-in, the stop
+ * button, the next message, a dropped connection — each one throws AbortError
+ * and returns, and a mark applied only after the read loop would never happen.
+ * The ask would then sit in visible history UNMARKED and ride the very next
+ * normal turn's body to the hosted brain. So the mark is a function of the
+ * TEXT, decided before anything can go wrong, exactly the way the call's
+ * `privateAsk` is (src/lib/voice/useVoiceCall.ts:1065).
+ *
+ * Same parser, same string, same verdict as the route: /api/chat classifies
+ * the LAST user message (src/app/api/chat/route.ts:713-725), and that message
+ * is this one.
+ *
+ * A normal turn comes back with NO `private` key at all — not `undefined` —
+ * so nothing about its shape, its JSON, or its rendering changes.
+ */
+export function buildUserTurn(content: string): Msg {
+  return parsePrivateCommand(content) !== null
+    ? { role: "user", content, private: true }
+    : { role: "user", content };
 }
 
 export type ConnectorStatus = "connected" | "available" | "error";
@@ -424,8 +453,13 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         window.speechSynthesis.getVoices();
       }
 
-      const userMsg: Msg = { role: "user", content: trimmed };
-      const nextHistory: Msg[] = [...historyRef.current, userMsg];
+      // Read the ref ONCE. Everything below is derived from this exact array,
+      // so the body and the commit can never disagree about what came before.
+      const priorHistory = historyRef.current;
+      // PRIVATE LANE: the ask is marked HERE, at commit time — before the fetch
+      // exists, so no abort or error path can leave it unmarked in history.
+      const userMsg: Msg = buildUserTurn(trimmed);
+      const nextHistory: Msg[] = [...priorHistory, userMsg];
       setHistory(nextHistory);
       setStreaming("");
       setHudState("thinking");
@@ -435,12 +469,18 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          // PRIVATE LANE: earlier private turns are stripped from the outbound
-          // body (they stay on screen). `userMsg` is not marked yet and is not
-          // stripped — it MUST be sent, because it is the string the route
-          // parses to decide the turn is private in the first place
-          // (src/app/api/chat/route.ts:713-725).
-          body: JSON.stringify({ messages: withoutPrivateTurns(nextHistory) }),
+          // PRIVATE LANE: PRIOR private turns are stripped (they stay on
+          // screen, they just never ride a request again). The ask being asked
+          // is NOT stripped — filtering `nextHistory` would remove it now that
+          // it is marked up front, and the route needs that exact string to
+          // route the turn locally at all (src/app/api/chat/route.ts:713-725).
+          // It is sent unmarked: `private` is client bookkeeping, not wire.
+          body: JSON.stringify({
+            messages: [
+              ...withoutPrivateTurns(priorHistory),
+              { role: "user", content: trimmed },
+            ],
+          }),
           signal: fetchAc.signal,
         });
 
@@ -508,10 +548,13 @@ export function StargateProvider({ children }: { children: ReactNode }) {
           // never coming.
           gate.release("silent");
           setHistory((h) => [
-            // Mark the ask that started this. Identity is the real match
-            // (React keeps the object we pushed); the content fallback covers
-            // the pathological case where identity was lost — over-marking
-            // only ever removes MORE from an outbound body, never less.
+            // The ask is ALREADY marked (buildUserTurn, at commit time). This
+            // re-mark is the belt for a disagreement that should be impossible
+            // — the route answered privately on a string the client parser read
+            // as public. Identity is the real match (React keeps the object we
+            // pushed); the content fallback covers a lost identity. Both are
+            // no-ops on the normal path, and over-marking only ever removes
+            // MORE from an outbound body, never less.
             ...h.map((m) =>
               m === userMsg || (m.role === "user" && m.content === trimmed)
                 ? { ...m, private: true as const }

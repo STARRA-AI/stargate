@@ -9,6 +9,7 @@ import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parsePrivateCommand } from "../src/lib/private/commands";
 import {
+  buildUserTurn,
   classifyChatFrame,
   withoutPrivateTurns,
   type Msg,
@@ -388,8 +389,18 @@ describe("silence gate — deck chat (stargate-context.tsx)", () => {
     const src = stripComments(await readSrc(CTX));
     assert.match(
       src,
-      /body: JSON\.stringify\(\{ messages: withoutPrivateTurns\(nextHistory\) \}\)/,
-      "the outbound body must be filtered — an unfiltered nextHistory ships the private ask to the hosted brain",
+      /messages: \[\s*\.\.\.withoutPrivateTurns\(priorHistory\),/,
+      "PRIOR private turns must be stripped from the outbound body",
+    );
+    assert.equal(
+      /withoutPrivateTurns\(nextHistory\)/.test(src),
+      false,
+      "filtering nextHistory strips the ask being asked — but the route needs that exact string to route the turn locally (route.ts:713-725)",
+    );
+    assert.match(
+      src,
+      /\{ role: "user", content: trimmed \},\s*\]/,
+      "the current ask must still be sent, and sent UNMARKED (a `private: true` key is noise on the wire)",
     );
   });
 
@@ -435,6 +446,94 @@ describe("silence gate — deck chat (stargate-context.tsx)", () => {
       /role: "assistant", content: full, private: true/,
       "the reply enters history marked, so the next turn's body filter sees it",
     );
+  });
+
+  /**
+   * THE ABORT LEAK (fix wave 2). Marking the ask only after the read loop
+   * finishes is not enough: `private what's my SSN` -> marker frame -> he hits
+   * stop (or a barge-in / the next message calls abortTurn) -> AbortError ->
+   * the ask sits in history UNMARKED -> the next NORMAL turn's body filter does
+   * not strip it -> the literal private ask POSTs to the hosted brain.
+   *
+   * The mark therefore has to exist BEFORE anything can abort — which means it
+   * cannot come from the stream at all. It comes from the parser, up front, the
+   * same way the call's `privateAsk` does.
+   */
+  it("marks the ask at COMMIT time, before any fetch can abort", async () => {
+    const src = stripComments(await readSrc(CTX));
+    const classified = src.indexOf("buildUserTurn(trimmed)");
+    const committed = src.indexOf("setHistory(nextHistory)");
+    const fetched = src.indexOf('fetch("/api/chat"');
+    assert.ok(classified > 0, "the ask must be classified by the parser up front");
+    assert.ok(
+      classified < committed,
+      "classification must precede the commit to history",
+    );
+    assert.ok(
+      committed < fetched,
+      "…and the whole decision must precede the fetch that can abort",
+    );
+  });
+
+  it("does not depend on the marker frame to mark the ask", async () => {
+    const src = stripComments(await readSrc(CTX));
+    // `privateTurn` is the marker-frame flag. If the ONLY place the user turn
+    // gets marked is behind it, every abort/error path leaks the ask.
+    const commitSite = between(src, "const userMsg", "setStreaming(\"\")");
+    assert.equal(
+      /privateTurn/.test(commitSite),
+      false,
+      "the commit site must not consult the stream flag — the stream may never finish",
+    );
+    assert.match(
+      commitSite,
+      /buildUserTurn/,
+      "the commit site must carry the mark itself",
+    );
+  });
+});
+
+/**
+ * The up-front classification, as a unit. This is what makes the abort path
+ * safe, and it is provable without a fetch, a stream or a React tree: the mark
+ * is a function of the TEXT, never of how the turn ended.
+ */
+describe("buildUserTurn — the ask is classified before it is committed", () => {
+  it("marks a private ask", () => {
+    assert.deepEqual(buildUserTurn("private what is my SSN"), {
+      role: "user",
+      content: "private what is my SSN",
+      private: true,
+    });
+  });
+
+  it("defers to the parser, so every prefix form is covered", () => {
+    assert.equal(buildUserTurn("private: what is my SSN").private, true);
+    assert.equal(buildUserTurn("PRIVATE docs").private, true);
+    assert.equal(buildUserTurn("private ingest /tmp/a.txt").private, true);
+  });
+
+  it("leaves a normal ask byte-identical to today's — no `private` key at all", () => {
+    const turn = buildUserTurn("what's the weather");
+    assert.deepEqual(turn, { role: "user", content: "what's the weather" });
+    assert.equal(
+      "private" in turn,
+      false,
+      "an absent key, not `private: undefined` — the normal lane must not change shape",
+    );
+  });
+
+  it("does not mark a word that merely starts with `private`", () => {
+    assert.equal("private" in buildUserTurn("privateer stories"), false);
+    assert.equal("private" in buildUserTurn("keep this private please"), false);
+    assert.equal("private" in buildUserTurn("private"), false); // bare prefix
+  });
+
+  it("survives the abort scenario by construction", () => {
+    // No stream, no marker frame, no completion — and the ask is already
+    // stripped from anything bound for a hosted brain.
+    const turn = buildUserTurn("private what is my SSN");
+    assert.deepEqual(withoutPrivateTurns([turn]), []);
   });
 });
 
