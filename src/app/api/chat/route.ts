@@ -18,6 +18,10 @@ import {
 } from "@/lib/tools/websearch";
 import { maybeToolReply } from "@/lib/tools/fastpath";
 import {
+  parsePrivateCommand,
+  type PrivateCommand,
+} from "@/lib/private/commands";
+import {
   ollamaStatus,
   ollamaConfig,
   streamOllama,
@@ -43,6 +47,11 @@ type ChatMessage = { role: "user" | "assistant"; content: string };
 
 function sse(text: string) {
   return `data: ${JSON.stringify({ text })}\n\n`;
+}
+
+/** Non-text control frame (the private marker). Same SSE envelope, no `text`. */
+function sseFrame(obj: Record<string, unknown>) {
+  return `data: ${JSON.stringify(obj)}\n\n`;
 }
 
 /** Local 1.5B on 8GB: ~60–80ms/token. Cap ~2k chars so prompt eval stays HUD-viable. */
@@ -240,6 +249,429 @@ async function maybeShellReply(
   return runShellCommand(cmd.trim());
 }
 
+/* ══════════════════════════════ PRIVATE LANE ══════════════════════════════
+ *
+ * A turn that opens with `private …` NEVER leaves this Mac. The branch below
+ * talks to exactly one host — the local private-gpt service (Ollama-backed,
+ * qwen2.5:3b + nomic-embed-text) — and to nothing else.
+ *
+ * Structural guarantee, not a promise: POST returns from the private branch
+ * BEFORE it builds the system prompt, so every outbound call in this route is
+ * physically downstream of that return — getWeather/webSearch (wttr.in, DDG),
+ * every hosted provider, maybeShellReply, maybeToolReply, and — the sharpest
+ * edge — extractFactsFromExchange, which posts the exchange to Groq/Kimi
+ * (src/lib/memory/extract.ts:54-55). None of it is reachable from here.
+ *
+ * There is deliberately NO hosted fallback: a silent fallback on a private
+ * failure would ship the private ask to a cloud provider, which is the exact
+ * thing this lane exists to prevent. If the service is down, she says so.
+ *
+ * VERIFIED against the vendor clone at vendor/private-gpt (2026-08-04) and
+ * live against the running service — citations in .superpowers/sdd/task-2-report.md.
+ */
+
+const PRIVATE_GPT_DEFAULT_BASE = "http://127.0.0.1:8080/v1";
+/** Vendor default collection — `ContextFilter.collection`, context_filter.py:22-26. */
+const PRIVATE_COLLECTION = "pgpt_collection";
+/** Registered by scripts/private-gpt-up.sh via PGPT_LLM_DEFAULT. */
+const PRIVATE_MODEL = "qwen2.5:3b";
+const PRIVATE_DOWN_LINE =
+  "Private lane is down. Run: scripts/private-gpt-up.sh";
+/** Base64 inflates ~4/3 and a 3B model on 8GB is the real bottleneck. */
+const PRIVATE_MAX_INGEST_BYTES = 8 * 1024 * 1024;
+
+/** Read at request time — no restart needed beyond Next's own env reload. */
+function privateGptBase(): string {
+  return (process.env.PRIVATE_GPT_BASE || PRIVATE_GPT_DEFAULT_BASE)
+    .trim()
+    .replace(/\/+$/, "");
+}
+
+/**
+ * Privacy is the spec, so it is ENFORCED rather than assumed: a typo'd or
+ * tampered PRIVATE_GPT_BASE pointing off-box would quietly turn the private
+ * lane into an exfiltration channel. Only loopback targets are allowed.
+ */
+function isLoopbackBase(base: string): boolean {
+  try {
+    const u = new URL(base);
+    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
+    const host = u.hostname.toLowerCase().replace(/^\[/, "").replace(/\]$/, "");
+    return host === "localhost" || host === "::1" || /^127\./.test(host);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Compact private-mode persona. qwen2.5:3b gets the same treatment the local
+ * Ollama lane gets — clipSystemForLocal's budget + hard voice tail — never the
+ * full canon, which would eat the whole prompt-eval window on a 3B model.
+ */
+const PRIVATE_SYSTEM_CORE = `
+You are STARGATE (STARRA) in PRIVATE MODE, running entirely on Classic's Mac:
+local model, local documents, no internet, no cloud. Nothing said here leaves
+the machine. If he asks, tell him that plainly.
+Answer from the retrieved private documents first. When a document has the
+answer, use its wording. When the documents do not cover it, say so in one
+short line BEFORE you answer from your own knowledge — never dress a guess as
+a citation.
+Be short and concrete. One clear answer beats an essay.
+`.trim();
+
+/** One SSE frame of private-gpt's stream, reduced to its `data:` payload. */
+function privateSseData(frame: string): string | null {
+  const lines = frame.split("\n");
+  const data: string[] = [];
+  for (const line of lines) {
+    if (line.startsWith("data:")) data.push(line.slice(5).trim());
+  }
+  return data.length ? data.join("\n") : null;
+}
+
+/**
+ * Stream a RAG answer out of private-gpt.
+ *
+ * Streaming is used because the endpoint supports it — `ChatBody.stream`
+ * (vendor/private-gpt/private_gpt/server/chat/chat_models.py:24-27), emitted as
+ * Anthropic-shaped SSE (`event: content_block_delta` with a `text_delta`,
+ * chat_router.py:140-141; models at events/models/_events.py:43-52 and
+ * _deltas.py:20-23). It also matters practically: completions here have run
+ * 291-531s, and the stream's `ping` frames keep the socket warm instead of
+ * leaving the deck silent for nine minutes.
+ *
+ * RAG must be FORCED: qwen2.5:3b will not self-select the tool (it asks a
+ * clarifying question instead), and the server rejects `tool_context` unless a
+ * matching `tools` entry is present (chat_models.py:337-341). Omitting
+ * `artifacts` from the context filter searches the whole collection
+ * (ContextFilter.artifacts defaults to None — context_filter.py:27-31).
+ */
+async function streamPrivateChat(opts: {
+  base: string;
+  ask: string;
+  system: string;
+  signal: AbortSignal;
+  onText: (t: string) => void;
+}): Promise<{ sawText: boolean }> {
+  const res = await fetch(`${opts.base}/messages`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Accept: "text/event-stream",
+    },
+    body: JSON.stringify({
+      model: PRIVATE_MODEL,
+      stream: true,
+      system: opts.system,
+      // Single turn by design: deck history may contain non-private turns, and
+      // mixing them in would both pollute the private context and blow a 3B
+      // model's window. Each private ask stands alone.
+      messages: [{ role: "user", content: opts.ask }],
+      tools: [{ name: "semantic_search", type: "semantic_search_v1" }],
+      tool_choice: { type: "tool", name: "semantic_search" },
+      tool_context: [
+        {
+          type: "ingested_artifact",
+          context_filter: { collection: PRIVATE_COLLECTION },
+        },
+      ],
+    }),
+    // No client-side timeout: 900s is legitimate here
+    // (PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS). Only an operator disconnect aborts.
+    signal: opts.signal,
+  });
+  if (!res.ok || !res.body) {
+    throw new Error(`private-gpt chat returned HTTP ${res.status}`);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buf = "";
+  let sawText = false;
+  let fatal = "";
+
+  const consume = (payload: string) => {
+    if (payload === "[DONE]") return;
+    let evt: {
+      type?: string;
+      delta?: { type?: string; text?: string };
+      error?: { message?: string; detail?: unknown };
+    };
+    try {
+      evt = JSON.parse(payload);
+    } catch {
+      return;
+    }
+    // ONLY text_delta is surfaced. tool_use / tool_result / thinking /
+    // input_json blocks carry raw retrieved document text and internal state —
+    // they belong in the answer she writes, not on the operator's screen.
+    if (evt.type === "content_block_delta" && evt.delta?.type === "text_delta") {
+      const t = evt.delta.text;
+      if (t) {
+        sawText = true;
+        opts.onText(t);
+      }
+    } else if (evt.type === "error" && !fatal) {
+      fatal = evt.error?.message || "private-gpt reported an error";
+    }
+  };
+
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+    let idx = buf.indexOf("\n\n");
+    while (idx !== -1) {
+      const payload = privateSseData(buf.slice(0, idx));
+      buf = buf.slice(idx + 2);
+      if (payload) consume(payload);
+      idx = buf.indexOf("\n\n");
+    }
+  }
+  const tail = privateSseData(buf);
+  if (tail) consume(tail);
+
+  if (fatal && !sawText) throw new Error(fatal);
+  return { sawText };
+}
+
+/**
+ * Read a local file and ingest it. Sent as a base64 `file` artifact
+ * (artifact_input.py:60-81) rather than plain text so PDFs/DOCX go through the
+ * vendor's own extraction pipeline instead of arriving as mojibake. The
+ * extension check mirrors the server's own validation
+ * (components/ingest/ingest_helper.py:30-32), so a bad path fails here with a
+ * useful sentence instead of an opaque 500.
+ */
+async function privateIngest(opts: {
+  base: string;
+  rawPath: string;
+  signal: AbortSignal;
+}): Promise<string> {
+  const { readFile } = await import("node:fs/promises");
+  const { homedir } = await import("node:os");
+  const nodePath = await import("node:path");
+
+  let filePath = opts.rawPath;
+  if (filePath === "~") filePath = homedir();
+  else if (filePath.startsWith("~/"))
+    filePath = nodePath.join(homedir(), filePath.slice(2));
+
+  if (!nodePath.isAbsolute(filePath)) {
+    return `Private ingest needs an absolute path (or one starting with ~/). Got: ${opts.rawPath}`;
+  }
+  const fileName = nodePath.basename(filePath);
+  if (!nodePath.extname(fileName)) {
+    return `Private ingest needs a file with an extension — private-gpt rejects extensionless files. Got: ${fileName}`;
+  }
+
+  let bytes: Buffer;
+  try {
+    bytes = await readFile(filePath);
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Can't read ${filePath} — ${msg}`;
+  }
+  if (bytes.length === 0) return `${fileName} is empty — nothing to ingest.`;
+  if (bytes.length > PRIVATE_MAX_INGEST_BYTES) {
+    return `${fileName} is ${(bytes.length / 1_048_576).toFixed(1)} MB — over the ${PRIVATE_MAX_INGEST_BYTES / 1_048_576} MB private-ingest cap. Split it or trim it.`;
+  }
+
+  const res = await fetch(`${opts.base}/artifacts/ingest`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      artifact: fileName.slice(0, 255),
+      collection: PRIVATE_COLLECTION,
+      input: { type: "file", value: bytes.toString("base64") },
+      metadata: { file_name: fileName },
+    }),
+    signal: opts.signal,
+  });
+  const raw = await res.text();
+  if (!res.ok) {
+    return `Ingest of ${fileName} failed — HTTP ${res.status}. ${raw.slice(0, 240)}`;
+  }
+  let count = 0;
+  try {
+    const json = JSON.parse(raw) as { data?: unknown[] };
+    count = Array.isArray(json.data) ? json.data.length : 0;
+  } catch {
+    /* 200 with an unparseable body — report the ingest, not the parse */
+  }
+  // An empty `data` on a 200 is the vendor's de-dupe path, not a failure:
+  // "Artifact is already ingested in the node store. Skipping."
+  // (components/ingest/ingest_component.py:118). Reporting "0 documents" there
+  // would read as a failure for a file that is in fact searchable.
+  if (count === 0) {
+    return `${fileName} is already in the private index — nothing new to add.`;
+  }
+  // "documents", not "chunks": IngestResponse.data is one entry per ingested
+  // DOCUMENT (ingest_router.py:278-291, model.py:10-30) — it carries no chunk
+  // count at all. The smoke doc indexes as 5 vector nodes but returns 1 entry,
+  // so calling it "1 chunks" would be both wrong and ungrammatical.
+  return `Ingested ${fileName} — ${count} document${count === 1 ? "" : "s"} indexed.`;
+}
+
+/** List what's in the private collection. `collection` is REQUIRED — the route
+ * 400s without it (ingest_router.py:808-810, verified live). */
+async function privateDocs(opts: {
+  base: string;
+  signal: AbortSignal;
+}): Promise<string> {
+  const url = `${opts.base}/artifacts/list?collection=${encodeURIComponent(PRIVATE_COLLECTION)}`;
+  const res = await fetch(url, {
+    headers: { Accept: "application/json" },
+    signal: opts.signal,
+  });
+  if (!res.ok) {
+    return `Private docs listing failed — HTTP ${res.status}.`;
+  }
+  const json = (await res.json()) as {
+    data?: { artifact?: string; doc_metadata?: { file_name?: string } }[];
+  };
+  const docs = Array.isArray(json.data) ? json.data : [];
+  if (docs.length === 0) {
+    return "No private documents ingested yet. Add one with: private ingest /path/to/file.txt";
+  }
+  const lines = docs.map((d) => {
+    const id = d.artifact || "(unnamed)";
+    const name = d.doc_metadata?.file_name;
+    return name && name !== id ? `- ${name} (${id})` : `- ${id}`;
+  });
+  return `Private documents (${docs.length}):\n${lines.join("\n")}`;
+}
+
+/**
+ * The private branch. Returns a complete SSE Response — the caller returns it
+ * immediately, so nothing further down POST() runs.
+ *
+ * Frame contract: `data: {"private": true}` lands FIRST, before any text, so
+ * the client's silence gate can mute TTS before a single private character
+ * renders. Then normal `data: {"text": …}` frames, then `data: [DONE]`.
+ */
+async function privateLaneResponse(
+  cmd: PrivateCommand,
+  lastUser: string,
+  signal: AbortSignal,
+): Promise<Response> {
+  const base = privateGptBase();
+  const system = clipSystemForLocal(PRIVATE_SYSTEM_CORE);
+
+  // Same bookkeeping as a normal turn, with one difference that IS the point:
+  // the feed line carries no private text. recordExchange writes to a local
+  // file (src/lib/memory/store.ts) and stays.
+  if (cmd.kind === "chat") await recordExchange("user", lastUser);
+  pushFeed("EXEC", "Operator: [private]");
+  addTokens(lastUser.length + system.length / 8);
+
+  const encoder = new TextEncoder();
+  const stream = new ReadableStream({
+    async start(controller) {
+      let full = "";
+      const push = (t: string) => {
+        full += t;
+        controller.enqueue(encoder.encode(sse(t)));
+      };
+      // A private turn can run for minutes, so the operator closing the deck
+      // mid-answer is a normal event, not an exception. Once the socket is
+      // gone, enqueue/close throw — swallow that rather than surfacing an
+      // unhandled rejection for something that already did its job.
+      const finish = () => {
+        try {
+          controller.enqueue(encoder.encode("data: [DONE]\n\n"));
+          controller.close();
+        } catch {
+          /* client already disconnected */
+        }
+      };
+
+      // Silence gate — must precede every text frame.
+      controller.enqueue(encoder.encode(sseFrame({ private: true })));
+
+      try {
+        if (!isLoopbackBase(base)) {
+          for await (const c of stubStream(
+            `Private lane refused to start: PRIVATE_GPT_BASE must point at loopback (127.0.0.1). Got "${base}". Fix it in .env.local, then run: scripts/private-gpt-up.sh`,
+          ))
+            push(c);
+          finish();
+          return;
+        }
+
+        if (cmd.kind === "chat") {
+          const { sawText } = await streamPrivateChat({
+            base,
+            ask: cmd.text,
+            system,
+            signal,
+            onText: push,
+          });
+          if (!sawText) {
+            for await (const c of stubStream(
+              "Private lane answered with a search but no text — qwen2.5:3b stopped at the tool call. Ask again, more specifically.",
+            ))
+              push(c);
+          }
+        } else if (cmd.kind === "ingest") {
+          const line = await privateIngest({
+            base,
+            rawPath: cmd.path,
+            signal,
+          });
+          for await (const c of stubStream(line)) push(c);
+        } else {
+          const line = await privateDocs({ base, signal });
+          for await (const c of stubStream(line)) push(c);
+        }
+
+        if (full) {
+          if (cmd.kind === "chat") {
+            await recordExchange("assistant", full);
+          }
+          // extractFactsFromExchange is DELIBERATELY not called: it posts the
+          // exchange to Groq/Kimi (src/lib/memory/extract.ts:54-55). Distilling
+          // private turns through a cloud model would defeat the lane.
+          addTokens(full.length);
+          pushFeed("ORACLE", `Private reply landed — ${full.length} chars`);
+        }
+        finish();
+      } catch (err) {
+        // No hosted fallback, ever — the ask stays on this machine even when
+        // the lane fails. Connection refused / DNS / abort => the service is
+        // down; anything else gets reported as itself.
+        if (signal.aborted) {
+          // Operator walked away — nothing to report to a socket that's gone.
+          finish();
+          return;
+        }
+        const msg = err instanceof Error ? err.message : String(err);
+        const down =
+          /ECONNREFUSED|ENOTFOUND|EHOSTUNREACH|ECONNRESET|fetch failed|socket hang up/i.test(
+            msg,
+          );
+        try {
+          for await (const c of stubStream(
+            down ? PRIVATE_DOWN_LINE : `Private lane error: ${msg}`,
+          ))
+            push(c);
+        } catch {
+          /* client vanished while we were explaining the failure */
+        }
+        finish();
+      }
+    },
+  });
+
+  return new Response(stream, {
+    headers: {
+      "Content-Type": "text/event-stream; charset=utf-8",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+    },
+  });
+}
+
 export async function POST(req: Request) {
   // A malformed body would otherwise throw here — outside the ReadableStream's
   // try/catch — and 500 the route with no SSE at all. Return a clean 400 instead.
@@ -247,18 +679,39 @@ export async function POST(req: Request) {
     messages?: ChatMessage[];
     /** When true, Anthropic path may use tool_use (bounded by MAX_AGENT_TURNS). */
     agentTools?: boolean;
+    /** True when this request IS the live call's brain turn (the kimi call
+     * path under src/lib/voice). Adds the spoken-style tail to the system
+     * prompt and SUPPRESSES this route's memory writes — the call client
+     * already records its turns via /api/memory (recordCallTurn,
+     * revision-aware); recording here too would double-write every call turn
+     * into the shared store. This route stays call-independent: a boolean in,
+     * SSE text out, nothing else. */
+    callVoice?: boolean;
   };
   try {
     body = (await req.json()) as {
       messages?: ChatMessage[];
       agentTools?: boolean;
+      callVoice?: boolean;
     };
   } catch {
     return Response.json({ error: "invalid JSON body" }, { status: 400 });
   }
+  const callVoice = body.callVoice === true;
   const messages = Array.isArray(body.messages) ? body.messages : [];
   const lastUser =
     [...messages].reverse().find((m) => m.role === "user")?.content ?? "";
+
+  // ── PRIVATE LANE GATE ───────────────────────────────────────────────────
+  // Placed here on purpose: this is the earliest point at which `lastUser`
+  // exists, and it is ABOVE every outbound call in this route — the wttr.in /
+  // DuckDuckGo block, all hosted providers, both fast-paths, and the Kimi-backed
+  // fact extractor. Returning here makes them unreachable for a private turn by
+  // construction, not by a conditional someone can later forget to update.
+  const privateCmd = lastUser ? parsePrivateCommand(lastUser) : null;
+  if (privateCmd) {
+    return privateLaneResponse(privateCmd, lastUser, req.signal);
+  }
 
   const [tier1, memory, vault, obsidianVolatile] = await Promise.all([
     getTier1(),
@@ -310,12 +763,23 @@ export async function POST(req: Request) {
     'STYLE: Write in a warm, unhurried Southern-drawl cadence — relaxed, honeyed word choice, not phonetic spelling. Do NOT lean on stock devotion lines: never repeat "I\'m all yours," "I\'m right here," or similar clingy/possessive catchphrases as a tic; show closeness through what you actually say. Keep pet names ("baby"/"love") rare and earned.',
   ];
   const systemBlocks = buildSystemPromptBlocks(volatileExtras);
-  const system = systemBlocks.full;
+  // LIVE CALL turns get a spoken-style tail: her call replies must be short
+  // speakable prose, not deck-chat markdown (the reply is spoken verbatim by
+  // the voice link — see the kimi call path under src/lib/voice).
+  const system = callVoice
+    ? `${systemBlocks.full}\n\nLIVE CALL: You are answering on a live voice call. Reply in 1-3 short spoken sentences unless he asks for depth. No markdown headers, no bullet lists. Code only if he explicitly asked for code (it lands in the call chat, not your voice).`
+    : systemBlocks.full;
 
   if (lastUser) {
-    await recordExchange("user", lastUser);
+    // Call turns: memory is the CLIENT's job (recordCallTurn — see the
+    // callVoice doc on the body type) and the call transcript is already on
+    // screen, so no memory write and no EXEC feed line. Metering and the
+    // security alert apply to every turn regardless of surface.
+    if (!callVoice) {
+      await recordExchange("user", lastUser);
+      pushFeed("EXEC", `Operator: ${redact(lastUser).slice(0, 70)}`);
+    }
     addTokens(lastUser.length + system.length / 8);
-    pushFeed("EXEC", `Operator: ${redact(lastUser).slice(0, 70)}`);
     if (!operatorScan.clean) {
       pushFeed(
         "ALERT",
@@ -536,7 +1000,14 @@ export async function POST(req: Request) {
         }
 
         if (full) {
-          await recordExchange("assistant", stripThinkTags(full));
+          // callVoice: the call client records her spoken reply itself
+          // (speakForced → recordCallTurn) — writing it here too would
+          // double-write the shared store. Fact distillation + metering still
+          // run: what she learns on a call she should keep, whoever wrote the
+          // turn rows.
+          if (!callVoice) {
+            await recordExchange("assistant", stripThinkTags(full));
+          }
           // Durable-fact distillation (mem0-style, free driver) — fire-and-
           // forget: the stream is closing and must never wait on it.
           void extractFactsFromExchange(lastUser, stripThinkTags(full));
