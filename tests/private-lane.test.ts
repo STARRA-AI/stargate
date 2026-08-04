@@ -251,6 +251,46 @@ describe("private lane — writes nothing to the shared memory store", () => {
   });
 });
 
+/**
+ * The client's silence gate (Task 3) only works if the marker is genuinely
+ * the FIRST thing the private branch ever enqueues — a marker that can arrive
+ * after even one text frame protects nothing, because the client has already
+ * started speaking/rendering before it reads the flag.
+ */
+describe("private lane — first-frame contract", () => {
+  it('emits `{"private": true}` as the very first frame, before any text', async () => {
+    const { readFile } = await import("node:fs/promises");
+    const src = await readFile(
+      new URL("../src/app/api/chat/route.ts", import.meta.url),
+      "utf8",
+    );
+    const banner = src.indexOf("PRIVATE LANE");
+    const start = src.lastIndexOf("/*", banner);
+    const end = src.indexOf("export async function POST");
+    assert.ok(banner > 0, "PRIVATE LANE banner not found in route.ts");
+    assert.ok(start > 0, "banner's opening block comment not found");
+    assert.ok(end > start, "POST handler not found after the private branch");
+    const branch = src
+      .slice(start, end)
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/\/\/[^\n]*/g, "");
+
+    const markerIdx = branch.search(
+      /sseFrame\(\s*\{\s*private:\s*true\s*\}\s*\)/,
+    );
+    assert.ok(
+      markerIdx >= 0,
+      'route.ts must enqueue sseFrame({ private: true }) inside the private branch',
+    );
+
+    const firstPushIdx = branch.indexOf("push(c)");
+    assert.ok(
+      firstPushIdx < 0 || markerIdx < firstPushIdx,
+      "the private marker must be enqueued before any text frame is pushed",
+    );
+  });
+});
+
 describe("private lane parser — macOS 12 WebKit safety", () => {
   it("contains no regex lookbehind (client may import this module)", async () => {
     const { readFile } = await import("node:fs/promises");

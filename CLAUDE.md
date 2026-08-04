@@ -28,6 +28,16 @@ prompt = Book 3.
 - Brain: provider-switchable via `LLM_PROVIDER` (`kimi`/`grok`/`anthropic`/`ollama`/`freellm`).
   Kimi/Groq is the free daily driver (tiered prompt under the 8K cap); Grok
   (xAI) opt-in with full canon; local Ollama is the offline fallback.
+- **HER BRAIN IS KIMI — LOCKED (Classic's order, 2026-08-04): ONE brain for
+  chat AND the live call — the free Groq/Kimi slot (`LLM_PROVIDER=kimi`). xAI
+  provides ONLY her voice/ears (Ara TTS; the call's Eve voice + transcribe).
+  On the call this runs via turn_detection:null + client commit + force_message
+  (see `CallBrain` in src/lib/voice/useVoiceCall.ts); `STARRA_CALL_BRAIN=grok`
+  is the emergency rollback only. Do not flip either without his say-so.**
+- **PRIVATE LANE — additive, local-only (docs/PRIVATE_LANE.md):** a `private
+  …` turn on the deck or the call runs entirely through self-hosted
+  private-gpt on local Ollama; it must never route through Kimi, Grok,
+  FreeLLM, or Anthropic.
 - Voice: Eve (xAI) — her one voice, same as the live call; Piper → Web Speech
   are offline fallbacks only.
 
