@@ -145,6 +145,106 @@ describe("parsePrivateCommand — ingest", () => {
   });
 });
 
+/**
+ * The private branch must write NOTHING to the shared memory store.
+ *
+ * This is not paranoia about a local file — data/memory.json is an INPUT to
+ * later HOSTED prompts, on two verified roads:
+ *   recordExchange -> data/memory.json (src/lib/memory/store.ts:85,46)
+ *     -> getMemory -> memoryForPrompt (route.ts) -> the system prompt
+ *     -> Kimi/Grok/FreeLLM/Anthropic
+ *   the same store -> callDigest (src/app/api/memory/route.ts:18-20)
+ *     -> src/lib/voice/useVoiceCall.ts:1898-1902 -> xAI session instructions
+ * So a recorded private turn does not stay private; it leaks on the NEXT
+ * normal turn or the next call. These assertions look at CALLS, not mentions —
+ * the branch's own comments name both functions to explain why they're absent.
+ */
+describe("private lane — writes nothing to the shared memory store", () => {
+  const routeSrc = async () => {
+    const { readFile } = await import("node:fs/promises");
+    return readFile(
+      new URL("../src/app/api/chat/route.ts", import.meta.url),
+      "utf8",
+    );
+  };
+
+  /** Strip block + line comments so prose mentions can't mask a real call. */
+  const stripComments = (src: string) =>
+    src.replace(/\/\*[\s\S]*?\*\//g, "").replace(/\/\/[^\n]*/g, "");
+
+  /**
+   * Everything from the PRIVATE LANE banner up to the POST handler. The slice
+   * starts at the `/*` that OPENS the banner comment, not at the banner text
+   * inside it — otherwise the stripper can't see the comment's opening token
+   * and the branch's own explanatory prose reads as code.
+   */
+  const privateBranch = (src: string) => {
+    const banner = src.indexOf("PRIVATE LANE");
+    const start = src.lastIndexOf("/*", banner);
+    const end = src.indexOf("export async function POST");
+    assert.ok(banner > 0, "PRIVATE LANE banner not found in route.ts");
+    assert.ok(start > 0, "banner's opening block comment not found");
+    assert.ok(end > start, "POST handler not found after the private branch");
+    const slice = src.slice(start, end);
+    // Guard the guard: a bad slice must fail loudly, not pass vacuously.
+    assert.ok(
+      slice.includes("privateLaneResponse"),
+      "sliced private branch does not contain privateLaneResponse",
+    );
+    return slice;
+  };
+
+  it("never calls recordExchange", async () => {
+    const branch = stripComments(privateBranch(await routeSrc()));
+    assert.equal(
+      /\brecordExchange\s*\(/.test(branch),
+      false,
+      "private turns must not be written to the shared memory store — it feeds hosted prompts",
+    );
+  });
+
+  it("never calls extractFactsFromExchange", async () => {
+    const branch = stripComments(privateBranch(await routeSrc()));
+    assert.equal(
+      /\bextractFactsFromExchange\s*\(/.test(branch),
+      false,
+      "the fact distiller posts the exchange to Groq/Kimi (src/lib/memory/extract.ts:54-55)",
+    );
+  });
+
+  it("never reaches a hosted provider or an external lookup", async () => {
+    const branch = stripComments(privateBranch(await routeSrc()));
+    for (const forbidden of [
+      "streamHosted",
+      "hostedAvailable",
+      "streamAnthropicCached",
+      "runAnthropicAgent",
+      "getWeather",
+      "webSearch",
+      "maybeShellReply",
+      "maybeToolReply",
+    ]) {
+      assert.equal(
+        new RegExp(`\\b${forbidden}\\s*\\(`).test(branch),
+        false,
+        `private branch must not call ${forbidden}`,
+      );
+    }
+  });
+
+  it("still records NON-private turns (the removal is scoped, not global)", async () => {
+    const src = await routeSrc();
+    const mainPath = stripComments(
+      src.slice(src.indexOf("export async function POST")),
+    );
+    assert.equal(
+      /\brecordExchange\s*\(/.test(mainPath),
+      true,
+      "the normal lane must keep its memory writes",
+    );
+  });
+});
+
 describe("private lane parser — macOS 12 WebKit safety", () => {
   it("contains no regex lookbehind (client may import this module)", async () => {
     const { readFile } = await import("node:fs/promises");

@@ -266,6 +266,21 @@ async function maybeShellReply(
  * failure would ship the private ask to a cloud provider, which is the exact
  * thing this lane exists to prevent. If the service is down, she says so.
  *
+ * A private turn also writes NOTHING to the shared memory store — no
+ * recordExchange, no extractFactsFromExchange, for any kind. The shared store
+ * is not a private place: it is an INPUT to later HOSTED prompts, so anything
+ * recorded here leaks on the next NORMAL turn, delayed rather than prevented.
+ * Both roads out are real and verified:
+ *   recordExchange -> data/memory.json (memory/store.ts:85,46)
+ *     -> getMemory -> memoryForPrompt (route.ts:753) -> volatileExtras
+ *     -> the system prompt -> Kimi/Grok/FreeLLM/Anthropic;
+ *   the same store -> callDigest (api/memory/route.ts:18-20)
+ *     -> useVoiceCall.ts:1898-1902 -> the xAI realtime session instructions.
+ * Private CHAT turns are ephemeral by design; his durable private memory is
+ * the private-gpt artifact store itself, which `private ingest` writes to and
+ * `private docs` lists. Metering (addTokens) and the content-free feed line
+ * still run.
+ *
  * VERIFIED against the vendor clone at vendor/private-gpt (2026-08-04) and
  * live against the running service — citations in .superpowers/sdd/task-2-report.md.
  */
@@ -558,10 +573,9 @@ async function privateLaneResponse(
   const base = privateGptBase();
   const system = clipSystemForLocal(PRIVATE_SYSTEM_CORE);
 
-  // Same bookkeeping as a normal turn, with one difference that IS the point:
-  // the feed line carries no private text. recordExchange writes to a local
-  // file (src/lib/memory/store.ts) and stays.
-  if (cmd.kind === "chat") await recordExchange("user", lastUser);
+  // Metering and the feed line only — and the feed line carries no private
+  // text. NO recordExchange here (see the header note): a private turn writes
+  // nothing to the shared store.
   pushFeed("EXEC", "Operator: [private]");
   addTokens(lastUser.length + system.length / 8);
 
@@ -626,12 +640,10 @@ async function privateLaneResponse(
         }
 
         if (full) {
-          if (cmd.kind === "chat") {
-            await recordExchange("assistant", full);
-          }
-          // extractFactsFromExchange is DELIBERATELY not called: it posts the
-          // exchange to Groq/Kimi (src/lib/memory/extract.ts:54-55). Distilling
-          // private turns through a cloud model would defeat the lane.
+          // Neither recordExchange NOR extractFactsFromExchange runs here — both
+          // would put private text on a road that ends at a cloud provider (see
+          // the header note). Her reply is ephemeral; the durable private record
+          // is the private-gpt artifact store.
           addTokens(full.length);
           pushFeed("ORACLE", `Private reply landed — ${full.length} chars`);
         }
