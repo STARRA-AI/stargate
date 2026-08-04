@@ -38,6 +38,29 @@ export PGPT_HOME="$ROOT/data/private-gpt"
 # short for qwen2.5:3b's first-token latency under load. Give it more room.
 # Source: vendor/private-gpt settings.yaml:324 (PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS)
 export PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS="900"
+# ── MUST be ABSOLUTE. This is not cosmetic — it is the fix for the ingest/RAG
+# blocker ("Storage folder ... is already accessed by another instance of
+# Qdrant client"). Source: settings.yaml:208 (path: ${PGPT_QDRANT_PATH:local_data/qdrant}).
+#
+# For a local on-disk Qdrant, private-gpt opens a sync QdrantClient, deletes the
+# .lock file, then opens an AsyncQdrantClient against the same path. In the
+# INSTALLED wheel (private-gpt 1.0.1, wheels.privategpt.dev) the two halves
+# disagree about which directory that is:
+#   qdrant_client_builder.py:75  config["path"] = str(resolve_data_path(...))  <- ABSOLUTE (under PGPT_HOME)
+#   qdrant_client_builder.py:81  clean_lock(settings) -> db_dir = settings.qdrant.path  <- RAW value
+# With the vendor default the raw value is the RELATIVE "local_data/qdrant", so
+# clean_lock() unlinks "$PWD/local_data/qdrant/.lock" — a path that does not
+# exist — while the real lock sits at $PGPT_HOME/local_data/qdrant/.lock. The
+# lock therefore survives and the async client always raises. Making the value
+# absolute makes raw == resolved, so the lock is removed from the directory it
+# was actually created in. Verified by A/B control against the installed
+# package: relative -> RuntimeError, absolute -> both clients build.
+#
+# Forward-compatible: upstream main (commit 3acd63d, 2026-08-04) fixed this to
+# use the resolved path directly (db_dir = config["path"]); an already-absolute
+# value is identical under both the old and the new code, so this line stays
+# correct after any future upgrade. Keeps on-disk persistence (NOT :memory:).
+export PGPT_QDRANT_PATH="$ROOT/data/private-gpt/local_data/qdrant"
 
 PORT="${PRIVATE_GPT_PORT:-8080}"
 HOST="127.0.0.1"
