@@ -12,6 +12,7 @@ import {
 } from "react";
 import type { HudState } from "@/lib/tokens";
 import { COPY, statusForState } from "@/lib/copy";
+import { speakableText } from "@/lib/voice/code-speech";
 import {
   getBootGreeting,
   getBootGreetingMuted,
@@ -103,10 +104,81 @@ export type ActionLogEntry = {
   text: string;
 };
 
-/** One chat turn. Structurally identical to MessageColumn's `Msg` — shared
+/** One chat turn. Structurally compatible with MessageColumn's `Msg` — shared
  * conversation state lives here so both typed chat (DeckConsole) and voice
  * (useVoiceLoop) read/write the same transcript. */
-export type Msg = { role: "user" | "assistant"; content: string };
+export type Msg = {
+  role: "user" | "assistant";
+  content: string;
+  /**
+   * PRIVATE LANE. This turn was answered locally by /api/chat's private branch
+   * and must never ride an outbound request body again. Set on BOTH sides of
+   * the exchange (the ask and the reply) the moment the silence marker lands.
+   * Absent on every normal turn, so nothing about the normal lane changes.
+   */
+  private?: true;
+};
+
+/**
+ * PRIVATE LANE — the client half of the silence gate.
+ *
+ * /api/chat answers a `private …` turn on this Mac and marks the stream by
+ * emitting `data: {"private": true}` as the FIRST frame, before any text
+ * (src/app/api/chat/route.ts:603-604). Both clients that read that stream
+ * parse frames identically, so the classifier is ONE shared, tested unit —
+ * src/lib/voice/useVoiceCall.ts imports it from here rather than growing a
+ * second copy that can drift out of agreement with this one.
+ *
+ * `private` beats `text` if a frame ever carried both: the safe direction is
+ * silence.
+ */
+export type ChatFrame =
+  /** A text delta to append and reveal. */
+  | { kind: "text"; text: string }
+  /** The silence marker — this whole reply was answered locally. */
+  | { kind: "private" }
+  /** `[DONE]`, malformed JSON, an empty delta: nothing to do. */
+  | { kind: "ignore" };
+
+export function classifyChatFrame(payload: string): ChatFrame {
+  if (!payload || payload.trim() === "" || payload === "[DONE]") {
+    return { kind: "ignore" };
+  }
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(payload);
+  } catch {
+    return { kind: "ignore" };
+  }
+  // `typeof null === "object"`, and an array parses fine — neither is a frame.
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    return { kind: "ignore" };
+  }
+  const frame = parsed as { text?: unknown; private?: unknown };
+  // Literal `true` only. A truthy lookalike is not the marker this route emits.
+  if (frame.private === true) return { kind: "private" };
+  if (typeof frame.text === "string" && frame.text.length > 0) {
+    return { kind: "text", text: frame.text };
+  }
+  // Empty/non-string text is inert — exactly what the old `if (json.text)` did.
+  return { kind: "ignore" };
+}
+
+/**
+ * The outbound-body filter: drop every turn the private lane answered.
+ *
+ * VISIBLE HISTORY KEEPS PRIVATE TURNS — he wrote them, he gets to read them.
+ * This is only for the `messages` array of an /api/chat POST, and the
+ * divergence is the whole point: a NORMAL turn's body is forwarded to the
+ * hosted brain (Groq/Kimi and friends), so an unfiltered history would carry
+ * the private ask and the private answer to a cloud provider inside the very
+ * next question's context window. The shared memory store never holds private
+ * turns (Task 2), so boot-seed and resyncHistory are clean by construction;
+ * this filter is the remaining leg.
+ */
+export function withoutPrivateTurns(msgs: Msg[]): Msg[] {
+  return msgs.filter((m) => m.private !== true);
+}
 
 export type ConnectorStatus = "connected" | "available" | "error";
 
@@ -352,7 +424,8 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         window.speechSynthesis.getVoices();
       }
 
-      const nextHistory: Msg[] = [...historyRef.current, { role: "user", content: trimmed }];
+      const userMsg: Msg = { role: "user", content: trimmed };
+      const nextHistory: Msg[] = [...historyRef.current, userMsg];
       setHistory(nextHistory);
       setStreaming("");
       setHudState("thinking");
@@ -362,7 +435,12 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         const res = await fetch("/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ messages: nextHistory }),
+          // PRIVATE LANE: earlier private turns are stripped from the outbound
+          // body (they stay on screen). `userMsg` is not marked yet and is not
+          // stripped — it MUST be sent, because it is the string the route
+          // parses to decide the turn is private in the first place
+          // (src/app/api/chat/route.ts:713-725).
+          body: JSON.stringify({ messages: withoutPrivateTurns(nextHistory) }),
           signal: fetchAc.signal,
         });
 
@@ -378,6 +456,10 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         const decoder = new TextDecoder();
         let buffer = "";
         let full = "";
+        // Flipped by the silence marker frame, which the route guarantees
+        // arrives BEFORE any text frame — so `privateTurn` is already true by
+        // the time the first character exists.
+        let privateTurn = false;
 
         // G3. Read the pref ONCE per turn: flipping the toggle mid-reply must
         // not strand half a reveal in a state neither branch expects.
@@ -396,20 +478,51 @@ export function StargateProvider({ children }: { children: ReactNode }) {
           for (const part of parts) {
             const line = part.trim();
             if (!line.startsWith("data:")) continue;
-            const payload = line.slice(5).trim();
-            if (payload === "[DONE]") continue;
-            try {
-              const json = JSON.parse(payload) as { text?: string };
-              if (json.text) {
-                full += json.text;
-                // OFF: reveals now, identical to the old setStreaming(full).
-                // ON: buffered — released below once her voice is real.
-                gate.push(full);
-              }
-            } catch {
-              /* ignore */
+            const frame = classifyChatFrame(line.slice(5).trim());
+            if (frame.kind === "private") {
+              // SILENCE GATE ARMED. Everything after this is local-only text.
+              privateTurn = true;
+            } else if (frame.kind === "text") {
+              full += frame.text;
+              // OFF: reveals now, identical to the old setStreaming(full).
+              // ON: buffered — released below once her voice is real.
+              gate.push(full);
             }
           }
+        }
+
+        // ── PRIVATE REPLY — SHE STAYS SILENT ────────────────────────────────
+        // The leak this branch closes is speakStarra: it POSTs the reply text
+        // to /api/tts, which synthesizes it at xAI (src/lib/voice/speak.ts).
+        // Returning ABOVE the dynamic import means a private reply never even
+        // loads the TTS module, let alone reaches a synth — the same
+        // "muted means never synthesized" shape the boot greeting uses.
+        //
+        // HUD never enters "speaking": nothing is going to speak, and a state
+        // that lies would flash a false status line for one render.
+        if (privateTurn) {
+          setLastReply(full);
+          // G3: release on the existing "silent" reason — the same exit
+          // speakStarra takes when it never made a sound. Held text is shown
+          // at once instead of serving out a 2.5s timeout for audio that is
+          // never coming.
+          gate.release("silent");
+          setHistory((h) => [
+            // Mark the ask that started this. Identity is the real match
+            // (React keeps the object we pushed); the content fallback covers
+            // the pathological case where identity was lost — over-marking
+            // only ever removes MORE from an outbound body, never less.
+            ...h.map((m) =>
+              m === userMsg || (m.role === "user" && m.content === trimmed)
+                ? { ...m, private: true as const }
+                : m,
+            ),
+            { role: "assistant", content: full, private: true },
+          ]);
+          setStreaming("");
+          setHudState("idle");
+          pushLog("[ORACLE] private reply landed · local only");
+          return;
         }
 
         setHudState("speaking");
@@ -420,7 +533,9 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         const { speakStarra, subscribeTtsAudio, getTtsAudio } = await import(
           "@/lib/voice/speak"
         );
-        const speakPromise = speakStarra(full, ttsAc.signal);
+        // Her voice says the prose; fenced code stays in the chat where it
+        // renders as a sectioned, copyable block — never read aloud.
+        const speakPromise = speakStarra(speakableText(full), ttsAc.signal);
 
         // G3 ON: the reply is still buffered. Hold the commit until her voice
         // is genuinely audible, then release everything at once.

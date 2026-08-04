@@ -18,9 +18,18 @@ import {
   USER_TURN_REVISION_MS,
 } from "@/lib/memory/turn-revision";
 import { renderLipSync, LIPSYNC_ENABLED } from "@/lib/voice/lipsync";
+// Pure + client-safe (code-speech.ts imports nothing): what her VOICE may say
+// of a brain reply — prose only, fences stay in the call chat as text.
+import { speakableText } from "@/lib/voice/code-speech";
 // ENGINE BUS — client-safe and secret-free by construction. "@/lib/engine/bus"
 // only, never "@/lib/engine": that barrel reaches the credential resolvers.
 import { getEngineState, publishVoice, type VoiceSource } from "@/lib/engine/bus";
+// PRIVATE LANE — the call's half of the silence gate. Both imports are pure
+// and client-safe: commands.ts imports nothing at all, and classifyChatFrame is
+// a plain function (no React, no browser) that lives beside the deck chat's SSE
+// loop so the two clients can never drift into parsing the marker differently.
+import { parsePrivateCommand } from "@/lib/private/commands";
+import { classifyChatFrame } from "@/lib/stargate-context";
 
 /**
  * Client engine for a full-duplex voice call against xAI's Realtime API.
@@ -229,6 +238,8 @@ type RealtimeTokenResponse = {
   model?: string;
   expires_at?: number;
   message?: string;
+  /** "kimi" (default) or "grok" — see /api/realtime and CallBrain below. */
+  callBrain?: string;
 };
 
 // ---- Loose, defensive JSON helpers -----------------------------------
@@ -410,6 +421,104 @@ function mirrorAnalyserToEngineBus(next: AnalyserNode | null): void {
   }
 }
 
+// ── HER BRAIN IS KIMI (Classic's order, 2026-08-04) ─────────────────────────
+//
+// "xai is only providing the voice. her brain is KIMI!" — on a "kimi" call
+// (STARRA_CALL_BRAIN unset/kimi, reported by /api/realtime as `callBrain`),
+// the xAI realtime session is demoted to EARS + MOUTH:
+//
+//   EARS   session.update sends `turn_detection: { type: null }` — the session
+//          never auto-answers (docs.x.ai voice-agent: without VAD the model
+//          responds only to an explicit request, which this path never sends).
+//          The client decides end-of-turn itself (kimiEndpointStep below, fed
+//          by the same worklet RMS the barge-in gate uses) and sends
+//          `input_audio_buffer.commit`; grok-transcribe still returns the
+//          transcript events.
+//   BRAIN  the transcript goes to the DECK brain — POST /api/chat
+//          { callVoice: true }, the same free Groq/Kimi brain, persona and
+//          memory the typed chat uses. ONE BRAIN for chat and call.
+//   MOUTH  the reply comes back as a `force_message` conversation item — the
+//          session TTS-speaks the exact text in eve's voice and, per the
+//          docs, "the force_message IS the turn": no response.create, zero
+//          grok generation. Audio arrives through the normal
+//          response.output_audio.delta lifecycle, so playback, the face and
+//          the analyser all work unchanged.
+//
+// "grok" keeps the legacy bundled brain+voice behavior, byte-identical — it is
+// the one-line rollback (STARRA_CALL_BRAIN=grok) and the self-heal target: if
+// KIMI_NO_TRANSCRIPT_FALLBACK_AFTER consecutive commits produce no transcript
+// (the docs promise them; this repo's protocol notes have caught the wire
+// diverging from the docs before), the call reverts itself to grok mid-call
+// with a feed line, so she can never be left mute.
+
+export type CallBrain = "kimi" | "grok";
+
+/** Worklet frames are ~43ms (2048 samples @ ~48kHz — pcm-worklet-processor.js). */
+export const KIMI_ENDPOINT_SILENCE_FRAMES = 15; // ~650ms of quiet closes his turn
+export const KIMI_ENDPOINT_MIN_SPEECH_FRAMES = 5; // <~215ms of sound is a breath, not a turn
+export const KIMI_TRANSCRIPT_WAIT_MS = 2500; // commit → transcript grace before it counts as missing
+export const KIMI_NO_TRANSCRIPT_FALLBACK_AFTER = 3; // consecutive misses before self-healing to grok
+export const CALL_BRAIN_CONTEXT_TURNS = 12; // call turns carried into each brain request
+
+export interface KimiEndpointerState {
+  inSpeech: boolean;
+  speechFrames: number;
+  silentFrames: number;
+}
+
+export const KIMI_ENDPOINTER_IDLE: KimiEndpointerState = {
+  inSpeech: false,
+  speechFrames: 0,
+  silentFrames: 0,
+};
+
+/**
+ * One endpointer step per mic frame (pure, tested): `loud` is the same
+ * RMS-over-threshold signal the barge-in gate uses. Commit fires exactly once,
+ * when a turn that accumulated at least KIMI_ENDPOINT_MIN_SPEECH_FRAMES of
+ * sound goes quiet for KIMI_ENDPOINT_SILENCE_FRAMES in a row; a shorter blip
+ * (cough, chair creak) drains away without committing.
+ */
+export function kimiEndpointStep(
+  s: KimiEndpointerState,
+  loud: boolean,
+): { next: KimiEndpointerState; commit: boolean } {
+  if (loud) {
+    return {
+      next: { inSpeech: true, speechFrames: s.speechFrames + 1, silentFrames: 0 },
+      commit: false,
+    };
+  }
+  if (!s.inSpeech) return { next: s, commit: false };
+  const silent = s.silentFrames + 1;
+  if (silent >= KIMI_ENDPOINT_SILENCE_FRAMES) {
+    return {
+      next: KIMI_ENDPOINTER_IDLE,
+      commit: s.speechFrames >= KIMI_ENDPOINT_MIN_SPEECH_FRAMES,
+    };
+  }
+  return { next: { ...s, silentFrames: silent }, commit: false };
+}
+
+/**
+ * The brain request's message list (pure, tested): the last
+ * CALL_BRAIN_CONTEXT_TURNS committed call turns, plus — for an UNLOGGED turn
+ * (tool payloads, the greeting nudge) — the prompt itself appended as the
+ * latest user message without ever entering the transcript.
+ */
+export function buildCallBrainMessages(
+  turns: { role: "user" | "assistant"; text: string }[],
+  latest?: string,
+): { role: "user" | "assistant"; content: string }[] {
+  const msgs = turns
+    .slice(-CALL_BRAIN_CONTEXT_TURNS)
+    .map((t) => ({ role: t.role, content: t.text }));
+  if (latest !== undefined && latest.trim()) {
+    msgs.push({ role: "user", content: latest });
+  }
+  return msgs;
+}
+
 export function useVoiceCall(): UseVoiceCallResult {
   const [state, setState] = useState<VoiceCallState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -483,6 +592,41 @@ export function useVoiceCall(): UseVoiceCallResult {
   // playback stops or state leaves "speaking" so a stale streak can't fire
   // into the next response.
   const bargeStreakRef = useRef(0);
+
+  // ── HER BRAIN IS KIMI — per-call state (see the module doctrine above) ────
+  // Which brain drives THIS call. Set from /api/realtime's `callBrain` on every
+  // connect; flipped to "grok" mid-call only by the no-transcript self-heal.
+  // "grok" until a connect says otherwise, so pre-connect nothing changes.
+  const callBrainRef = useRef<CallBrain>("grok");
+  const endpointerRef = useRef<KimiEndpointerState>(KIMI_ENDPOINTER_IDLE);
+  // Armed by a commit that had no live transcript yet; cleared by the
+  // transcript arriving (kimiTranscriptFinal) or by its own timeout.
+  const kimiAwaitTimerRef = useRef<number | null>(null);
+  const kimiNoTranscriptStreakRef = useRef(0);
+  // Newest turn wins: a fresh commit aborts the previous brain fetch, exactly
+  // like typed-chat barge-in does.
+  const kimiBrainAbortRef = useRef<AbortController | null>(null);
+  // She greets once per CALL (survives reconnects — a mid-call socket blip
+  // must not make her greet him again over the conversation).
+  const kimiGreetedRef = useRef(false);
+  // Committed call turns, mirrored for the brain's context window. Written
+  // ONLY by the kimi path (runKimiTurn/speakForced) — grok mode never touches
+  // it. Survives reconnects with the on-screen transcript; cleared on a fresh
+  // call in connect().
+  const callTurnsRef = useRef<{ role: "user" | "assistant"; text: string }[]>([]);
+  // After a kimi barge-in there is no server VAD to truncate the response, and
+  // response.cancel is undocumented best-effort — so remaining audio deltas of
+  // the interrupted response keep arriving. This flag drops them locally until
+  // the next response begins. Never set in grok mode.
+  const suppressResponseAudioRef = useRef(false);
+  // Re-send the full session config (used by the self-heal to restore
+  // server_vad mid-call). Bound per-socket in ws.onopen.
+  const resendSessionRef = useRef<((brain: CallBrain) => void) | null>(null);
+  // Breaks the useCallback cycle injectLiveTurn → runKimiTurn →
+  // scheduleToolFastpath → … → injectLiveTurn (same idiom as connectRef).
+  const runKimiTurnRef = useRef<
+    ((text: string, opts?: { log?: boolean }) => Promise<void>) | null
+  >(null);
 
   // Wall-clock (ms) when the current assistant turn began speaking. Barge-in is
   // suppressed for BARGE_IN_GRACE_MS after this so her own onset / echo tail
@@ -646,6 +790,16 @@ export function useVoiceCall(): UseVoiceCallResult {
       const s = stateRef.current;
       if (!ws || ws.readyState !== WebSocket.OPEN || (s !== "listening" && s !== "speaking")) {
         return false;
+      }
+      // HER BRAIN IS KIMI: on a kimi call the injected line goes to the DECK
+      // brain and comes back as a force_message — runKimiTurn owns transcript
+      // + memory rows itself, so return before the optimistic logging below
+      // (its `log` option carries the same typed-vs-tool-payload distinction).
+      if (callBrainRef.current === "kimi") {
+        const run = runKimiTurnRef.current;
+        if (!run) return false;
+        void run(t, { log: opts?.log !== false });
+        return true;
       }
       try {
         ws.send(
@@ -843,6 +997,239 @@ export function useVoiceCall(): UseVoiceCallResult {
     [fireToolFastpath],
   );
 
+  // ---- HER BRAIN IS KIMI — the call's thinking happens in the deck brain ──
+  // (see the module doctrine above kimiEndpointStep for the full protocol)
+
+  /**
+   * MOUTH: hand exact text to the session to speak in eve's voice.
+   * Per the docs the force_message IS the turn — no response.create, zero
+   * grok generation. Audio comes back through the normal response lifecycle,
+   * so schedulePlayback/face/analyser work unchanged. The transcript row and
+   * memory write happen HERE, optimistically — a force_message produces no
+   * audio_transcript events, so commitAssistant's empty-text no-op leaves
+   * this as the one and only assistant commit for the turn.
+   */
+  const speakForced = useCallback((spoken: string, transcriptText: string): boolean => {
+    const ws = wsRef.current;
+    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    suppressResponseAudioRef.current = false; // a new turn always plays
+    try {
+      ws.send(
+        JSON.stringify({
+          type: "conversation.item.create",
+          item: {
+            type: "force_message",
+            role: "assistant",
+            interruptible: true,
+            content: [{ type: "output_text", text: spoken }],
+          },
+        }),
+      );
+    } catch {
+      return false;
+    }
+    const text = transcriptText.trim();
+    if (text) {
+      setTranscript((prev) => [...prev, { role: "assistant", text }]);
+      recordCallTurn("assistant", text);
+      callTurnsRef.current.push({ role: "assistant", text });
+      // HER REPLY CLOSES HIS TURN — same rule as commitAssistant.
+      lastUserCommitRef.current = null;
+    }
+    return true;
+  }, []);
+
+  /**
+   * BRAIN: one full call turn — commit his line (when `log`), ask the deck
+   * brain (/api/chat { callVoice: true } — the same free Groq/Kimi brain,
+   * persona and memory as typed chat), then speak the reply via force_message.
+   * `log: false` is the tool-payload/greeting shape: the prompt rides only the
+   * request (buildCallBrainMessages `latest`), never the transcript or memory.
+   * Newest turn wins: a fresh call aborts the previous fetch mid-flight.
+   */
+  const runKimiTurn = useCallback(
+    async (text: string, opts?: { log?: boolean }) => {
+      const t = text.trim();
+      if (!t) return;
+      const ws = wsRef.current;
+      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      kimiNoTranscriptStreakRef.current = 0; // a heard turn proves the ears work
+      const log = opts?.log !== false;
+      // PRIVATE ASK — decided HERE, before anything is written anywhere. The
+      // marker frame cannot help with the user side: recordCallTurn POSTs to
+      // /api/memory before the fetch even starts, and a POST cannot be recalled
+      // once the reply proves the turn was private. So the client asks the SAME
+      // parser, about the SAME string, that the route gates on: route.ts:723
+      // parses the LAST user message, and `t` is that message in both of the
+      // body shapes built below. Same input, same function, same verdict.
+      const privateAsk = parsePrivateCommand(t) !== null;
+      if (log) {
+        setTranscript((prev) => [...prev, { role: "user", text: t }]);
+        // A private ask stays in the visible column ONLY: no shared-store row
+        // (it feeds later hosted prompts), no hosted-bound context entry, no
+        // fast-path lookup (the route refuses tools for a private turn too).
+        if (!privateAsk) {
+          recordCallTurn("user", t);
+          callTurnsRef.current.push({ role: "user", text: t });
+          // The spoken tool commands keep working exactly as they do today.
+          scheduleToolFastpath(t);
+        }
+        lastUserCommitRef.current = null;
+      }
+      // The live partial (if any) became this committed turn.
+      setLiveUserBoth("");
+      userTurnPendingRef.current = false;
+
+      kimiBrainAbortRef.current?.abort();
+      const ac = new AbortController();
+      kimiBrainAbortRef.current = ac;
+      // A private ask stands alone. The route's private branch answers from the
+      // last user message and nothing else (route.ts:381-383 — "Single turn by
+      // design"), so carrying call context would buy nothing and would only
+      // widen the body if the lane were ever mis-routed. Non-private turns take
+      // the two original shapes, unchanged.
+      const messages = privateAsk
+        ? buildCallBrainMessages([], t)
+        : log
+          ? buildCallBrainMessages(callTurnsRef.current)
+          : buildCallBrainMessages(callTurnsRef.current, t);
+
+      let full = "";
+      // The silence marker lands before any text frame (route.ts:603-604).
+      let privateReply = false;
+      try {
+        const res = await fetch("/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ messages, callVoice: true }),
+          signal: ac.signal,
+        });
+        if (!res.ok || !res.body) return;
+        // Same SSE frame parsing as stargate-context.tsx's sendMessage.
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let buffer = "";
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          buffer += decoder.decode(value, { stream: true });
+          const parts = buffer.split("\n\n");
+          buffer = parts.pop() ?? "";
+          for (const part of parts) {
+            const line = part.trim();
+            if (!line.startsWith("data:")) continue;
+            const frame = classifyChatFrame(line.slice(5).trim());
+            if (frame.kind === "private") privateReply = true;
+            else if (frame.kind === "text") full += frame.text;
+          }
+        }
+      } catch {
+        return; // aborted (newer turn owns the floor) or network — say nothing
+      }
+      if (ac.signal.aborted) return;
+      // The call may have ended / reconnected while the brain thought — a
+      // reply into a different socket would be a non-sequitur.
+      if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+      const reply = full.trim();
+      if (!reply) return;
+      // ── PRIVATE REPLY — SHE STAYS SILENT ON THE CALL ────────────────────
+      // speakForced is the leak, three times over: it hands the text to the
+      // xAI realtime socket as a force_message, and it is also the ONE site of
+      // the assistant-side recordCallTurn (shared store → later hosted
+      // prompts) and callTurnsRef push (rides later /api/chat bodies to the
+      // hosted Kimi brain). Skipping it closes all three at once. The text
+      // still lands in the call column — it just never leaves this Mac.
+      if (privateReply) {
+        setTranscript((prev) => [...prev, { role: "assistant", text: reply }]);
+        // HER REPLY CLOSES HIS TURN — the same rule speakForced applies.
+        lastUserCommitRef.current = null;
+        // Belt for a disagreement that should be impossible (the client parser
+        // read the ask as public, the route answered it privately): scrub the
+        // ask back out of the hosted-bound context array before it can ride a
+        // later body. The /api/memory write is already gone and cannot be
+        // recalled — that residual is why `privateAsk` is decided up front.
+        if (!privateAsk) {
+          callTurnsRef.current = callTurnsRef.current.filter(
+            (turn) => !(turn.role === "user" && turn.text === t),
+          );
+        }
+        return;
+      }
+      // Her voice says the prose; fences stay in the call chat (transcript
+      // row carries the FULL reply, exactly like typed chat).
+      const spoken = speakableText(reply).trim() || reply;
+      speakForced(spoken, reply);
+    },
+    [scheduleToolFastpath, setLiveUserBoth, speakForced],
+  );
+
+  useEffect(() => {
+    runKimiTurnRef.current = runKimiTurn;
+  }, [runKimiTurn]);
+
+  /**
+   * SELF-HEAL: the docs promise transcript events after a commit, but this
+   * repo's protocol notes have caught the wire diverging from the docs before
+   * (".completed not confirmed present"). If several consecutive commits hear
+   * nothing back, her ears are effectively gone on this path — revert THIS
+   * call to the grok brain (server_vad restored via a full session.update
+   * re-send) rather than leave her mute. STARRA_CALL_BRAIN is untouched: the
+   * next call tries kimi again.
+   */
+  const kimiFallbackToGrok = useCallback(() => {
+    if (callBrainRef.current !== "kimi") return;
+    callBrainRef.current = "grok";
+    endpointerRef.current = KIMI_ENDPOINTER_IDLE;
+    postFeedLine(
+      "ALERT",
+      "Call brain: no transcripts from the voice link — this call reverts to the grok brain (next call retries kimi)",
+    );
+    try {
+      resendSessionRef.current?.("grok");
+    } catch {
+      /* best-effort — worst case the session stays turn-detection-less and
+         the call simply stays quiet until reconnect */
+    }
+  }, []);
+
+  /** A final user transcript is in hand — clear the wait and run the turn. */
+  const kimiTranscriptFinal = useCallback((text: string) => {
+    if (kimiAwaitTimerRef.current != null) {
+      window.clearTimeout(kimiAwaitTimerRef.current);
+      kimiAwaitTimerRef.current = null;
+    }
+    void runKimiTurnRef.current?.(text, { log: true });
+  }, []);
+
+  /**
+   * EARS, after the commit: the transcript usually already streamed in live
+   * (cumulative `.updated` events) — consume it now. Otherwise arm a bounded
+   * wait for the commit-triggered transcription; a miss feeds the self-heal
+   * counter above.
+   */
+  const kimiOnCommit = useCallback(() => {
+    const live = liveUserRef.current.trim();
+    if (live) {
+      kimiTranscriptFinal(live);
+      return;
+    }
+    if (kimiAwaitTimerRef.current != null) {
+      window.clearTimeout(kimiAwaitTimerRef.current);
+    }
+    kimiAwaitTimerRef.current = window.setTimeout(() => {
+      kimiAwaitTimerRef.current = null;
+      const text = liveUserRef.current.trim();
+      if (text) {
+        kimiTranscriptFinal(text);
+        return;
+      }
+      kimiNoTranscriptStreakRef.current += 1;
+      if (kimiNoTranscriptStreakRef.current >= KIMI_NO_TRANSCRIPT_FALLBACK_AFTER) {
+        kimiFallbackToGrok();
+      }
+    }, KIMI_TRANSCRIPT_WAIT_MS);
+  }, [kimiFallbackToGrok, kimiTranscriptFinal]);
+
   // ---- transcript commits -------------------------------------------
 
   /**
@@ -875,6 +1262,12 @@ export function useVoiceCall(): UseVoiceCallResult {
    * injectLiveTurn and commitAssistant both close the window too.)
    */
   const commitUser = useCallback(() => {
+    // HER BRAIN IS KIMI: on a kimi call, user commits belong to runKimiTurn
+    // (endpointer → commit → transcript → brain). The speculative triggers
+    // that reach here (assistant playback starting, defensive speech_started,
+    // the transcription-completed fallback) must not write a second row or
+    // fire the fast-path twice.
+    if (callBrainRef.current === "kimi") return;
     if (!userTurnPendingRef.current) return;
     userTurnPendingRef.current = false;
     const text = liveUserRef.current.trim();
@@ -940,6 +1333,12 @@ export function useVoiceCall(): UseVoiceCallResult {
     (base64: string) => {
       const ctx = playbackContextRef.current;
       if (!ctx) return;
+
+      // HER BRAIN IS KIMI — after a kimi barge-in there is no server VAD to
+      // truncate the interrupted response, so its remaining deltas keep
+      // arriving; drop them here until the next turn starts (speakForced
+      // clears the flag). Never set in grok mode.
+      if (suppressResponseAudioRef.current) return;
 
       let samples: Float32Array;
       try {
@@ -1038,6 +1437,12 @@ export function useVoiceCall(): UseVoiceCallResult {
       stopAllPlayback();
       bargeStreakRef.current = 0;
       assistantResponseDoneRef.current = true;
+      // Kimi mode: silence the interrupted response's still-arriving deltas
+      // locally (see schedulePlayback) — response.cancel below is best-effort
+      // and there is no server VAD to truncate for us.
+      if (callBrainRef.current === "kimi" && wasPlaying) {
+        suppressResponseAudioRef.current = true;
+      }
       if (stateRef.current === "speaking") setCallState("listening");
 
       if (sendCancel && wasPlaying) {
@@ -1080,6 +1485,29 @@ export function useVoiceCall(): UseVoiceCallResult {
 
       if (mutedRef.current) return;
 
+      // HER BRAIN IS KIMI — client endpointing replaces server VAD
+      // (turn_detection null): when his sound goes quiet long enough while
+      // she's listening, commit the audio buffer and hand the turn to the
+      // deck brain. Runs on the same RMS signal as the barge-in gate. During
+      // her "speaking" state the endpointer stays idle — after a barge-in the
+      // state flips to "listening" and his continued speech (already in the
+      // buffer; frames append continuously either way) gets committed then.
+      if (callBrainRef.current === "kimi" && stateRef.current === "listening") {
+        const step = kimiEndpointStep(
+          endpointerRef.current,
+          rms(frame) > BARGE_IN_RMS_THRESHOLD,
+        );
+        endpointerRef.current = step.next;
+        if (step.commit) {
+          try {
+            ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+            kimiOnCommit();
+          } catch {
+            // A dropped commit isn't fatal; the next turn tries again.
+          }
+        }
+      }
+
       try {
         const audio = encodeMicFrame(frame, contextSampleRate);
         ws.send(JSON.stringify({ type: "input_audio_buffer.append", audio }));
@@ -1087,7 +1515,7 @@ export function useVoiceCall(): UseVoiceCallResult {
         // A dropped frame isn't fatal — keep the call alive.
       }
     },
-    [bargeIn],
+    [bargeIn, kimiOnCommit],
   );
 
   // ---- fatal error / cleanup -------------------------------------------
@@ -1193,6 +1621,19 @@ export function useVoiceCall(): UseVoiceCallResult {
     lastUserCommitRef.current = null;
     if (typeof window !== "undefined") window.clearTimeout(toolDebounceRef.current);
     toolDebounceRef.current = 0;
+    // Kimi per-SOCKET state dies with the socket: the transcript wait belongs
+    // to a commit on this connection, the brain fetch to this conversation
+    // moment, and the session re-sender to this ws. (callTurnsRef and
+    // kimiGreetedRef are per-CALL — they reset in connect()'s fresh branch.)
+    if (kimiAwaitTimerRef.current != null) {
+      if (typeof window !== "undefined") window.clearTimeout(kimiAwaitTimerRef.current);
+      kimiAwaitTimerRef.current = null;
+    }
+    kimiBrainAbortRef.current?.abort();
+    kimiBrainAbortRef.current = null;
+    endpointerRef.current = KIMI_ENDPOINTER_IDLE;
+    suppressResponseAudioRef.current = false;
+    resendSessionRef.current = null;
   }, [clearDrainWatchdog, stopAllPlayback]);
 
   const handleFatalError = useCallback(
@@ -1257,6 +1698,21 @@ export function useVoiceCall(): UseVoiceCallResult {
               reconnectAttemptsRef.current = 0; // survived long enough → healthy
             }, 10_000);
           }
+          // HER BRAIN IS KIMI: with turn_detection null the session never
+          // speaks first, so the deck brain opens the call — once per CALL
+          // (kimiGreetedRef survives reconnects; a socket blip must not make
+          // her greet him again mid-conversation). The nudge is unlogged: her
+          // greeting lands in transcript + memory, the bracket never does.
+          if (callBrainRef.current === "kimi" && !kimiGreetedRef.current) {
+            kimiGreetedRef.current = true;
+            const brief = briefRef.current;
+            void runKimiTurnRef.current?.(
+              brief
+                ? `[The voice call just connected — open by delivering this brief, conversationally, in 2-3 short spoken sentences:\n${brief}]`
+                : "[The voice call just connected — greet him, in character, one or two short spoken sentences.]",
+              { log: false },
+            );
+          }
           return;
 
         case "input_audio_buffer.speech_started":
@@ -1274,6 +1730,16 @@ export function useVoiceCall(): UseVoiceCallResult {
             // Cumulative — replace, never append.
             setLiveUserBoth(text);
             userTurnPendingRef.current = true;
+            // HER BRAIN IS KIMI: a commit already went out and was waiting on
+            // exactly this transcript — consume it as the final and run the
+            // brain turn now instead of serving out the wait.
+            if (
+              callBrainRef.current === "kimi" &&
+              kimiAwaitTimerRef.current != null &&
+              text.trim()
+            ) {
+              kimiTranscriptFinal(text.trim());
+            }
           }
           return;
         }
@@ -1286,6 +1752,16 @@ export function useVoiceCall(): UseVoiceCallResult {
           if (text !== undefined) {
             liveUserRef.current = text;
             userTurnPendingRef.current = true;
+          }
+          // HER BRAIN IS KIMI: a completion event is the finalized transcript
+          // of a committed turn — run the brain on it (commitUser below is a
+          // kimi-mode no-op by its own guard; this branch owns the commit).
+          if (callBrainRef.current === "kimi") {
+            const final = (asString(evt.transcript) ?? liveUserRef.current).trim();
+            if (final && kimiAwaitTimerRef.current != null) {
+              kimiTranscriptFinal(final);
+            }
+            return;
           }
           commitUser();
           return;
@@ -1323,6 +1799,12 @@ export function useVoiceCall(): UseVoiceCallResult {
           return;
         }
 
+        case "response.created":
+          // A new response supersedes any kimi barge-in suppression — the
+          // interrupted response is over; this one must be heard.
+          suppressResponseAudioRef.current = false;
+          return;
+
         case "response.output_audio.done":
         case "response.audio.done":
           assistantResponseDoneRef.current = true;
@@ -1334,6 +1816,8 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         case "response.done": {
           assistantResponseDoneRef.current = true;
+          // The suppressed (barged) response is fully over — stop dropping.
+          suppressResponseAudioRef.current = false;
           // Authoritative fallback — only actually used by commitAssistant
           // if no delta/`.done` transcript event already committed this
           // response's line.
@@ -1411,7 +1895,7 @@ export function useVoiceCall(): UseVoiceCallResult {
         }
       }
     },
-    [bargeIn, commitAssistant, commitUser, schedulePlayback, setCallState, setLiveAssistantBoth, setLiveUserBoth],
+    [bargeIn, commitAssistant, commitUser, kimiTranscriptFinal, schedulePlayback, setCallState, setLiveAssistantBoth, setLiveUserBoth],
   );
 
   // ---- connect / disconnect -------------------------------------------
@@ -1438,7 +1922,16 @@ export function useVoiceCall(): UseVoiceCallResult {
     // meant the auto-reconnect path wiped the visible call chat on every
     // transient socket blip.) Live partials always reset; they belong to the
     // dropped utterance either way.
-    if (stateRef.current !== "reconnecting") setTranscript([]);
+    if (stateRef.current !== "reconnecting") {
+      setTranscript([]);
+      // Kimi per-CALL state follows the transcript's lifecycle exactly: the
+      // brain's context mirror and the one-greeting-per-call latch survive a
+      // reconnect with the conversation, and reset with it on a fresh call.
+      callTurnsRef.current = [];
+      kimiGreetedRef.current = false;
+    }
+    endpointerRef.current = KIMI_ENDPOINTER_IDLE;
+    kimiNoTranscriptStreakRef.current = 0;
     setLiveUserBoth("");
     setLiveAssistantBoth("");
     setCallState("connecting");
@@ -1493,6 +1986,11 @@ export function useVoiceCall(): UseVoiceCallResult {
       // A disconnect()/unmount that fired while we awaited the token bumped the
       // epoch. Nothing is allocated yet, so a plain return is a clean abort.
       if (connectEpochRef.current !== myEpoch) return;
+
+      // HER BRAIN IS KIMI: the server says which brain drives this call
+      // (STARRA_CALL_BRAIN, default kimi). Re-read on every connect — so a
+      // call that self-healed to grok retries kimi on its next reconnect too.
+      callBrainRef.current = data.callBrain === "grok" ? "grok" : "kimi";
 
       if (!navigator.mediaDevices?.getUserMedia) {
         throw new Error("Microphone access is not available in this browser.");
@@ -1651,7 +2149,7 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         // The full session config, rebuilt per send so a late digest can be
         // delivered by re-sending the SAME update with richer instructions.
-        const sessionUpdate = (digest: string | null, brief: string | null) =>
+        const sessionUpdate = (digest: string | null, brief: string | null, brain: CallBrain) =>
           JSON.stringify({
             type: "session.update",
             session: {
@@ -1662,12 +2160,19 @@ export function useVoiceCall(): UseVoiceCallResult {
                   ? `\n\nSHARED MEMORY (one continuous life — the same store your chat self reads and writes; carry it forward naturally, don't recite it):\n${digest}`
                   : "") +
                 (brief ? `\n\n${brief}` : ""),
-              turn_detection: {
-                type: "server_vad",
-                threshold: 0.6,
-                prefix_padding_ms: 333,
-                silence_duration_ms: 200,
-              },
+              // HER BRAIN IS KIMI (module doctrine above): a kimi call turns
+              // server VAD OFF — the session never auto-answers; the client
+              // endpoints + commits, the deck brain thinks, force_message
+              // speaks. grok keeps the legacy bundled brain+voice behavior.
+              turn_detection:
+                brain === "kimi"
+                  ? { type: null }
+                  : {
+                      type: "server_vad",
+                      threshold: 0.6,
+                      prefix_padding_ms: 333,
+                      silence_duration_ms: 200,
+                    },
               audio: {
                 input: {
                   format: { type: "audio/pcm", rate: REALTIME_SAMPLE_RATE },
@@ -1700,11 +2205,19 @@ export function useVoiceCall(): UseVoiceCallResult {
 
         const sentWithDigest = memoryDigestRef.current !== null;
         try {
-          ws.send(sessionUpdate(memoryDigestRef.current, briefRef.current));
+          ws.send(sessionUpdate(memoryDigestRef.current, briefRef.current, callBrainRef.current));
         } catch (e) {
           handleFatalError(e instanceof Error ? e.message : "Failed to start voice session.");
           return;
         }
+        // Bind the self-heal's re-send to THIS socket (kimiFallbackToGrok uses
+        // it to restore server_vad mid-call). Identity-guarded like the late
+        // digest below; cleared by cleanupInternal.
+        resendSessionRef.current = (brain: CallBrain) => {
+          if (wsRef.current === ws && ws.readyState === WebSocket.OPEN) {
+            ws.send(sessionUpdate(memoryDigestRef.current, briefRef.current, brain));
+          }
+        };
         // Digest lost the race: deliver it the moment it lands by re-sending
         // the same session.update with the memory block included.
         if (!sentWithDigest && memoryDigestPromiseRef.current) {
@@ -1716,7 +2229,7 @@ export function useVoiceCall(): UseVoiceCallResult {
               ws.readyState === WebSocket.OPEN
             ) {
               try {
-                ws.send(sessionUpdate(late, briefRef.current));
+                ws.send(sessionUpdate(late, briefRef.current, callBrainRef.current));
               } catch {
                 /* call is already up persona-only — never break it for memory */
               }
