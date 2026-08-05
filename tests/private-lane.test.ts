@@ -426,6 +426,20 @@ const between = (src: string, from: string, to: string) => {
 describe("silence gate — deck chat (stargate-context.tsx)", () => {
   const CTX = "src/lib/stargate-context.tsx";
 
+  /**
+   * The private branch, whole.
+   *
+   * The end marker is the branch's LAST line (its landing log) rather than the
+   * `setHudState("speaking")` it used to be: since P2 Task 3 the branch sets
+   * that state itself before speaking locally, so slicing there would cut the
+   * branch in half and every prohibition below would pass vacuously over code
+   * it never read.
+   */
+  const privateBranch = async () =>
+    stripComments(
+      between(await readSrc(CTX), "if (privateTurn) {", "[ORACLE] private reply landed"),
+    );
+
   it("strips private turns out of every /api/chat body", async () => {
     const src = stripComments(await readSrc(CTX));
     assert.match(
@@ -445,10 +459,18 @@ describe("silence gate — deck chat (stargate-context.tsx)", () => {
     );
   });
 
-  it("never hands a private reply to the TTS path", async () => {
-    const branch = stripComments(
-      between(await readSrc(CTX), "if (privateTurn) {", 'setHudState("speaking")'),
-    );
+  /**
+   * THE PROHIBITION IS UNCHANGED, THE SILENCE IS NOT (P2 Task 3).
+   *
+   * A private reply may now be SPOKEN — but only by the local mouth, which
+   * synthesises Piper in this tab from model files the deck serves itself and
+   * makes no request off the machine (src/lib/voice/local-voice.ts; its own
+   * privacy pins live in tests/local-voice.test.ts). What must never happen is
+   * unchanged and absolute: nothing in this branch may reach speakStarra, the
+   * speak.ts module, or /api/tts — that path POSTs her reply to xAI.
+   */
+  it("never hands a private reply to the hosted TTS path", async () => {
+    const branch = await privateBranch();
     assert.equal(
       /\bspeakStarra\s*\(/.test(branch),
       false,
@@ -459,12 +481,44 @@ describe("silence gate — deck chat (stargate-context.tsx)", () => {
       false,
       "a private reply must not even load the TTS module",
     );
+    assert.equal(
+      branch.includes("/api/tts"),
+      false,
+      "the hosted synth endpoint has no place in the private lane, ever",
+    );
+  });
+
+  it("speaks a private reply with the LOCAL mouth and nothing else", async () => {
+    const branch = await privateBranch();
+    assert.match(
+      branch,
+      /\bimport\s*\(\s*\n?\s*["']@\/lib\/voice\/local-voice["']\s*\n?\s*\)/,
+      "the local mouth is the only engine a private reply may load",
+    );
+    assert.match(
+      branch,
+      /\bspeakLocalStream\s*\(/,
+      "and it must actually be called — silent-text was the OLD behaviour",
+    );
+  });
+
+  /**
+   * The local mouth is only private if it stays private. It must not pull
+   * speak.ts in behind it: that module is the one that POSTs to /api/tts, and a
+   * static import would put it in the private lane's bundle.
+   */
+  it("the local mouth never imports the hosted TTS module", async () => {
+    const src = stripComments(await readSrc("src/lib/voice/local-voice.ts"));
+    assert.equal(
+      /["']@\/lib\/voice\/speak["']/.test(src),
+      false,
+      "speak.ts imports local-voice for the barge-in seam — the reverse edge would close a cycle straight through /api/tts",
+    );
+    assert.equal(src.includes("/api/tts"), false);
   });
 
   it("releases the reveal gate so private text is never held back", async () => {
-    const branch = stripComments(
-      between(await readSrc(CTX), "if (privateTurn) {", 'setHudState("speaking")'),
-    );
+    const branch = await privateBranch();
     assert.match(
       branch,
       /gate\.release\("silent"\)/,
@@ -478,9 +532,7 @@ describe("silence gate — deck chat (stargate-context.tsx)", () => {
   });
 
   it("marks BOTH sides of a private turn in visible history", async () => {
-    const branch = stripComments(
-      between(await readSrc(CTX), "if (privateTurn) {", 'setHudState("speaking")'),
-    );
+    const branch = await privateBranch();
     assert.match(branch, /private: true/, "the assistant commit carries the mark");
     assert.match(
       branch,

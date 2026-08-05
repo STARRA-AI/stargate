@@ -84,13 +84,23 @@ only a bare `private docs` (optionally with a colon) lists.
   `127.attacker.example.com` are ordinary DNS-resolvable hosts that such a test
   would wave through. Use the literal IP, which is what the default,
   `.env.local`, and `private-gpt-up.sh` all use anyway.
-- **Replies are silent text, never spoken.** Both clients (deck chat and the
-  live call) read the SSE stream's first frame, `data: {"private": true}`,
-  before any text arrives, and skip TTS entirely for that turn — the deck
-  never even loads `@/lib/voice/speak` (so `/api/tts`, which posts text to
-  xAI for synthesis, is never called), and the call never reaches
-  `speakForced` (so the reply is never handed to the xAI realtime socket).
-  The reply still renders as text in both UIs.
+- **Replies never reach a hosted voice. The deck speaks them with her LOCAL
+  mouth; the live call is still silent text.** Both clients read the SSE
+  stream's first frame, `data: {"private": true}`, before any text arrives, and
+  neither hands that turn to xAI: the deck never loads `@/lib/voice/speak` (so
+  `/api/tts`, which posts text to xAI for synthesis, is never called), and the
+  call never reaches `speakForced` (so the reply is never handed to the xAI
+  realtime socket). What the deck DOES do now is speak it locally —
+  `speakLocalStream` (`src/lib/voice/local-voice.ts`) synthesises Piper inside
+  the tab, sentence by sentence, from model files the deck serves itself at
+  `/brand/voice`, and makes no request off this machine (the library's CDN
+  defaults for its WASM and its models are overridden there, and
+  `tests/local-voice.test.ts` pins that). Local voice is OPT-IN BY ASSET: with
+  those files absent — the state of a fresh checkout — she stays silent text
+  exactly as before, never a fallback that phones out. Set
+  `stargate.localVoice` in localStorage (or `NEXT_PUBLIC_STARRA_LOCAL_VOICE`)
+  to pick a different Piper voice; it takes effect on the next page load. The
+  reply always renders as text in both UIs.
 - **Private turns never enter the shared memory store, later hosted
   prompts, or the call's context.** No `recordExchange`, no
   `extractFactsFromExchange`, for any private kind — on either client, on

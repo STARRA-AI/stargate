@@ -15,6 +15,15 @@ import {
   PIPER_VOICE_ID,
 } from "@/lib/voice/piper-speak";
 import { MOUTH_SYNC_ENABLED } from "@/lib/voice/viseme-sync";
+// THE BARGE-IN SEAM, and it is one-way ON PURPOSE: speak.ts imports the local
+// mouth, never the reverse. local-voice.ts is the only engine a PRIVATE reply
+// may reach, so it must not be able to drag this module — the one that POSTs to
+// /api/tts — into the private lane behind it. A registry in here would do the
+// same damage (local-voice would have to import this file to register), so the
+// direct import is the smallest seam that keeps the lane clean. stopLocalStream
+// is a no-op when nothing local is playing, which is what keeps every normal
+// turn byte-identical.
+import { stopLocalStream } from "@/lib/voice/local-voice";
 // ENGINE BUS — client-safe, secret-free, synchronous, never-throwing. Importing
 // "@/lib/engine/bus" (never "@/lib/engine") is what keeps config/providers/router
 // — the modules that resolve credentials — out of this client bundle.
@@ -550,6 +559,10 @@ function stopAraAudio() {
 export function stopAllSpeech() {
   stopAraAudio();
   stopPiperAudio();
+  // The local mouth runs its own QUEUE, so a barge-in that only stopped the
+  // engines above would leave the next queued sentence to start on top of the
+  // new turn. This kills the queue, the element and its bus claim too.
+  stopLocalStream();
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }

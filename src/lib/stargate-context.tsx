@@ -531,15 +531,23 @@ export function StargateProvider({ children }: { children: ReactNode }) {
           }
         }
 
-        // ── PRIVATE REPLY — SHE STAYS SILENT ────────────────────────────────
+        // ── PRIVATE REPLY — HER LOCAL VOICE, AND NOTHING ELSE ───────────────
         // The leak this branch closes is speakStarra: it POSTs the reply text
         // to /api/tts, which synthesizes it at xAI (src/lib/voice/speak.ts).
-        // Returning ABOVE the dynamic import means a private reply never even
+        // Returning ABOVE that dynamic import means a private reply never even
         // loads the TTS module, let alone reaches a synth — the same
         // "muted means never synthesized" shape the boot greeting uses.
         //
-        // HUD never enters "speaking": nothing is going to speak, and a state
-        // that lies would flash a false status line for one render.
+        // WHAT CHANGED (P2 Task 3). "Never speaks" used to be the only safe
+        // answer because the only mouth she had was xAI's. It is no longer the
+        // only one: speakLocalStream synthesises Piper in this tab, from model
+        // files the deck serves itself, and makes no request off the machine
+        // (src/lib/voice/local-voice.ts — its header states the three things
+        // that keep it on loopback, and tests/local-voice.test.ts pins them).
+        // So a private reply is spoken, and the rule sharpens rather than
+        // loosens: HER LOCAL MOUTH ONLY. Never speakStarra, never Ara, never
+        // Web Speech, and never while the live call owns her voice — that last
+        // gate lives inside speakLocalStream, the same one speakStarra takes.
         if (privateTurn) {
           setLastReply(full);
           // G3: release on the existing "silent" reason — the same exit
@@ -563,8 +571,30 @@ export function StargateProvider({ children }: { children: ReactNode }) {
             { role: "assistant", content: full, private: true },
           ]);
           setStreaming("");
+
+          // Her voice says the prose; fenced code stays in the chat where it
+          // renders as a sectioned, copyable block — speakLocalStream applies
+          // speakableText itself, the same rule the normal lane uses below.
+          //
+          // localVoiceReady() is asked FIRST so the HUD only ever announces
+          // "speaking" for audio that is genuinely coming: with the model files
+          // absent (or a call live) she stays silent-text exactly as before,
+          // and a status line that lies is the bug this branch was written
+          // against in the first place.
+          const { speakLocalStream, localVoiceReady } = await import(
+            "@/lib/voice/local-voice"
+          );
+          let localEngine: "piper" | "none" = "none";
+          if (await localVoiceReady()) {
+            setHudState("speaking");
+            localEngine = await speakLocalStream(full, ttsAc.signal);
+          }
+          if (ttsAc.signal.aborted) {
+            // Barge-in (or a newer turn) owns whatever HUD state comes next.
+            return;
+          }
           setHudState("idle");
-          pushLog("[ORACLE] private reply landed · local only");
+          pushLog(`[ORACLE] private reply landed · local only · voice ${localEngine}`);
           return;
         }
 
