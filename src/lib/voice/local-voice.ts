@@ -16,9 +16,10 @@
  *   HF_BASE    = https://huggingface.co/diffusionstudio/piper-voices/…
  * (node_modules/@mintplex-labs/piper-tts-web/dist/piper-tts-web.js:12-14), and
  * TtsSession.init() assigns `ort.env.wasm.wasmPaths = #wasmPaths.onnxWasm`
- * (same file:286) and loads the phonemizer's .wasm/.data from #wasmPaths
- * (:310-311). So THREE things keep a private reply on loopback, and all three
- * are here rather than anywhere else:
+ * (same file:286) while `predict()` re-creates the phonemizer on EVERY call
+ * with `locateFile` reading .wasm/.data out of #wasmPaths (:301-315, fetched at
+ * piper-o91UDS6e.js:404-442) — so the CDN risk is per-sentence, not one-off at
+ * startup. FOUR things keep a private reply on loopback:
  *   1. LOCAL_WASM_PATHS is passed explicitly to TtsSession.create, so the CDN
  *      defaults are never used.
  *   2. The model is seeded into OPFS from the deck's own /brand/voice before
@@ -26,12 +27,19 @@
  *      filename and never fetches huggingface (:143,:170 — the OPFS key is the
  *      URL's last path segment, which is why the seed writes exactly
  *      `<voiceId>.onnx` / `<voiceId>.onnx.json` into the "piper" directory).
+ *      BOTH files are checked before an existing seed is trusted: a half-seed
+ *      is what sends the library to huggingface. See seedComplete.
  *   3. localVoiceReady() HEAD-checks every one of those local files FIRST and
  *      refuses to start when any is missing. Missing assets therefore mean
  *      SILENCE — today's behaviour — never a fallback that phones out.
- * We deliberately do NOT reuse piper-runtime.ts's session: TtsSession keeps a
- * process-wide singleton (`_instance`, :259-272) and piper-runtime creates it
- * with no wasmPaths, i.e. CDN-configured. A private reply must not inherit it.
+ *   4. TtsSession is a PROCESS-WIDE singleton whose constructor returns the
+ *      existing instance and IGNORES new wasmPaths (:259-263). A session this
+ *      module did not build could therefore be wired anywhere, and #wasmPaths
+ *      is private and unreadable — so we refuse it outright and stay silent.
+ *      See isForeignSession. piper-runtime.ts (the normal lane, which shares
+ *      this singleton and this OPFS directory) now passes the SAME local paths
+ *      and the same both-files seed check, so defence 4 is the second lock
+ *      rather than the first.
  *
  * ── THE ASSETS (all free, all one-time, none of them run-time downloads) ────
  *   public/brand/voice/<voiceId>.onnx          Piper model  (Cori en_GB high)
@@ -48,7 +56,7 @@
  * createMediaElementSource = one stable analyser for her face). Audio truth on
  * the engine bus comes from that element's own `playing`/`ended`/`pause`/
  * `error` events — never from synthesis state, the same rule speak.ts documents
- * at speak.ts:36-38, because publishing "speaking" through a synth is
+ * at speak.ts:45-47, because publishing "speaking" through a synth is
  * publishing it over silence.
  *
  * No regex lookbehind anywhere — macOS 12 WebKit.
@@ -383,7 +391,7 @@ const WASM_BASE = `${PIPER_VOICE_BASE}/wasm`;
  * The trailing slash on onnxWasm is required: onnxruntime joins a filename onto
  * it (`ort.env.wasm.wasmPaths` is a DIRECTORY).
  */
-const LOCAL_WASM_PATHS = {
+export const LOCAL_WASM_PATHS = {
   onnxWasm: `${WASM_BASE}/ort/`,
   piperWasm: `${WASM_BASE}/piper_phonemize.wasm`,
   piperData: `${WASM_BASE}/piper_phonemize.data`,
@@ -446,6 +454,31 @@ let modulePromise: Promise<PiperModule> | null = null;
 let sessionPromise: Promise<TtsSession> | null = null;
 
 /**
+ * Is an existing OPFS seed COMPLETE? Both files, both non-empty.
+ *
+ * THE BUG THIS CLOSES (fix wave, Important #2). The old guard declared the seed
+ * good on `<voiceId>.onnx` alone, and the `.onnx.json` is written second. An
+ * interrupted seed — a reload, a quota trip, a crash between the two writes —
+ * therefore left a state that PASSED the guard with the config file missing.
+ * The library's getBlob then misses OPFS for the json and falls straight
+ * through to `fetch("https://huggingface.co/…")` (dist:288 -> :369-375 getBlob
+ * -> readBlob :168-183 miss -> fetchBlob). On a PRIVATE turn that is a request
+ * off this machine, produced by nothing worse than an unlucky reload.
+ *
+ * Pure and exported so the rule is a unit test rather than an OPFS-only
+ * observation — and so piper-runtime.ts's identical guard can share the ONE
+ * definition instead of carrying a second copy of the same bug.
+ */
+export function seedComplete(onnxSize: number, jsonSize: number): boolean {
+  return (
+    Number.isFinite(onnxSize) &&
+    onnxSize > 0 &&
+    Number.isFinite(jsonSize) &&
+    jsonSize > 0
+  );
+}
+
+/**
  * Copy the model out of the deck's public/ into OPFS under the exact filenames
  * the library reads by (`<voiceId>.onnx`, `<voiceId>.onnx.json` in the "piper"
  * directory — dist/piper-tts-web.js:143-183), so its getBlob finds them there
@@ -458,11 +491,19 @@ async function seedOpfs(voiceId: string): Promise<boolean> {
     const dir = await root.getDirectoryHandle("piper", { create: true });
 
     try {
-      const existing = await dir.getFileHandle(`${voiceId}.onnx`);
-      const file = await existing.getFile();
-      if (file.size > 0) return true;
+      // BOTH handles, BOTH sizes. A missing json rejects here and we rewrite
+      // the pair below — see seedComplete for why one file is not enough.
+      const [onnxHandle, jsonHandle] = await Promise.all([
+        dir.getFileHandle(`${voiceId}.onnx`),
+        dir.getFileHandle(`${voiceId}.onnx.json`),
+      ]);
+      const [onnxFile, jsonFile] = await Promise.all([
+        onnxHandle.getFile(),
+        jsonHandle.getFile(),
+      ]);
+      if (seedComplete(onnxFile.size, jsonFile.size)) return true;
     } catch {
-      /* not seeded yet — write it below */
+      /* not seeded, or seeded incompletely — write both below */
     }
 
     const [onnx, json] = await Promise.all([
@@ -488,30 +529,66 @@ async function seedOpfs(voiceId: string): Promise<boolean> {
 }
 
 /**
+ * The session THIS module created. Anything else in `TtsSession._instance` is
+ * somebody else's and cannot be trusted — see isForeignSession.
+ */
+let ownedSession: TtsSession | null = null;
+
+/**
+ * Is the library's process-wide singleton one we did not build?
+ *
+ * WHY OWNERSHIP AND NOT INSPECTION. `#wasmPaths` is a WeakMap-backed private
+ * field (dist:357), so there is no way to READ another instance's paths and
+ * check them. Identity is the only thing that can be proven from outside: if we
+ * did not create it, we cannot know where it will fetch from, and "cannot know"
+ * has to mean "refuse" on the private lane.
+ *
+ * Pure and exported so this is a real unit test and not a source-pattern
+ * assertion about a branch nobody executed.
+ */
+export function isForeignSession(existing: unknown, owned: unknown): boolean {
+  return !!existing && existing !== owned;
+}
+
+/**
  * The ONE session, created with LOCAL paths.
  *
- * NOTE, and it is a real limitation rather than a preference: TtsSession keeps
- * a process-wide singleton and its constructor RETURNS the existing instance
- * with only `voiceId` swapped — `init()` never re-runs, so the loaded ONNX
- * model does not change (dist/piper-tts-web.js:259-272). Changing the
- * STARRA_LOCAL_VOICE override therefore takes effect on the next page load,
- * not mid-session.
+ * TWO NON-OBVIOUS THINGS, both verified in the library's built source:
+ *
+ * 1. THE SINGLETON IS A TRAP. `new TtsSession(...)` RETURNS the existing
+ *    `_instance` early and IGNORES the options — including `wasmPaths`
+ *    (dist:259-263). So a session built by another lane (piper-runtime.ts) is
+ *    wired to ITS paths forever, and `predict()` re-creates the phonemizer on
+ *    EVERY call through `locateFile` -> `#wasmPaths` (dist:301-315, fetched at
+ *    piper-o91UDS6e.js:404-442). A CDN-configured singleton would therefore
+ *    make a private turn GET cdn.jsdelivr.net — per sentence. Refusing a
+ *    foreign instance is the only provable defence, so a private reply goes
+ *    silent rather than off-machine. (piper-runtime.ts now passes the SAME
+ *    local paths, so in practice this is the second lock, not the first.)
+ * 2. Changing the STARRA_LOCAL_VOICE override takes effect on the next page
+ *    load, not mid-session: reusing `_instance` swaps `voiceId` but never
+ *    re-runs `init()`, so the loaded ONNX model does not change (dist:259-272).
  */
 async function getSession(voiceId: string): Promise<TtsSession> {
   if (!sessionPromise) {
     sessionPromise = (async () => {
       if (!modulePromise) modulePromise = import("@mintplex-labs/piper-tts-web");
       const { PATH_MAP, TtsSession } = await modulePromise;
+      if (isForeignSession(TtsSession._instance, ownedSession)) {
+        throw new Error("local voice: foreign piper session");
+      }
       const id = voiceId in PATH_MAP ? voiceId : PIPER_VOICE_ID;
       const seeded = await seedOpfs(id);
       if (!seeded) {
         // Without the model in OPFS the library would fetch huggingface. Refuse.
         throw new Error("local voice: model not seeded");
       }
-      return TtsSession.create({
+      const session = await TtsSession.create({
         voiceId: id,
         wasmPaths: LOCAL_WASM_PATHS,
       });
+      ownedSession = session;
+      return session;
     })().catch((err) => {
       sessionPromise = null; // a failed init must not be cached forever
       throw err;
@@ -539,7 +616,7 @@ async function synthesize(text: string, voiceId: string): Promise<Blob | null> {
  * irreversible and may be called once PER ELEMENT, so a new element per
  * sentence would mean a new source node per sentence — and every one of them
  * stays graph-reachable, i.e. alive, in a deck Classic keeps open all day
- * (speak.ts:183-193 documents that leak). One element also means ONE analyser
+ * (speak.ts:195-202 documents that leak). One element also means ONE analyser
  * that her face can hold onto across the whole reply.
  */
 let el: HTMLAudioElement | null = null;
@@ -550,7 +627,7 @@ let tapped = false;
 
 /**
  * Monotonic id of the utterance allowed to play and to publish. Same device as
- * speak.ts's ttsGeneration (speak.ts:123-138): a stop bumps it, so a sentence
+ * speak.ts's ttsGeneration (speak.ts:133-145): a stop bumps it, so a sentence
  * whose synthesis lands late can never start over a newer turn, and a late
  * `pause`/`error` from a killed element can never blank a live one.
  */
@@ -575,7 +652,7 @@ function raise(): void {
 /**
  * Retract, but only what we published. If the REALTIME leg owns the bus, a
  * finished local reply must not idle her face while she is still talking on the
- * call — the rule ttsBusPatch states at speak.ts:65-72.
+ * call — the rule ttsBusPatch states at speak.ts:74-81.
  */
 function retract(): void {
   const source = getEngineState().source;
@@ -607,7 +684,7 @@ function revokeCurrent(): void {
  *
  * HER VOICE OUTRANKS HER MOUTH. This is never awaited before play() and every
  * failure path leaves her talking with no analyser rather than not talking —
- * the ordering speak.ts:397-410 argues for. Capture happens ONCE, only with the
+ * the ordering speak.ts:407-418 argues for. Capture happens ONCE, only with the
  * context confirmed "running" (createMediaElementSource is irreversible: after
  * it, the element's sound reaches the speakers only through this graph, so
  * capturing into a suspended context would mute her).
@@ -653,7 +730,7 @@ async function attachAnalyser(audio: HTMLAudioElement, gen: number): Promise<voi
       const analyser = audioCtx.createAnalyser();
       analyser.fftSize = 1024;
       // viseme-sync does its own asymmetric smoothing; double-smoothing here
-      // would only add lag (speak.ts:464-466).
+      // would only add lag (speak.ts:473-474).
       analyser.smoothingTimeConstant = 0;
       analyser.connect(audioCtx.destination);
       tap = analyser;
@@ -664,7 +741,7 @@ async function attachAnalyser(audio: HTMLAudioElement, gen: number): Promise<voi
     // rather than at the next one. Guarded on BOTH the generation and the
     // element's real state: everything above is awaited, so this can land after
     // a barge-in, and an unguarded raise() here would announce "speaking" over
-    // silence — the exact drift the bus exists to prevent (speak.ts:65-72).
+    // silence — the exact drift the bus exists to prevent (speak.ts:74-81).
     if (isCurrent(gen) && !audio.paused && !audio.ended) raise();
   } catch {
     /* she keeps her voice, she just has no mouth data */
@@ -786,7 +863,7 @@ export interface LocalSpeakOptions {
    * Only the engine that RAISED the call claim may speak during a call — the
    * all-local call speaks its own replies through here. Everything else
    * (the deck's chat lane) must stay silent while a call is live: ONE VOICE,
-   * the same gate speakStarra takes at speak.ts:764.
+   * the same gate speakStarra takes at speak.ts:768-780.
    */
   allowDuringCall?: boolean;
 }
@@ -809,8 +886,14 @@ export async function speakLocalStream(
   const sentences = toSpeakableSentences(text);
   if (sentences.length === 0) return "none";
 
+  // ONE VOICE — but REFUSE, do not STOP. This gate used to call
+  // stopLocalStream() the way speakStarra calls stopAllSpeech(), and that is
+  // wrong the moment the all-local call speaks through here with
+  // `allowDuringCall`: a deck chat turn arriving mid-call would kill the CALL'S
+  // own utterance mid-sentence. The call's stream is not this turn's to end.
+  // Nothing is leaked by declining quietly either — anything chat-side that was
+  // already sounding died when the overlay raised the claim.
   if (!options?.allowDuringCall && getEngineState().callLive) {
-    stopLocalStream();
     return "none";
   }
 

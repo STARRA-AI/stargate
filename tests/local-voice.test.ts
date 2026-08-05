@@ -22,8 +22,10 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import {
+  isForeignSession,
   MAX_SENTENCE_CHARS,
   MIN_SENTENCE_CHARS,
+  seedComplete,
   splitSentences,
   takeSentences,
   toSpeakableSentences,
@@ -328,6 +330,132 @@ describe("local-voice — the bus and the call claim", () => {
   it("exports the stop that stopAllSpeech has to be able to call", async () => {
     const code = await readSrc(MODULE);
     assert.match(code, /export function stopLocalStream\(/);
+  });
+});
+
+/**
+ * FIX WAVE — the two load-chain holes and the cross-lane kill.
+ *
+ * The DECISIONS are unit-tested for real (both predicates are pure and
+ * exported for exactly that reason); the WIRING — that the predicates are the
+ * thing the load path actually consults — is source-pattern pinned, because
+ * the branches around them need OPFS, WebAssembly and a browser.
+ */
+describe("isForeignSession — a session we did not build is not ours to trust", () => {
+  it("is false when there is no singleton yet", () => {
+    assert.equal(isForeignSession(null, null), false);
+    assert.equal(isForeignSession(undefined, null), false);
+  });
+
+  it("is false for the session we created ourselves", () => {
+    const ours = { voiceId: "en_GB-cori-high" };
+    assert.equal(isForeignSession(ours, ours), false);
+  });
+
+  it("is TRUE when somebody else built the singleton first", () => {
+    // The real case: speak.ts's normal-lane Piper leg ran, piper-runtime built
+    // the process-wide instance, and its #wasmPaths cannot be read from here.
+    const theirs = { voiceId: "en_GB-cori-high" };
+    assert.equal(isForeignSession(theirs, null), true);
+    assert.equal(isForeignSession(theirs, { voiceId: "other" }), true);
+  });
+});
+
+describe("seedComplete — a half-seeded OPFS is not a seed", () => {
+  it("accepts only both files, both non-empty", () => {
+    assert.equal(seedComplete(1024, 512), true);
+  });
+
+  it("rejects the interrupted seed that used to pass", () => {
+    // THE BUG: `<voice>.onnx` written, `.onnx.json` not yet. The old guard saw
+    // one non-empty file and declared victory; the library then fetched the
+    // config from huggingface.co — on a private turn.
+    assert.equal(seedComplete(1024, 0), false);
+    assert.equal(seedComplete(0, 512), false);
+    assert.equal(seedComplete(0, 0), false);
+  });
+
+  it("rejects a size that is not a real number", () => {
+    assert.equal(seedComplete(Number.NaN, 512), false);
+    assert.equal(seedComplete(1024, Number.NaN), false);
+    assert.equal(seedComplete(Number.POSITIVE_INFINITY, 512), false);
+  });
+});
+
+describe("the load chain consults those decisions", () => {
+  it("getSession refuses a foreign singleton instead of synthesising through it", async () => {
+    const code = stripComments(await readSrc(MODULE));
+    const body = code.slice(code.indexOf("async function getSession("));
+    assert.match(
+      body,
+      /isForeignSession\(\s*TtsSession\._instance\s*,\s*ownedSession\s*\)/,
+      "identity is the only thing provable from outside — #wasmPaths is a private field (dist:357)",
+    );
+    assert.match(
+      body.slice(0, body.indexOf("TtsSession.create")),
+      /throw new Error\(/,
+      "the refusal must happen BEFORE create() — predict() re-creates the phonemizer from #wasmPaths on every call (dist:301-315)",
+    );
+    assert.match(
+      body,
+      /ownedSession\s*=\s*session/,
+      "the session we build must be recorded, or we would refuse our own on the next call",
+    );
+  });
+
+  it("both OPFS seeds check BOTH files", async () => {
+    for (const [file, fn] of [
+      [MODULE, "seedOpfs"],
+      ["src/lib/voice/piper-runtime.ts", "seedOpfsFromPublic"],
+    ] as const) {
+      const code = stripComments(await readSrc(file));
+      const body = code.slice(code.indexOf(`function ${fn}(`));
+      assert.match(
+        body,
+        /getFileHandle\(`\$\{[A-Za-z_]+\}\.onnx`\)/,
+        `${fn} must handle the model`,
+      );
+      assert.match(
+        body,
+        /getFileHandle\(`\$\{[A-Za-z_]+\}\.onnx\.json`\)/,
+        `${fn} must ALSO handle the config — a missing json is what reaches huggingface`,
+      );
+      assert.match(
+        body,
+        /seedComplete\([A-Za-z]+\.size,\s*[A-Za-z]+\.size\)/,
+        `${fn} must decide on both sizes through the shared predicate`,
+      );
+    }
+  });
+
+  it("piper-runtime pins its session to the same local WASM", async () => {
+    const code = stripComments(await readSrc("src/lib/voice/piper-runtime.ts"));
+    assert.match(
+      code,
+      /TtsSession\.create\(\{[\s\S]{0,200}?wasmPaths:\s*LOCAL_WASM_PATHS/,
+      "a CDN-configured singleton built by the NORMAL lane arms every later private synthesis (dist:259-263)",
+    );
+    assert.match(
+      code,
+      /from "@\/lib\/voice\/local-voice"/,
+      "one definition of the local paths, shared — not a second copy to drift",
+    );
+  });
+});
+
+describe("the call gate refuses without side effects", () => {
+  it("declines during a live call but does not stop the stream", async () => {
+    const code = stripComments(await readSrc(MODULE));
+    const gate = code.slice(
+      code.indexOf("if (!options?.allowDuringCall && getEngineState().callLive)"),
+    );
+    const block = gate.slice(0, gate.indexOf("}") + 1);
+    assert.match(block, /return "none";/, "the chat lane stays silent during a call");
+    assert.equal(
+      /stopLocalStream\(\)/.test(block),
+      false,
+      "once the private call speaks with allowDuringCall, stopping here would kill the CALL'S utterance mid-sentence — a chat turn does not own the call's stream",
+    );
   });
 });
 

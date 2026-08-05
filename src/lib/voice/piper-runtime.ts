@@ -10,6 +10,10 @@ import {
   setActivePiperAudio,
   stopPiperAudio,
 } from "@/lib/voice/piper-speak";
+// ONE definition of "where the runtime binaries live" and ONE definition of
+// "is the OPFS seed complete", shared with the local mouth. Two copies of
+// either is two places the same privacy bug can live — and it already did.
+import { LOCAL_WASM_PATHS, seedComplete } from "@/lib/voice/local-voice";
 
 const LOCAL_ONNX = `${PIPER_VOICE_BASE}/${PIPER_VOICE_ID}.onnx`;
 const LOCAL_JSON = `${PIPER_VOICE_BASE}/${PIPER_VOICE_ID}.onnx.json`;
@@ -36,11 +40,23 @@ async function seedOpfsFromPublic(): Promise<boolean> {
   const dir = await root.getDirectoryHandle("piper", { create: true });
 
   try {
-    const existing = await dir.getFileHandle(`${PIPER_VOICE_ID}.onnx`);
-    const file = await existing.getFile();
-    if (file.size > 0) return true;
+    // BOTH files, BOTH non-empty. Checking only the .onnx declared an
+    // INTERRUPTED seed good (the .onnx.json is written second, below), and a
+    // missing json sends the library's getBlob to huggingface.co instead of
+    // OPFS — dist:288 -> :369-375 -> readBlob :168-183 miss -> fetchBlob. The
+    // local mouth shares this exact seed directory, so a half-seed here armed
+    // the PRIVATE lane too. See seedComplete.
+    const [onnxHandle, jsonHandle] = await Promise.all([
+      dir.getFileHandle(`${PIPER_VOICE_ID}.onnx`),
+      dir.getFileHandle(`${PIPER_VOICE_ID}.onnx.json`),
+    ]);
+    const [onnxFile, jsonFile] = await Promise.all([
+      onnxHandle.getFile(),
+      jsonHandle.getFile(),
+    ]);
+    if (seedComplete(onnxFile.size, jsonFile.size)) return true;
   } catch {
-    /* seed below */
+    /* not seeded, or seeded incompletely — write both below */
   }
 
   const [onnxRes, jsonRes] = await Promise.all([
@@ -71,7 +87,22 @@ function getSession(): Promise<TtsSession> {
         throw new Error(`Unknown Piper voice: ${PIPER_VOICE_ID}`);
       }
       await seedOpfsFromPublic();
-      return TtsSession.create({ voiceId: PIPER_VOICE_ID });
+      // THE LEAK THIS CLOSES. Created with no wasmPaths, this session takes the
+      // library's CDN defaults (onnxruntime from cdnjs, piper_phonemize from
+      // jsdelivr — dist:235-239), and TtsSession is a PROCESS-WIDE singleton
+      // whose constructor returns the existing instance and ignores later
+      // options (dist:259-263). So this normal-lane session, if it is built
+      // first, arms every later synthesis — including a PRIVATE turn's, since
+      // predict() re-creates the phonemizer from #wasmPaths on every call
+      // (dist:301-315). Same local paths here means there is no CDN-configured
+      // session for the private lane to inherit in the first place.
+      //
+      // Piper is the OFFLINE fallback (CLAUDE.md, Stack): requiring its runtime
+      // binaries to be present locally is what "offline" was supposed to mean.
+      return TtsSession.create({
+        voiceId: PIPER_VOICE_ID,
+        wasmPaths: LOCAL_WASM_PATHS,
+      });
     })();
   }
   return sessionPromise;
