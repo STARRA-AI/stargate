@@ -13,6 +13,7 @@ import { describe, it, beforeEach } from "node:test";
 import {
   getEngineState,
   publishCallLive,
+  publishVoice,
   resetEngineBus,
 } from "../src/lib/engine/bus";
 
@@ -100,6 +101,60 @@ describe("speakStarra — the call gate", () => {
       );
     } finally {
       globalThis.fetch = realFetch;
+      delete (globalThis as Record<string, unknown>).window;
+      delete (globalThis as Record<string, unknown>).localStorage;
+    }
+  });
+
+  /**
+   * THE OTHER DOOR (fix wave 2). The gate above STANDS DOWN — it must not also
+   * STOP. Since the all-local call speaks through speakLocalStream with
+   * `allowDuringCall`, the local stream while `callLive` is set may BE her call
+   * voice; a chat turn hitting speakStarra mid-call once ran stopAllSpeech(),
+   * which now includes stopLocalStream(), and so killed the very voice it was
+   * deferring to. Same bug as Medium #4, one module over.
+   *
+   * Behavioural, not a source pattern: the bus is the observable. stopLocalStream
+   * retracts a `piper` claim, so if the gate still reached it, `speaking` would
+   * be false here. Nothing else on this path publishes — speak.ts's own
+   * ttsSnapshot.playing is false, so stopAraAudio's publishTts is a no-op.
+   */
+  it("stands down WITHOUT killing the call's local voice", async () => {
+    resetEngineBus();
+    const storageStub = {
+      getItem: () => null,
+      setItem: () => {},
+      removeItem: () => {},
+    };
+    (globalThis as Record<string, unknown>).window = {
+      speechSynthesis: undefined,
+      localStorage: storageStub,
+      addEventListener: () => {},
+      removeEventListener: () => {},
+    };
+    (globalThis as Record<string, unknown>).localStorage = storageStub;
+
+    try {
+      const { speakStarra } = await import("../src/lib/voice/speak");
+
+      // The private call is speaking through the local mouth: this is exactly
+      // what speakLocalStream publishes when its element reaches `playing`.
+      publishCallLive(true);
+      publishVoice({ speaking: true, source: "piper", analyser: null });
+
+      const engine = await speakStarra("a chat reply arrives mid-call");
+      assert.equal(engine, "none", "the chat turn must still refuse to speak");
+
+      const bus = getEngineState();
+      assert.equal(
+        bus.speaking,
+        true,
+        "her call voice must survive a chat turn that merely declined to speak",
+      );
+      assert.equal(bus.source, "piper", "and it must still be named as hers");
+    } finally {
+      publishCallLive(false);
+      resetEngineBus();
       delete (globalThis as Record<string, unknown>).window;
       delete (globalThis as Record<string, unknown>).localStorage;
     }

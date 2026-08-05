@@ -583,10 +583,21 @@ async function getSession(voiceId: string): Promise<TtsSession> {
         // Without the model in OPFS the library would fetch huggingface. Refuse.
         throw new Error("local voice: model not seeded");
       }
-      const session = await TtsSession.create({
+      // OWNERSHIP IS CAPTURED BEFORE THE AWAIT, and that ordering is the whole
+      // point. `create` is `new TtsSession(...)` then `await waitReady`
+      // (dist:265-269), and the CONSTRUCTOR assigns `_instance` synchronously
+      // (dist:272) — so the singleton is already ours by the time create()
+      // hands back its promise, while `init()` is still running. Assigning
+      // ownership only after the await meant ONE transient init failure (a
+      // flaky OPFS read, a 404 on a wasm file) left `_instance` set to a
+      // session we built but never claimed — which then read as FOREIGN on
+      // every later attempt and silenced her local voice permanently.
+      const creating = TtsSession.create({
         voiceId: id,
         wasmPaths: LOCAL_WASM_PATHS,
       });
+      ownedSession = TtsSession._instance;
+      const session = await creating;
       ownedSession = session;
       return session;
     })().catch((err) => {
@@ -887,10 +898,12 @@ export async function speakLocalStream(
   if (sentences.length === 0) return "none";
 
   // ONE VOICE — but REFUSE, do not STOP. This gate used to call
-  // stopLocalStream() the way speakStarra calls stopAllSpeech(), and that is
-  // wrong the moment the all-local call speaks through here with
-  // `allowDuringCall`: a deck chat turn arriving mid-call would kill the CALL'S
-  // own utterance mid-sentence. The call's stream is not this turn's to end.
+  // stopLocalStream(), copying the stopAllSpeech() that speakStarra's gate then
+  // ran, and that is wrong the moment the all-local call speaks through here
+  // with `allowDuringCall`: a deck chat turn arriving mid-call would kill the
+  // CALL'S own utterance mid-sentence. The call's stream is not this turn's to
+  // end. speakStarra's gate was corrected the same way and for the same reason
+  // — it now runs stopHostedSpeech(), which cannot reach this queue.
   // Nothing is leaked by declining quietly either — anything chat-side that was
   // already sounding died when the overlay raised the claim.
   if (!options?.allowDuringCall && getEngineState().callLive) {

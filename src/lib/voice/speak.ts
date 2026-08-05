@@ -556,16 +556,50 @@ function stopAraAudio() {
   }
 }
 
-export function stopAllSpeech() {
+/**
+ * Stop only the engines THIS module owns — Ara's element, the Piper element,
+ * Web Speech. The local mouth (local-voice.ts) is deliberately NOT touched.
+ *
+ * WHY THE SPLIT EXISTS. `local-voice` is no longer only a chat-side engine:
+ * the all-local call speaks through it with `allowDuringCall`, so while
+ * `callLive` is set, the local stream may BE her call voice. A hosted-side
+ * refusal must therefore be able to stand down without silencing the thing it
+ * is standing down FOR — otherwise a chat turn arriving mid-call kills the
+ * call's own utterance mid-sentence, which is Medium #4 again, one door over.
+ *
+ * Every other caller still wants the whole sweep and still gets it via
+ * stopAllSpeech below — see the table there.
+ */
+export function stopHostedSpeech() {
   stopAraAudio();
   stopPiperAudio();
-  // The local mouth runs its own QUEUE, so a barge-in that only stopped the
-  // engines above would leave the next queued sentence to start on top of the
-  // new turn. This kills the queue, the element and its bus claim too.
-  stopLocalStream();
   if (typeof window !== "undefined" && window.speechSynthesis) {
     window.speechSynthesis.cancel();
   }
+}
+
+/**
+ * Stop EVERYTHING chat-side, local mouth included. Unchanged in behaviour for
+ * every caller it already had:
+ *
+ *   - speakStarra's normal path (below) — a new chat utterance is about to
+ *     sound, so the local queue must die with the rest. `callLive` is provably
+ *     false there: the gate above returned already.
+ *   - stargate-context's stopSpeaking — Classic pressing stop, and the same
+ *     path VoiceCallOverlay runs at CLAIM time (VoiceCallOverlay.tsx:299-300)
+ *     to cut off a chat reply before the line connects. Both must kill a
+ *     private local reply too; at claim time no call-side local utterance
+ *     exists yet, so there is nothing of the call's to lose.
+ *   - settings/page.tsx's voice preview — previewing a voice silences whatever
+ *     is talking, local included.
+ *
+ * The local mouth runs its own QUEUE, so a barge-in that stopped only the
+ * hosted engines would leave the next queued sentence to start on top of the
+ * new turn. This kills the queue, the element and its bus claim too.
+ */
+export function stopAllSpeech() {
+  stopHostedSpeech();
+  stopLocalStream();
 }
 
 /**
@@ -771,11 +805,19 @@ export async function speakStarra(
   // not Web Speech. Two voices at once (her call leg + a chat TTS engine
   // reading a brain reply over it) is exactly what reached him. The brain's
   // reply still streams as TEXT into the chat column; only its sound is
-  // withheld. stopAllSpeech() still runs so anything already sounding dies
-  // with the claim, then the turn resolves "none" — sendMessage's reveal gate
-  // releases via its "silent" path, so the text is never held back.
+  // withheld. stopHostedSpeech() still runs so anything already sounding on
+  // THIS module's engines dies with the claim, then the turn resolves "none" —
+  // sendMessage's reveal gate releases via its "silent" path, so the text is
+  // never held back.
+  //
+  // stopHostedSpeech, NOT stopAllSpeech: while the call is live the local mouth
+  // may be the CALL'S voice (the all-local call speaks through it with
+  // `allowDuringCall`), and a chat turn declining to speak must not cut off the
+  // voice it is deferring to. Anything local that was CHAT-side already died at
+  // claim time, when VoiceCallOverlay ran stopSpeaking -> stopAllSpeech
+  // (VoiceCallOverlay.tsx:299-300), so nothing chat-side survives here either.
   if (getEngineState().callLive) {
-    stopAllSpeech();
+    stopHostedSpeech();
     return "none";
   }
 

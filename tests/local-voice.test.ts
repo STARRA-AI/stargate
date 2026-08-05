@@ -443,6 +443,77 @@ describe("the load chain consults those decisions", () => {
   });
 });
 
+/**
+ * N1 — THE OWNERSHIP-CAPTURE RACE.
+ *
+ * `TtsSession.create` is `new TtsSession(...)` then `await waitReady`
+ * (dist:265-269), and the CONSTRUCTOR assigns `_instance` synchronously
+ * (dist:272). So between the constructor and a failed `init()`, the singleton
+ * is ours while our `ownedSession` is still null — and `isForeignSession` then
+ * reports our OWN session as foreign, forever, silencing her local voice for
+ * the life of the page over one transient failure.
+ *
+ * Behavioural: the library's ordering is simulated exactly (constructor sets
+ * the instance, then the promise rejects), and both capture orders are run
+ * against the real predicate.
+ */
+describe("ownership capture — a failed init must not poison the singleton", () => {
+  /** Stands in for the library: `_instance` set synchronously, then init fails. */
+  const libraryWithFailingInit = () => {
+    const lib: { _instance: unknown } = { _instance: null };
+    const create = () => {
+      lib._instance = { voiceId: "en_GB-cori-high" }; // constructor, dist:272
+      return Promise.reject(new Error("init failed")); // await waitReady
+    };
+    return { lib, create };
+  };
+
+  it("capturing BEFORE the await keeps our own session ours", async () => {
+    const { lib, create } = libraryWithFailingInit();
+    let owned: unknown = null;
+    const creating = create().catch(() => undefined);
+    owned = lib._instance; // THE FIX
+    await creating;
+    assert.equal(
+      isForeignSession(lib._instance, owned),
+      false,
+      "a session we built must stay ours even when its init threw",
+    );
+  });
+
+  it("capturing only AFTER the await is what poisoned it", async () => {
+    const { lib, create } = libraryWithFailingInit();
+    let owned: unknown = null;
+    try {
+      owned = await create(); // never runs — this is the old order
+    } catch {
+      /* init failed, so ownership was never recorded */
+    }
+    assert.equal(
+      isForeignSession(lib._instance, owned),
+      true,
+      "this is the bug: our own session reads as foreign, and every retry refuses",
+    );
+  });
+
+  it("getSession captures ownership before awaiting create", async () => {
+    const code = stripComments(await readSrc(MODULE));
+    const body = code.slice(code.indexOf("async function getSession("));
+    const capture = body.indexOf("ownedSession = TtsSession._instance");
+    const awaited = body.indexOf("await creating");
+    assert.ok(capture > 0, "ownership must be captured from the singleton itself");
+    assert.ok(
+      awaited > capture,
+      "the capture must precede the await, or a rejected init skips it entirely",
+    );
+    assert.equal(
+      /await TtsSession\.create\(/.test(body),
+      false,
+      "awaiting create() inline is exactly the order that loses ownership",
+    );
+  });
+});
+
 describe("the call gate refuses without side effects", () => {
   it("declines during a live call but does not stop the stream", async () => {
     const code = stripComments(await readSrc(MODULE));
@@ -487,5 +558,39 @@ describe("stopAllSpeech — barge-in reaches the local queue", () => {
       /from "@\/lib\/voice\/local-voice"/,
       "the seam is a one-way import: speak.ts -> local-voice, never back",
     );
+  });
+
+  /**
+   * The scoping half of the same rule. The behavioural proof — that the call's
+   * local voice actually survives a gated chat turn — lives in
+   * tests/one-voice-call-gate.test.ts, which drives speakStarra for real. This
+   * pins the SHAPE so the two stops cannot silently re-merge.
+   */
+  it("stopHostedSpeech stops only what speak.ts owns", async () => {
+    const code = stripComments(await readSrc("src/lib/voice/speak.ts"));
+    const start = code.indexOf("export function stopHostedSpeech()");
+    assert.ok(start > 0, "the hosted-only stop must exist");
+    const body = code.slice(start, code.indexOf("export function stopAllSpeech()"));
+    assert.equal(
+      /stopLocalStream\(\)/.test(body),
+      false,
+      "the hosted stop must not reach the local mouth — during a call that stream may be HER CALL VOICE",
+    );
+    for (const owned of ["stopAraAudio()", "stopPiperAudio()", "speechSynthesis.cancel()"]) {
+      assert.ok(body.includes(owned), `the hosted stop must still stop ${owned}`);
+    }
+  });
+
+  it("speakStarra's callLive gate stands down without stopping the local stream", async () => {
+    const code = stripComments(await readSrc("src/lib/voice/speak.ts"));
+    const gate = code.slice(code.indexOf("if (getEngineState().callLive)"));
+    const block = gate.slice(0, gate.indexOf("}") + 1);
+    assert.match(block, /stopHostedSpeech\(\);/);
+    assert.equal(
+      /stopAllSpeech\(\);/.test(block),
+      false,
+      "stopAllSpeech now includes stopLocalStream — using it here kills the call's own utterance",
+    );
+    assert.match(block, /return "none";/);
   });
 });
