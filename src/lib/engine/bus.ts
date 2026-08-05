@@ -49,6 +49,13 @@ export interface EngineBusState {
   source: VoiceSource;
   /** The live analyser on her voice — the mouth's only honest input. */
   analyser: AnalyserNode | null;
+  /**
+   * True while the live call owns her voice — from summon (overlay open) to
+   * call end, not merely while sound is flowing. While set, the chat TTS
+   * stack (speak.ts) must not make a sound: ONE VOICE, the call's (Classic's
+   * order, 2026-08-04 — two voices reached him at once).
+   */
+  callLive: boolean;
   hudState: HudState;
   affect: EngineAffect;
   /** capability → provider id, as resolved by the server router. */
@@ -62,6 +69,7 @@ function initialState(): EngineBusState {
     speaking: false,
     source: null,
     analyser: null,
+    callLive: false,
     hudState: "idle",
     affect: { valence: 0, arousal: 0.2, state: "steady", because: "" },
     activeProviders: {},
@@ -149,6 +157,16 @@ export function publishVoice(patch: {
   } catch {
     /* never throw inside an audio path */
   }
+}
+
+/**
+ * CALL OWNERSHIP of her voice. Published by VoiceCallOverlay on open/close —
+ * the whole call lifecycle, not just while sound is flowing — so speakStarra
+ * can refuse to start a second voice at the source. Strict `=== true` on
+ * purpose: only a deliberate claim may silence her chat voice.
+ */
+export function publishCallLive(live: boolean): void {
+  publishEngineState({ callLive: live === true });
 }
 
 /** HUD state, for anything that renders her core. */

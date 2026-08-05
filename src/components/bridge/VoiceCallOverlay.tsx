@@ -10,9 +10,10 @@ import {
 import { StarraCallChat } from "./StarraCallChat";
 import { useStargateStream } from "@/lib/stargate-context";
 import { parseMcpCommand } from "@/lib/mcp/commands";
+import { isCodeAsk } from "@/lib/voice/code-speech";
 import { decideSpicy, pickSpicyClip } from "@/lib/voice/spicy-mode";
 // ENGINE BUS — client-safe, secret-free. "@/lib/engine/bus" only.
-import { useEngineBus } from "@/lib/engine/bus";
+import { publishCallLive, useEngineBus } from "@/lib/engine/bus";
 
 // INTEGRATION NOTE (contract §8, A1↔A2 seam): A1's half is landed, so this
 // file consumes the seam directly with no casts —
@@ -88,7 +89,8 @@ export function VoiceCallOverlay({
 
   // Shared brain stream — the fallback answer path when no live call can
   // carry a typed message, and the source of the deck-chat half of the column.
-  const { history, streaming, sendMessage, resyncHistory } = useStargateStream();
+  const { history, streaming, sendMessage, resyncHistory, stopSpeaking } =
+    useStargateStream();
   // ONE TRANSCRIPT: when the call closes, fold its recorded turns from the
   // shared store into the visible deck history — she "remembers" the call in
   // the chat column immediately, no reload.
@@ -165,8 +167,20 @@ export function VoiceCallOverlay({
       // `mcp <server> <tool>` are BRAIN work — the realtime session cannot run
       // them. Route tool commands to the brain path even mid-call (the result
       // lands in this same column and she can talk it through); everything
-      // else rides the live call as before.
+      // else rides the live call as before. TEXT-ONLY while the call is live:
+      // speakStarra's callLive gate keeps her call voice the only voice.
       if (parseMcpCommand(t)) {
+        void sendMessage(t);
+        return;
+      }
+      // CODE ON THE CALL (2026-08-04): a typed code ask is BRAIN work for the
+      // same reason tools are — the realtime session answers in AUDIO, and an
+      // audio stream cannot carry a fenced, copyable block. The brain's reply
+      // streams into this same column with the code sectioned off
+      // (markdown.tsx CodeBlock) — SILENTLY while the call is live
+      // (speakStarra's callLive gate): the double-voice incident of 2026-08-04
+      // was this very path speaking its prose over her live call voice.
+      if (isCodeAsk(t)) {
         void sendMessage(t);
         return;
       }
@@ -276,15 +290,26 @@ export function VoiceCallOverlay({
   useEffect(() => {
     if (typeof window === "undefined") return; // SSR: nothing to connect to
     if (open) {
+      // ONE VOICE — THE CALL'S (Classic's order, 2026-08-04): claim her voice
+      // for the call BEFORE the line even connects, and cut off any chat TTS
+      // turn already speaking — a brain reply mid-sentence must not keep
+      // talking under the ringback or over the live call. The claim is what
+      // speakStarra's callLive gate reads, so from this moment until close no
+      // chat-side engine can make a sound.
+      publishCallLive(true);
+      stopSpeaking();
       void connectRef.current();
     } else {
+      publishCallLive(false);
       disconnectRef.current();
     }
-  }, [open]);
+  }, [open, stopSpeaking]);
 
-  // Belt-and-suspenders: tear the engine down if this unmounts mid-call.
+  // Belt-and-suspenders: tear the engine down (and release her voice) if this
+  // unmounts mid-call.
   useEffect(() => {
     return () => {
+      publishCallLive(false);
       disconnectRef.current();
     };
   }, []);

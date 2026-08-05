@@ -765,6 +765,20 @@ export async function speakStarra(
     return "none";
   }
 
+  // ONE VOICE — THE CALL'S (Classic's order, 2026-08-04). While the live call
+  // owns her voice (bus `callLive`, raised by VoiceCallOverlay for the whole
+  // open call), NO chat-side engine may make a sound — not Ara, not Piper,
+  // not Web Speech. Two voices at once (her call leg + a chat TTS engine
+  // reading a brain reply over it) is exactly what reached him. The brain's
+  // reply still streams as TEXT into the chat column; only its sound is
+  // withheld. stopAllSpeech() still runs so anything already sounding dies
+  // with the claim, then the turn resolves "none" — sendMessage's reveal gate
+  // releases via its "silent" path, so the text is never held back.
+  if (getEngineState().callLive) {
+    stopAllSpeech();
+    return "none";
+  }
+
   stopAllSpeech();
   // Claim her voice for THIS utterance. Every publish below is stamped with it,
   // so the previous turn's late `end`/`error`/`pause` cannot blank this one.
