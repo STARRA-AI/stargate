@@ -88,3 +88,28 @@ export function getSyncReplies(): boolean {
 export function setSyncReplies(b: boolean): void {
   writeRaw(KEY_SYNC_REPLIES, b ? "1" : "0");
 }
+
+/**
+ * CALL ENGINE — which engine the NEXT summoned call runs on.
+ *
+ * "normal" is the hosted call the deck has always had. "private" is the
+ * all-local one (src/lib/voice/usePrivateCall.ts): her own ears, her own brain,
+ * her own mouth, nothing off this Mac.
+ *
+ * DEFAULT "normal", and that default is load-bearing in the same way
+ * getSyncReplies' is: an operator who never touches this setting must not be
+ * able to tell the private engine shipped. Anything stored that is not exactly
+ * "private" reads as normal — a corrupted or hand-edited value falls back to
+ * the lane that is known to work, never silently to the slower one.
+ */
+export type CallEngine = "normal" | "private";
+
+const KEY_CALL_ENGINE = "stargate.callEngine";
+
+export function getCallEngine(): CallEngine {
+  return readRaw(KEY_CALL_ENGINE) === "private" ? "private" : "normal";
+}
+
+export function setCallEngine(e: CallEngine): void {
+  writeRaw(KEY_CALL_ENGINE, e === "private" ? "private" : "normal");
+}

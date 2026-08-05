@@ -68,9 +68,13 @@ next-env.d.ts
 /data/
 /vendor/
 
-# Piper voice models (download with npm run voice:download)
+# Piper voice models (download with scripts/bootstrap-piper-assets.sh)
 /public/brand/voice/*.onnx
 /public/brand/voice/*.onnx.json
+# Her local mouth's WASM runtime — the piper phonemizer + espeak-ng data + the
+# onnxruntime binaries, fetched/copied by the same script (~46MB). Binaries, not
+# source: they belong on disk next to the models, never in the history.
+/public/brand/voice/wasm/
 
 # Local tooling
 .tools/

@@ -3,6 +3,17 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useVoiceCall, type VoiceCallState } from "@/lib/voice/useVoiceCall";
 import {
+  usePrivateCall,
+  callEngineNote,
+  privateStatusCopy,
+  toCallFaceState,
+} from "@/lib/voice/usePrivateCall";
+import {
+  getCallEngine,
+  setCallEngine,
+  type CallEngine,
+} from "@/lib/voice/deck-prefs";
+import {
   StarraClipFace,
   selectFaceAnalyser,
   selectFaceMode,
@@ -65,22 +76,71 @@ export function VoiceCallOverlay({
   open: boolean;
   onClose: () => void;
 }) {
+  // BOTH engines are constructed on every render — hooks cannot be conditional,
+  // and neither of these does ANYTHING until its connect() is called. The
+  // hosted engine's behaviour is therefore unchanged by the private one's
+  // presence: no socket, no mic, no token, no timer starts from construction.
   const {
-    state,
-    error,
-    transcript,
-    liveUser,
-    liveAssistant,
-    connect,
-    disconnect,
-    muted,
-    toggleMute,
+    state: hostedState,
+    error: hostedError,
+    transcript: hostedTranscript,
+    liveUser: hostedLiveUser,
+    liveAssistant: hostedLiveAssistant,
+    connect: hostedConnect,
+    disconnect: hostedDisconnect,
+    muted: hostedMuted,
+    toggleMute: hostedToggleMute,
     lipSyncClip,
     lipSyncRendering,
     clearLipSyncClip,
-    analyser,
+    analyser: hostedAnalyser,
     sendText,
   } = useVoiceCall();
+  const priv = usePrivateCall();
+
+  // ── ENGINE CHOICE ────────────────────────────────────────────────────────
+  // `engine` is what he picked; `activeEngine` is what the LIVE call is running
+  // on. They are two values on purpose: the live call's engine is captured at
+  // connect and never changes under it (no mid-call swaps in V1), so flipping
+  // the selector mid-call sets the NEXT call's engine and says so in the note.
+  //
+  // The selector is deliberately NOT disabled while the call is up. Disabling
+  // it would make it unreachable in practice — this overlay connects the moment
+  // it opens, so there is no window in which a disabled control could be
+  // operated at all. Immutability is enforced where it actually matters (the
+  // captured activeEngine), not by a button nobody can ever press.
+  //
+  // DEFAULT "normal", read AFTER mount: getCallEngine touches localStorage, and
+  // seeding useState from it would make the server-rendered markup disagree with
+  // the client's first paint.
+  const [engine, setEngine] = useState<CallEngine>("normal");
+  const [activeEngine, setActiveEngine] = useState<CallEngine>("normal");
+  useEffect(() => {
+    setEngine(getCallEngine());
+  }, []);
+  const engineRef = useRef<CallEngine>("normal");
+  engineRef.current = engine;
+  const chooseEngine = useCallback((next: CallEngine) => {
+    setEngine(next);
+    setCallEngine(next);
+  }, []);
+
+  const isPrivate = activeEngine === "private";
+  // Everything below this line reads ONE engine's surface. The private engine's
+  // extra states collapse to the shared union through toCallFaceState, so the
+  // face, the ringback and the focus trap need no branch of their own.
+  const state: VoiceCallState = isPrivate
+    ? toCallFaceState(priv.state)
+    : hostedState;
+  const error = isPrivate ? priv.error : hostedError;
+  const transcript = isPrivate ? priv.transcript : hostedTranscript;
+  const liveUser = isPrivate ? priv.liveUser : hostedLiveUser;
+  const liveAssistant = isPrivate ? priv.liveAssistant : hostedLiveAssistant;
+  const muted = isPrivate ? priv.muted : hostedMuted;
+  const toggleMute = isPrivate ? priv.toggleMute : hostedToggleMute;
+  const analyser = isPrivate ? priv.analyser : hostedAnalyser;
+  const connect = isPrivate ? priv.connect : hostedConnect;
+  const disconnect = isPrivate ? priv.disconnect : hostedDisconnect;
 
   const panelRef = useRef<HTMLDivElement>(null);
   const endBtnRef = useRef<HTMLButtonElement>(null);
@@ -163,6 +223,17 @@ export function VoiceCallOverlay({
   // brain+TTS path answer instead.
   const handleSend = useCallback(
     (t: string) => {
+      // PRIVATE CALL — FIRST, and unconditionally. Every branch below this one
+      // ends at sendMessage with the text UNPREFIXED, which is the hosted brain.
+      // On a private call that is precisely the leak the lane exists to
+      // prevent, so the private branch cannot sit anywhere but the top: prefix
+      // the ask (unless he already typed it) and let the deck's own private
+      // lane answer it locally, text-only under the call's voice claim.
+      if (isPrivate) {
+        const already = /^\s*private\b/i.test(t);
+        void sendMessage(already ? t : `private ${t}`);
+        return;
+      }
       // TOOLS ON THE CALL (2026-07-31): `mcp tools` / `browse <url>` /
       // `mcp <server> <tool>` are BRAIN work — the realtime session cannot run
       // them. Route tool commands to the brain path even mid-call (the result
@@ -187,7 +258,7 @@ export function VoiceCallOverlay({
       if (sendText(t)) return;
       void sendMessage(t);
     },
-    [sendText, sendMessage],
+    [isPrivate, sendText, sendMessage],
   );
   // TEXT truth: still the right signal for the chat column's busy state.
   const sheReplying = streaming.trim().length > 0;
@@ -278,14 +349,34 @@ export function VoiceCallOverlay({
   // Mirror connect/disconnect in refs so the open/close effect reacts only to
   // `open` itself, not to callback identity churn as the engine advances
   // through its states — reacting to that churn would tear the call down.
-  const connectRef = useRef(connect);
-  const disconnectRef = useRef(disconnect);
+  //
+  // ONE REF PER ENGINE, not one for the selected engine: the open effect
+  // CAPTURES the choice and then dials, and at that instant `activeEngine` has
+  // not re-rendered yet — a ref holding the derived callback would still point
+  // at the engine we are switching away from.
+  const hostedConnectRef = useRef(hostedConnect);
+  const hostedDisconnectRef = useRef(hostedDisconnect);
+  const privConnectRef = useRef(priv.connect);
+  const privDisconnectRef = useRef(priv.disconnect);
   useEffect(() => {
-    connectRef.current = connect;
-  }, [connect]);
+    hostedConnectRef.current = hostedConnect;
+  }, [hostedConnect]);
   useEffect(() => {
-    disconnectRef.current = disconnect;
-  }, [disconnect]);
+    hostedDisconnectRef.current = hostedDisconnect;
+  }, [hostedDisconnect]);
+  useEffect(() => {
+    privConnectRef.current = priv.connect;
+  }, [priv.connect]);
+  useEffect(() => {
+    privDisconnectRef.current = priv.disconnect;
+  }, [priv.disconnect]);
+
+  /** Hang up BOTH engines. Each is a no-op when it was never dialled, so this
+   * is always safe and removes any way for a swap to strand a live mic. */
+  const hangUpBoth = useCallback(() => {
+    hostedDisconnectRef.current();
+    privDisconnectRef.current();
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") return; // SSR: nothing to connect to
@@ -298,21 +389,25 @@ export function VoiceCallOverlay({
       // chat-side engine can make a sound.
       publishCallLive(true);
       stopSpeaking();
-      void connectRef.current();
+      // THE LOCK: the engine is captured here and held for the whole call.
+      const chosen = engineRef.current;
+      setActiveEngine(chosen);
+      if (chosen === "private") void privConnectRef.current();
+      else void hostedConnectRef.current();
     } else {
       publishCallLive(false);
-      disconnectRef.current();
+      hangUpBoth();
     }
-  }, [open, stopSpeaking]);
+  }, [open, stopSpeaking, hangUpBoth]);
 
   // Belt-and-suspenders: tear the engine down (and release her voice) if this
   // unmounts mid-call.
   useEffect(() => {
     return () => {
       publishCallLive(false);
-      disconnectRef.current();
+      hangUpBoth();
     };
-  }, []);
+  }, [hangUpBoth]);
 
   // Ringback: her song plays EXACTLY ONCE per summon — on the first connect —
   // then fades out when she picks up. It never replays on a reconnect and never
@@ -448,7 +543,25 @@ export function VoiceCallOverlay({
       ? "Microphone blocked"
       : lipSyncRendering
         ? "STARRA is putting her face on…"
-        : statusCopy(state);
+        : isPrivate
+          // The private engine has three states the shared union does not
+          // (transcribing / thinking / speaking-locally), and collapsing them
+          // into "Listening…" would leave him staring at a silent screen for
+          // seconds with no idea which leg is working. Its own copy names the
+          // leg. lipSyncRendering above is unreachable on this lane (that path
+          // is hosted-only) and is left ahead of it untouched.
+          ? privateStatusCopy(priv.state)
+          : statusCopy(state);
+
+  // The note under the selector: which engine the next call gets, and — on the
+  // private lane — the honest "slower" warning while the measured turn is over
+  // budget (or has never been measured). Pure, unit-tested.
+  const engineNote = callEngineNote({
+    chosen: engine,
+    active: activeEngine,
+    callLive: open,
+    lastTurnMs: priv.lastTurnMs,
+  });
 
   return (
     <div
@@ -561,6 +674,35 @@ export function VoiceCallOverlay({
         ) : null}
 
         <div className="call-ft-controls">
+          {/* ENGINE SELECT — which STARRA answers this call. NORMAL is the
+              hosted line she has always had; PRIVATE runs her ears, her brain
+              and her voice entirely on this Mac. The live call keeps the engine
+              it was dialled on; a change here takes the NEXT call (the note
+              says so). Operator copy, dark tokens, no emojis. */}
+          <div className="call-engine-select" role="group" aria-label="Call engine">
+            <button
+              type="button"
+              className={`call-engine-btn${engine === "normal" ? " is-on" : ""}`}
+              aria-pressed={engine === "normal"}
+              onClick={() => chooseEngine("normal")}
+            >
+              NORMAL
+            </button>
+            <button
+              type="button"
+              className={`call-engine-btn${engine === "private" ? " is-on" : ""}`}
+              aria-pressed={engine === "private"}
+              onClick={() => chooseEngine("private")}
+            >
+              PRIVATE
+            </button>
+          </div>
+          {engineNote ? (
+            <span className="call-engine-note" aria-live="polite">
+              {engineNote}
+            </span>
+          ) : null}
+
           <button
             type="button"
             className={`call-mute-btn${muted ? " is-muted" : ""}`}

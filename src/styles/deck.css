@@ -1461,6 +1461,33 @@ body.low-power .call-face-speaking .call-face-glow { animation: none; opacity: 0
 .call-mute-btn:focus-visible, .call-retry-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
 .call-mute-btn.is-muted { background: rgba(255,107,138,0.16); border-color: rgba(255,107,138,0.4); color: var(--bad); }
 
+/* ── ENGINE SELECT — NORMAL | PRIVATE, on the call's control row ──
+   Same pill language as the mute/end controls so it reads as one row, but
+   segmented (one border around the pair) so it reads as ONE choice with two
+   states rather than two independent buttons. The armed side uses the deck's
+   purple accent; PRIVATE gets no special colour — it is a lane, not an alarm. */
+.call-engine-select {
+  display: inline-flex; align-items: stretch; overflow: hidden;
+  border: 1px solid var(--border); border-radius: 999px;
+  background: rgba(176,77,252,0.08);
+}
+.call-engine-btn {
+  font-family: var(--display); font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
+  padding: 9px 14px; cursor: pointer;
+  background: transparent; border: none; color: var(--text-faint);
+  transition: background 0.18s ease-out, color 0.18s ease-out;
+}
+.call-engine-btn + .call-engine-btn { border-left: 1px solid var(--border); }
+.call-engine-btn:hover { color: var(--text); background: rgba(176,77,252,0.18); }
+.call-engine-btn:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: -2px; }
+.call-engine-btn.is-on { background: rgba(176,77,252,0.3); color: var(--text); }
+/* The honest one-liner under the row: which call the choice applies to, and
+   the "slower" warning while the private lane's measured turn is over budget. */
+.call-engine-note {
+  font-family: var(--display); font-size: 10px; letter-spacing: 0.1em;
+  color: var(--text-faint); align-self: center; max-width: 34ch;
+}
+
 .call-end-btn {
   font-family: var(--display); font-size: 11px; font-weight: 700; letter-spacing: 0.12em;
   padding: 9px 20px; border-radius: 999px; cursor: pointer; border: 1px solid rgba(255,107,138,0.5);
