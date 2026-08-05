@@ -25,6 +25,14 @@
  * transcribed on this machine is not transcribed at all. That is the same
  * shape, and the same reasoning, as the private chat lane
  * (src/app/api/chat/route.ts:255-291).
+ *
+ * NO isLocalRequest GATE HERE, ON PURPOSE. `private ingest` has one
+ * (route.ts:663-671) because it READS THE FILESYSTEM, so a LAN/phone caller
+ * must not reach it. This route reads nothing: it forwards audio the caller
+ * already supplied and returns text. The auth middleware (src/middleware.ts) is
+ * what keeps strangers out, and it covers every /api/ path. Gating on
+ * deck-locality would break a private call FROM THE PHONE, which is a feature
+ * of routing the leg server-side in the first place (see reason 2 above).
  */
 // ONE definition of "is this address really on this machine" — the private
 // lane's, imported rather than re-typed. A second copy of a security predicate
@@ -59,6 +67,20 @@ const MIN_WAV_BYTES = 46;
 
 export const WHISPER_DOWN_LINE =
   "Local ears are down. Run: scripts/whisper-up.sh";
+
+/**
+ * Does this body start `RIFF....WAVE`? Byte-exact, no decoding, no allocation
+ * beyond a 12-byte view — the cheapest possible "is this even audio" check.
+ * Exported so it is a unit test rather than an inline condition nobody runs.
+ */
+export function isRiffWave(bytes: ArrayBuffer): boolean {
+  if (bytes.byteLength < 12) return false;
+  const b = new Uint8Array(bytes, 0, 12);
+  return (
+    b[0] === 0x52 && b[1] === 0x49 && b[2] === 0x46 && b[3] === 0x46 && // RIFF
+    b[8] === 0x57 && b[9] === 0x41 && b[10] === 0x56 && b[11] === 0x45 // WAVE
+  );
+}
 
 function whisperBase(): string {
   const raw = (process.env.WHISPER_BASE ?? "").trim();
@@ -101,6 +123,18 @@ export async function POST(req: Request): Promise<Response> {
     return Response.json(
       { error: "utterance over the 30s local-transcription cap" },
       { status: 413, headers: NO_STORE },
+    );
+  }
+  // RIFF/WAVE magic, checked before anything expensive happens (fix wave).
+  // A `no-cors` cross-origin POST is a request the browser will still SEND even
+  // though it cannot read the reply — so a hostile page could otherwise make
+  // this deck hand arbitrary bodies to a synchronous transcription and burn the
+  // CPU of a 2-core Mac in a loop. Four bytes of header refuse that for free,
+  // and they are the same four whisper.cpp's own reader requires anyway.
+  if (!isRiffWave(bytes)) {
+    return Response.json(
+      { error: "audio body is not a RIFF/WAVE file" },
+      { status: 415, headers: NO_STORE },
     );
   }
 

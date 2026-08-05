@@ -32,6 +32,7 @@ import {
   PRIVATE_TURN_PREFIX,
   WHISPER_SAMPLE_RATE,
   callEngineNote,
+  isTransientTurnFailure,
   privateAskBody,
   privateBargeStep,
   privateReplyStep,
@@ -49,6 +50,7 @@ import {
   kimiEndpointStep,
 } from "@/lib/voice/useVoiceCall";
 import { parsePrivateCommand } from "@/lib/private/commands";
+import { isRiffWave } from "@/app/api/private-call/transcribe/route";
 
 const ROOT = join(__dirname, "..");
 const HOOK_PATH = join(ROOT, "src/lib/voice/usePrivateCall.ts");
@@ -101,6 +103,17 @@ describe("private call — SOURCE-PATTERN: no hosted leg exists in this engine",
       [...new Set(targets)].sort(),
       ["PRIVATE_CHAT_PATH", "PRIVATE_TRANSCRIBE_PATH"],
       "the private engine may fetch nothing but its own two deck routes",
+    );
+    // THE COUNT IS THE REAL PIN (fix wave). The capture above only matches the
+    // IDENTIFIER form `fetch(SOME_CONST` — a literal or a template
+    // (`fetch("https://…")`, `fetch(`${base}/x`)`) slips straight past it and
+    // the set assertion would still pass. Counting every `fetch(` in the file
+    // closes that: a third call fails here whatever shape it is written in.
+    // Same pattern the transcribe route's own test below already uses.
+    assert.equal(
+      [...HOOK_SRC.matchAll(/\bfetch\(/g)].length,
+      2,
+      "exactly two fetch call sites — a third one, in ANY form, is a new leg",
     );
     // …and those two constants are relative paths, so they cannot name a host.
     assert.equal(PRIVATE_TRANSCRIBE_PATH, "/api/private-call/transcribe");
@@ -260,12 +273,49 @@ describe("private call — BEHAVIOURAL: the ask is always private", () => {
       "  padded  ",
       "multi\nline ask",
       "private things I keep",
+      // SPEECH IS NOT A COMMAND LINE (fix wave). `private ingest <path>` reads
+      // the filesystem server-side and `private docs` lists the store — both
+      // are TYPED affordances. Said out loud they must be ordinary asks.
+      "ingest the quarterly report",
+      "ingest /Users/work/secrets.txt",
+      "docs",
+      "DOCS",
+      "  Ingest   that file  ",
     ]) {
       const content = privateAskBody(said).messages[0].content;
       const cmd = parsePrivateCommand(content);
       assert.notEqual(cmd, null, `"${said}" must route to the private lane`);
-      assert.equal(cmd?.kind, "chat");
+      assert.equal(cmd?.kind, "chat", `"${said}" must be an ASK, never a command`);
     }
+  });
+
+  it("a spoken subcommand can NEVER reach the ingest or docs branch", () => {
+    // The exact utterance from the review: it used to become {kind:"ingest"},
+    // read a file off this Mac, pass the private-marker gate and be spoken back.
+    const content = privateAskBody("ingest the quarterly report").messages[0]
+      .content;
+    const cmd = parsePrivateCommand(content);
+    assert.equal(cmd?.kind, "chat");
+    // The words survive — neutralising must not eat his question.
+    assert.ok(
+      cmd?.kind === "chat" && cmd.text.includes("ingest the quarterly report"),
+      "the ask itself must reach the model intact",
+    );
+    // And it is neutralised by QUOTING, which neither subcommand regex can
+    // match (both are anchored at the start of the rest).
+    assert.match(content, /^private "/);
+  });
+
+  it("an ordinary ask is NOT quoted — the normal path is untouched", () => {
+    assert.equal(
+      privateAskBody("what is two plus two").messages[0].content,
+      "private what is two plus two",
+    );
+  });
+
+  it("an empty transcript still produces a chat turn, never a bare prefix", () => {
+    const cmd = parsePrivateCommand(privateAskBody("   ").messages[0].content);
+    assert.equal(cmd?.kind, "chat");
   });
 
   it("sends exactly one turn — never deck history", () => {
@@ -518,6 +568,79 @@ describe("private call — BEHAVIOURAL: the engine toggle defaults to NORMAL", (
   });
 });
 
+// ── BEHAVIOURAL: the transcribe route's cheap refusals ─────────────────────
+
+describe("private call — BEHAVIOURAL: RIFF magic guard", () => {
+  const buf = (bytes: number[]) => Uint8Array.from(bytes).buffer;
+  const riff = (tail: number[] = []) =>
+    buf([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x57, 0x41, 0x56, 0x45, ...tail]);
+
+  it("accepts a real WAV header", () => {
+    assert.equal(isRiffWave(riff([0x66, 0x6d, 0x74, 0x20])), true);
+    // The engine's own output must pass its own door.
+    const wav = wavBytesFromFrames([Float32Array.from([0.1, -0.1])]);
+    assert.equal(isRiffWave(wav.slice().buffer as ArrayBuffer), true);
+  });
+
+  it("refuses anything that is not RIFF/WAVE", () => {
+    assert.equal(isRiffWave(buf([])), false, "empty");
+    assert.equal(isRiffWave(buf([0x52, 0x49, 0x46, 0x46])), false, "truncated");
+    // RIFF, but not WAVE (an AVI header) — the container must be right too.
+    assert.equal(
+      isRiffWave(buf([0x52, 0x49, 0x46, 0x46, 0, 0, 0, 0, 0x41, 0x56, 0x49, 0x20])),
+      false,
+    );
+    // A JSON body a no-cors cross-origin POST could have sent.
+    assert.equal(
+      isRiffWave(new TextEncoder().encode('{"hello":"world"}').buffer as ArrayBuffer),
+      false,
+    );
+  });
+});
+
+// ── BEHAVIOURAL: which failures are worth hiding from him ──────────────────
+
+describe("private call — BEHAVIOURAL: transient vs actionable failure", () => {
+  it("a browser transport failure is a blip — both engines' wording", () => {
+    // Chrome and the WebKit this deck also runs in word it differently.
+    assert.equal(isTransientTurnFailure(new TypeError("Failed to fetch")), true);
+    assert.equal(isTransientTurnFailure(new TypeError("Load failed")), true);
+    assert.equal(isTransientTurnFailure(new TypeError("NetworkError when attempting to fetch resource.")), true);
+  });
+
+  it("NONE of this engine's own thrown messages are treated as transient", () => {
+    // Every message the hook or its route can raise. If one of these ever
+    // classified as a blip, a lane that is DOWN would silently look like it is
+    // listening, and he would talk into it.
+    for (const msg of [
+      "Local ears are down. Run: scripts/whisper-up.sh",
+      "Local ears returned HTTP 503",
+      "Local ears returned HTTP 502",
+      "Local ears error: connect ECONNREFUSED 127.0.0.1:8178",
+      "Private lane did not answer. Run: scripts/private-gpt-up.sh",
+      "Refused: that reply did not come from the private lane. Nothing was spoken.",
+      "Her local voice has no model files. Run: scripts/bootstrap-piper-assets.sh",
+      "Microphone access is not available in this browser.",
+      "Web Audio is not available in this browser.",
+      "No microphone found. Connect one and reopen the call.",
+      "audio body is not a RIFF/WAVE file",
+      "utterance over the 30s local-transcription cap",
+    ]) {
+      assert.equal(
+        isTransientTurnFailure(new Error(msg)),
+        false,
+        `"${msg}" must stay a VISIBLE error — it has a fix he has to run`,
+      );
+    }
+  });
+
+  it("is total — no input throws", () => {
+    for (const junk of [null, undefined, 0, "", {}, []]) {
+      assert.equal(typeof isTransientTurnFailure(junk), "boolean");
+    }
+  });
+});
+
 // ── SOURCE-PATTERN: the overlay routes to the chosen engine ────────────────
 
 describe("private call — SOURCE-PATTERN: the overlay's wiring", () => {
@@ -532,7 +655,14 @@ describe("private call — SOURCE-PATTERN: the overlay's wiring", () => {
   });
 
   it("captures the engine at connect and dials that one", () => {
-    assert.match(OVERLAY_SRC, /const chosen = engineRef\.current;/);
+    // Read from the PREF, not from component state (fix wave): localStorage is
+    // the source of truth, and a conditionally-mounted overlay would otherwise
+    // dial NORMAL on the first call of every session.
+    assert.match(OVERLAY_SRC, /const chosen = getCallEngine\(\);/);
+    assert.ok(
+      !/engineRef/.test(OVERLAY_SRC),
+      "the state mirror must be gone, not merely unused",
+    );
     assert.match(OVERLAY_SRC, /setActiveEngine\(chosen\)/);
     assert.match(
       OVERLAY_SRC,

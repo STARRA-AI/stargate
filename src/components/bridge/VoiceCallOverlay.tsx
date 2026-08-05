@@ -118,8 +118,6 @@ export function VoiceCallOverlay({
   useEffect(() => {
     setEngine(getCallEngine());
   }, []);
-  const engineRef = useRef<CallEngine>("normal");
-  engineRef.current = engine;
   const chooseEngine = useCallback((next: CallEngine) => {
     setEngine(next);
     setCallEngine(next);
@@ -390,7 +388,18 @@ export function VoiceCallOverlay({
       publishCallLive(true);
       stopSpeaking();
       // THE LOCK: the engine is captured here and held for the whole call.
-      const chosen = engineRef.current;
+      //
+      // Read from localStorage, NOT from this component's state (fix wave).
+      // getCallEngine IS the source of truth and chooseEngine writes it
+      // synchronously before the render lands, so this is never staler than the
+      // state — and it does not depend on this overlay having been mounted long
+      // enough for the after-mount read to have run. Today it always is
+      // (Bridge.tsx keeps it mounted and returns null when closed), but that is
+      // a property of a DIFFERENT file: if anyone ever mounts this overlay
+      // conditionally, reading state here would silently dial NORMAL on the
+      // first call of every session.
+      const chosen = getCallEngine();
+      setEngine(chosen);
       setActiveEngine(chosen);
       if (chosen === "private") void privConnectRef.current();
       else void hostedConnectRef.current();

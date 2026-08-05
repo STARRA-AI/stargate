@@ -52,6 +52,7 @@ import {
   stopLocalStream,
 } from "@/lib/voice/local-voice";
 import { classifyChatFrame } from "@/lib/stargate-context";
+import { parsePrivateCommand } from "@/lib/private/commands";
 import { publishCallLive, subscribeEngine } from "@/lib/engine/bus";
 
 // ── CONSTANTS (all exported so the tests pin the real values) ───────────────
@@ -197,13 +198,61 @@ export function callEngineNote(opts: {
  * by the hosted brain, which is the leak this whole lane exists to prevent.
  * Single turn by design: the private branch never carries deck history
  * (src/app/api/chat/route.ts:411-413).
+ *
+ * ── SPEECH IS NOT A COMMAND LINE (fix wave) ────────────────────────────────
+ * `private …` is a GRAMMAR, not just a prefix: `private ingest <path>` and
+ * `private docs` are SUBCOMMANDS (src/lib/private/commands.ts:12-21), and
+ * `ingest` runs a server-side read of any absolute path on this Mac
+ * (route.ts:663-671). Typed, that is deliberate. SPOKEN, it is an accident
+ * waiting to happen — saying "ingest the quarterly report" would have become
+ * `{kind:"ingest"}`, hit the filesystem, pass the private-marker gate, and be
+ * read back aloud. His VOICE must only ever be able to ASK.
+ *
+ * The check is the REAL parser, not a lookalike regex: the candidate line is
+ * handed to parsePrivateCommand — the same function the route gates on — and
+ * anything that does not come back `kind:"chat"` is quoted, which cannot match
+ * either subcommand (both are anchored at the start of the rest, and neither
+ * can begin with a quote). Using the parser means a subcommand added later is
+ * neutralised here automatically instead of silently reopening this hole.
  */
 export function privateAskBody(text: string): {
   messages: { role: "user"; content: string }[];
 } {
-  return {
-    messages: [{ role: "user", content: `${PRIVATE_TURN_PREFIX}${text.trim()}` }],
-  };
+  const said = text.trim();
+  const candidate = `${PRIVATE_TURN_PREFIX}${said}`;
+  const content =
+    parsePrivateCommand(candidate)?.kind === "chat"
+      ? candidate
+      : `${PRIVATE_TURN_PREFIX}"${said}"`;
+  return { messages: [{ role: "user", content }] };
+}
+
+/**
+ * Is a failed turn a NETWORK BLIP rather than something he must act on?
+ *
+ * Deliberately narrow (fix wave). Only a fetch that never reached the deck at
+ * all counts — the browser's own transport failure, whose message is engine
+ * text ("Failed to fetch" in Chrome, "Load failed" in the WebKit this deck also
+ * runs in). Those are worth swallowing: the deck is on the same machine, the
+ * next utterance retries in seconds, and forcing him to press RETRY over one
+ * dropped request is friction with no information in it.
+ *
+ * EVERYTHING ELSE STAYS A VISIBLE ERROR — a whisper 503, a private lane that
+ * did not answer, a reply with no private marker, missing voice assets. Every
+ * one of those has a fix he has to run, and a call that quietly went back to
+ * "listening" after one would leave him talking into a lane that is down. The
+ * unit test asserts that NONE of this module's own thrown messages classify as
+ * transient, so the narrow rule cannot widen by accident.
+ */
+export function isTransientTurnFailure(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const m = msg.toLowerCase();
+  return (
+    m.includes("failed to fetch") ||
+    m.includes("load failed") ||
+    m.includes("networkerror") ||
+    m.includes("network request failed")
+  );
 }
 
 /**
@@ -533,6 +582,14 @@ export function usePrivateCall(): UsePrivateCallResult {
         }
         setLiveUser("");
         setLiveAssistant("");
+        if (isTransientTurnFailure(err)) {
+          // A dropped request, not a lane that is down. Say nothing and listen
+          // again — the next utterance retries in seconds. See the function's
+          // header for why this is kept this narrow.
+          setError(null);
+          setCallState("listening");
+          return;
+        }
         setError(err instanceof Error ? err.message : "Private call failed.");
         setCallState("error");
       } finally {
