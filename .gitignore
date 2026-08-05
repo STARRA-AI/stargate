@@ -44,6 +44,7 @@ yarn-error.log*
 /vendor/multica/
 /vendor/openalice/
 /vendor/private-gpt/
+/vendor/whisper.cpp/
 /docs/reference/system_prompts_leaks/
 
 # Repomix default dumps
