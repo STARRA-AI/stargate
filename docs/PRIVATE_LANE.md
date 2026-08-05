@@ -175,7 +175,11 @@ only a bare `private docs` (optionally with a colon) lists.
   Undo the residency setting: `export OLLAMA_KEEP_ALIVE=5m` (or unset it)
   before `starra up`, or edit the line directly in `start_ollama()`. Full
   method, raw output, and `ollama ps` evidence in
-  `.superpowers/sdd/p2-task-1-report.md`.
+  `.superpowers/sdd/p2-task-1-report.md`. **Not a durable guarantee:** Ollama's
+  `serve` process is unmanaged on this machine (no launchd job — confirmed by
+  elimination, see the report), so `OLLAMA_KEEP_ALIVE` only takes effect when
+  `start_ollama()` itself launches a fresh `serve`; residency is lost after a
+  crash or reboot until the next `starra up`.
 - **Local replies can still take a while under load.** The previous
   measurement (291-680 seconds) was recorded under heavy, unrelated CPU
   contention — see `.superpowers/sdd/task-1-report.md` — not a property of
