@@ -2,7 +2,14 @@ import { NextResponse, type NextRequest } from "next/server";
 import { authPassword, authCookieName, verifyToken } from "@/lib/auth";
 
 // Paths that must stay reachable while logged OUT (the login screen + its API).
-const PUBLIC_PREFIXES = ["/login", "/api/auth"];
+// /starra-ca.crt is the mkcert root CA's PUBLIC certificate — the phone must be
+// able to download it BEFORE it can log in over trusted TLS (the private key
+// never leaves ~/Library/Application Support/mkcert/).
+// /api/mcp carries its OWN bearer-token auth (STARRA_MCP_TOKEN) and must be
+// reachable by xAI's servers, which cannot hold Classic's session cookie. It
+// fails CLOSED when that token is unset, so listing it here does not open it —
+// it moves the lock from the cookie to the token. See src/app/api/mcp/route.ts.
+const PUBLIC_PREFIXES = ["/login", "/api/auth", "/starra-ca.crt", "/api/mcp"];
 
 export const config = {
   // NODEJS RUNTIME (stable since Next 15.5) ON PURPOSE — 2026-07-31: after a
