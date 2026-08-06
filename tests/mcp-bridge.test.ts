@@ -46,7 +46,28 @@ describe("parseMcpCommand — exact grammar, total", () => {
 
 describe("bridge discipline, on the source", () => {
   it("stays behind the auth gate; every call has a timeout; failures are captured", () => {
-    assert.ok(!read("src/middleware.ts").includes("mcp"));
+    // This used to be a blunt `!middleware.includes("mcp")`. It was protecting
+    // HER OUTBOUND hands (src/lib/mcp — Playwright/Composio), which must never
+    // be reachable without Classic's session. That intent stands.
+    //
+    // 2026-08-06 added an INBOUND MCP server at /api/mcp so xAI's Voice Agent
+    // can call back into her memory — different direction, and it MUST be
+    // publicly reachable because xAI's servers cannot hold his cookie. So the
+    // check gets sharper instead of being deleted: /api/mcp is the ONLY mcp
+    // path allowed past the cookie gate, and it has to carry its own lock.
+    const mw = read("src/middleware.ts");
+    const publicLine = /const PUBLIC_PREFIXES = \[(.*?)\]/s.exec(mw)?.[1] ?? "";
+    const mcpEntries = [...publicLine.matchAll(/"([^"]*mcp[^"]*)"/g)].map((m) => m[1]);
+    assert.deepEqual(mcpEntries, ["/api/mcp"], "only the inbound memory bridge may be public");
+
+    const inbound = read("src/app/api/mcp/route.ts");
+    assert.match(inbound, /STARRA_MCP_TOKEN/, "the public bridge must carry its own token");
+    assert.match(inbound, /MIN_TOKEN_LENGTH/, "and reject a weak one");
+    assert.match(inbound, /503/, "and FAIL CLOSED when the token is unset");
+    assert.ok(
+      !/src\/lib\/mcp|parseMcpCommand|composio|playwright/i.test(inbound),
+      "the public bridge must never reach her outbound hands",
+    );
     const client = read("src/lib/mcp/client.ts");
     assert.match(client, /CALL_TIMEOUT_MS = 30_000/);
     assert.match(client, /captureError\(`mcp:/);
