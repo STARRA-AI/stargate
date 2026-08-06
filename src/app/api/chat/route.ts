@@ -1,4 +1,12 @@
-import { buildSystemPromptBlocks, buildTieredSystemPrompt } from "@/lib/brain";
+import {
+  buildOneStarraPrompt,
+  buildSystemPromptBlocks,
+  buildTieredSystemPrompt,
+  KIMI_COMPLETION_RESERVE,
+  KIMI_VOICE_COMPLETION_RESERVE,
+  KIMI_VOICE_SYSTEM_TOKEN_BUDGET,
+  KIMI_SYSTEM_TOKEN_BUDGET,
+} from "@/lib/brain";
 import { getTier1, serializeTier1 } from "@/lib/context/tier1";
 import {
   getMemory,
@@ -22,6 +30,10 @@ import {
   parsePrivateCommand,
   type PrivateCommand,
 } from "@/lib/private/commands";
+// The egress gate. Shared with /api/private-call/transcribe — ONE definition of
+// "is this address really on this machine", in a leaf module both routes can
+// import cheaply (src/lib/private/loopback.ts).
+import { isLoopbackBase } from "@/lib/private/loopback";
 import {
   ollamaStatus,
   ollamaConfig,
@@ -29,6 +41,8 @@ import {
   stripThinkTags,
 } from "@/lib/llm/ollama";
 import { streamHosted, hostedAvailable } from "@/lib/llm/hosted";
+import { brainTier } from "@/lib/llm/spend";
+import { zdrBlocksHostedLane, zdrState } from "@/lib/llm/zdr";
 import { getKey } from "@/lib/keys";
 import { addTokens } from "@/lib/metrics";
 import { pushFeed } from "@/lib/feed";
@@ -313,42 +327,6 @@ function privateGptBase(): string {
 }
 
 /**
- * Privacy is the spec, so it is ENFORCED rather than assumed: a typo'd or
- * tampered PRIVATE_GPT_BASE pointing off-box would quietly turn the private
- * lane into an exfiltration channel.
- *
- * The rule is NUMERIC LOOPBACK LITERALS ONLY — dotted `127.x` (WHATWG URL
- * normalizes shorthand like `127.1` to `127.0.0.1` before this sees it) or
- * `::1`. Anything else is refused, and two refusals are deliberate:
- *
- *   - A PREFIX TEST ON A NAME is not a loopback test. The first cut used
- *     `/^127\./` on the host, which accepts `127.0.0.1.evil.example.com` and
- *     `127.attacker.example.com` — ordinary DNS-resolvable names that route
- *     straight off this Mac. Anchoring to digits closes that.
- *   - `localhost` IS DROPPED ON PURPOSE. A name is only ever what a resolver
- *     says it is (/etc/hosts, a search domain, a hijacked resolver), so it is
- *     not a guarantee of loopback. Nothing breaks: PRIVATE_GPT_DEFAULT_BASE
- *     is the literal IP, .env.local carries the literal IP, and the runbook
- *     (docs/PRIVATE_LANE.md) documents the literal IP.
- *
- * `::ffff:127.0.0.1` (IPv4-mapped IPv6, which URL serializes as
- * `[::ffff:7f00:1]`) is refused too — it is loopback in practice, but
- * accepting one alternate spelling invites the rest for no gain here.
- */
-export function isLoopbackBase(base: string): boolean {
-  try {
-    const u = new URL(base);
-    if (u.protocol !== "http:" && u.protocol !== "https:") return false;
-    // `hostname` keeps IPv6 bracketed; accept either spelling of ::1.
-    const host = u.hostname.toLowerCase();
-    if (host === "::1" || host === "[::1]") return true;
-    return /^127(?:\.\d{1,3}){1,3}$/.test(host);
-  } catch {
-    return false;
-  }
-}
-
-/**
  * Compact private-mode persona. qwen2.5:3b gets the same treatment the local
  * Ollama lane gets — clipSystemForLocal's budget + hard voice tail — never the
  * full canon, which would eat the whole prompt-eval window on a 3B model.
@@ -364,6 +342,22 @@ a citation.
 Be short and concrete. One clear answer beats an essay.
 `.trim();
 
+/**
+ * The same persona MINUS the retrieval paragraph, for the no-documents fast
+ * path below. Telling a model to "answer from the retrieved private documents"
+ * when nothing was retrieved is an instruction it cannot follow — it invites
+ * either a refusal or an invented citation, which is the exact failure the
+ * retrieval paragraph exists to prevent.
+ */
+const PRIVATE_SYSTEM_CORE_NO_RAG = `
+You are STARGATE (STARRA) in PRIVATE MODE, running entirely on Classic's Mac:
+local model, no internet, no cloud. Nothing said here leaves the machine. If he
+asks, tell him that plainly.
+There are no private documents indexed yet, so answer from your own knowledge —
+and say so in one short line when the answer is one he should verify.
+Be short and concrete. One clear answer beats an essay.
+`.trim();
+
 /** One SSE frame of private-gpt's stream, reduced to its `data:` payload. */
 function privateSseData(frame: string): string | null {
   const lines = frame.split("\n");
@@ -375,7 +369,110 @@ function privateSseData(frame: string): string | null {
 }
 
 /**
- * Stream a RAG answer out of private-gpt.
+ * Are there any ingested documents to retrieve from? — the switch that decides
+ * whether a private turn pays for RAG at all.
+ *
+ * WHY THIS EXISTS. A private turn measured 17-24 s warm on this Mac, and the
+ * dev-server log said where it went: `prompt eval time = 9994.13 ms / 169
+ * tokens` against `eval time = 1034.83 ms / 7 tokens` — **~90 % of her think
+ * time is evaluating a retrieval-stuffed prompt**, not generating an answer.
+ * Plain chat against the same model and the same service is 2.4 s to first
+ * token, 4.5 s total (.superpowers/sdd/p2-task-4-report.md §6,
+ * p2-task-1-report.md). With an EMPTY collection that retrieval buys literally
+ * nothing: there is no document to ground on, so the whole cost is waste.
+ *
+ * WHY IT IS CACHED. The probe must not become the overhead it removes. One
+ * loopback GET of the artifacts list is cheap (single-digit ms on this
+ * machine), but it is still a round trip on the critical path of every turn, so
+ * the answer is held for PRIVATE_DOCS_TTL_MS. The window is short on purpose:
+ * `private ingest` in the very next breath must not be ignored for a minute.
+ *
+ * FAIL-SAFE, NOT FAIL-FAST. Any failure — service down, non-200, garbage body —
+ * returns `true` and is NOT cached, so the turn runs with RAG exactly as it did
+ * before this function existed. The fast path is an optimisation; when we
+ * cannot prove it is safe to take, we do not take it.
+ */
+const PRIVATE_DOCS_TTL_MS = 60_000;
+let privateDocsProbe: { at: number; present: boolean } | null = null;
+
+/** Test seam — drop the memo so a case starts from a known state. */
+export function resetPrivateDocsProbe(): void {
+  privateDocsProbe = null;
+}
+
+export async function privateDocsPresent(opts: {
+  base: string;
+  signal: AbortSignal;
+  now?: number;
+}): Promise<boolean> {
+  const now = opts.now ?? Date.now();
+  if (privateDocsProbe && now - privateDocsProbe.at < PRIVATE_DOCS_TTL_MS) {
+    return privateDocsProbe.present;
+  }
+  try {
+    const url = `${opts.base}/artifacts/list?collection=${encodeURIComponent(PRIVATE_COLLECTION)}`;
+    const res = await fetch(url, {
+      headers: { Accept: "application/json" },
+      signal: opts.signal,
+    });
+    if (!res.ok) return true; // unknown -> behave exactly as before
+    const json = (await res.json()) as { data?: unknown[] };
+    const present = Array.isArray(json.data) && json.data.length > 0;
+    privateDocsProbe = { at: now, present };
+    return present;
+  } catch {
+    return true; // unknown -> behave exactly as before, and do not memoize it
+  }
+}
+
+/**
+ * The exact wire body for a private turn — the ONE place the two regimes
+ * differ, exported so both are a unit test rather than a shape nobody reads.
+ *
+ * When RAG runs it must be FORCED: qwen2.5:3b will not self-select the tool (it
+ * asks a clarifying question instead), and the server rejects `tool_context`
+ * unless a matching `tools` entry is present (chat_models.py:337-341). Omitting
+ * `artifacts` from the context filter searches the whole collection
+ * (ContextFilter.artifacts defaults to None — context_filter.py:27-31).
+ *
+ * When it does not run, all three keys are ABSENT together — `tools`,
+ * `tool_choice`, `tool_context`. That is not tidiness: `tool_context` without
+ * `tools` is a 4xx from the vendor (the same chat_models.py:337-341 rule), and
+ * `tool_choice` without `tools` would force a tool the model was never given.
+ */
+export function privateChatRequestBody(opts: {
+  ask: string;
+  system: string;
+  /** false = the no-documents fast path: plain completion, no tools at all. */
+  useRag: boolean;
+}): Record<string, unknown> {
+  const rag = opts.useRag
+    ? {
+        tools: [{ name: "semantic_search", type: "semantic_search_v1" }],
+        tool_choice: { type: "tool", name: "semantic_search" },
+        tool_context: [
+          {
+            type: "ingested_artifact",
+            context_filter: { collection: PRIVATE_COLLECTION },
+          },
+        ],
+      }
+    : {};
+  return {
+    model: PRIVATE_MODEL,
+    stream: true,
+    system: opts.system,
+    // Single turn by design: deck history may contain non-private turns, and
+    // mixing them in would both pollute the private context and blow a 3B
+    // model's window. Each private ask stands alone.
+    messages: [{ role: "user", content: opts.ask }],
+    ...rag,
+  };
+}
+
+/**
+ * Stream an answer out of private-gpt — with RAG when there is anything to
+ * retrieve (`useRag`), without it when there is not.
  *
  * Streaming is used because the endpoint supports it — `ChatBody.stream`
  * (vendor/private-gpt/private_gpt/server/chat/chat_models.py:24-27), emitted as
@@ -384,17 +481,12 @@ function privateSseData(frame: string): string | null {
  * _deltas.py:20-23). It also matters practically: completions here have run
  * 291-531s, and the stream's `ping` frames keep the socket warm instead of
  * leaving the deck silent for nine minutes.
- *
- * RAG must be FORCED: qwen2.5:3b will not self-select the tool (it asks a
- * clarifying question instead), and the server rejects `tool_context` unless a
- * matching `tools` entry is present (chat_models.py:337-341). Omitting
- * `artifacts` from the context filter searches the whole collection
- * (ContextFilter.artifacts defaults to None — context_filter.py:27-31).
  */
 async function streamPrivateChat(opts: {
   base: string;
   ask: string;
   system: string;
+  useRag: boolean;
   signal: AbortSignal;
   onText: (t: string) => void;
 }): Promise<{ sawText: boolean }> {
@@ -404,23 +496,13 @@ async function streamPrivateChat(opts: {
       "Content-Type": "application/json",
       Accept: "text/event-stream",
     },
-    body: JSON.stringify({
-      model: PRIVATE_MODEL,
-      stream: true,
-      system: opts.system,
-      // Single turn by design: deck history may contain non-private turns, and
-      // mixing them in would both pollute the private context and blow a 3B
-      // model's window. Each private ask stands alone.
-      messages: [{ role: "user", content: opts.ask }],
-      tools: [{ name: "semantic_search", type: "semantic_search_v1" }],
-      tool_choice: { type: "tool", name: "semantic_search" },
-      tool_context: [
-        {
-          type: "ingested_artifact",
-          context_filter: { collection: PRIVATE_COLLECTION },
-        },
-      ],
-    }),
+    body: JSON.stringify(
+      privateChatRequestBody({
+        ask: opts.ask,
+        system: opts.system,
+        useRag: opts.useRag,
+      }),
+    ),
     // No client-side timeout: 900s is legitimate here
     // (PGPT_CHAT_CALLBACK_TIMEOUT_SECONDS). Only an operator disconnect aborts.
     signal: opts.signal,
@@ -605,6 +687,7 @@ async function privateLaneResponse(
   const host = req.headers.get("host");
   const base = privateGptBase();
   const system = clipSystemForLocal(PRIVATE_SYSTEM_CORE);
+  const systemNoRag = clipSystemForLocal(PRIVATE_SYSTEM_CORE_NO_RAG);
 
   // Metering and the feed line only — and the feed line carries no private
   // text. NO recordExchange here (see the header note): a private turn writes
@@ -647,16 +730,26 @@ async function privateLaneResponse(
         }
 
         if (cmd.kind === "chat") {
+          // THE FAST PATH. Retrieval is ~90 % of a private turn's think time
+          // and it is worth every millisecond WHEN there is something to
+          // retrieve. With an empty collection it is pure cost, so the probe
+          // (memoized ~60 s) decides, and everything else about the turn —
+          // the marker frame first, the local-only host, nothing written to
+          // the shared store, no hosted fallback — is identical either way.
+          const useRag = await privateDocsPresent({ base, signal });
           const { sawText } = await streamPrivateChat({
             base,
             ask: cmd.text,
-            system,
+            system: useRag ? system : systemNoRag,
+            useRag,
             signal,
             onText: push,
           });
           if (!sawText) {
             for await (const c of stubStream(
-              "Private lane answered with a search but no text — qwen2.5:3b stopped at the tool call. Ask again, more specifically.",
+              useRag
+                ? "Private lane answered with a search but no text — qwen2.5:3b stopped at the tool call. Ask again, more specifically."
+                : "Private lane answered with nothing at all. Ask again, more specifically.",
             ))
               push(c);
           }
@@ -668,6 +761,11 @@ async function privateLaneResponse(
           const line = isLocalRequest(host)
             ? await privateIngest({ base, rawPath: cmd.path, signal })
             : PRIVATE_INGEST_REMOTE_LINE;
+          // The collection just changed, so the fast path's memo is stale by
+          // definition. Drop it: `private ingest x.txt` followed immediately by
+          // `private what's in x?` must retrieve, not answer from thin air on a
+          // cached "no documents".
+          resetPrivateDocsProbe();
           for await (const c of stubStream(line)) push(c);
         } else {
           const line = await privateDocs({ base, signal });
@@ -810,12 +908,31 @@ export async function POST(req: Request) {
     'STYLE: Write in a warm, unhurried Southern-drawl cadence — relaxed, honeyed word choice, not phonetic spelling. Do NOT lean on stock devotion lines: never repeat "I\'m all yours," "I\'m right here," or similar clingy/possessive catchphrases as a tic; show closeness through what you actually say. Keep pet names ("baby"/"love") rare and earned.',
   ];
   const systemBlocks = buildSystemPromptBlocks(volatileExtras);
-  // LIVE CALL turns get a spoken-style tail: her call replies must be short
-  // speakable prose, not deck-chat markdown (the reply is spoken verbatim by
-  // the voice link — see the kimi call path under src/lib/voice).
-  const system = callVoice
-    ? `${systemBlocks.full}\n\nLIVE CALL: You are answering on a live voice call. Reply in 1-3 short spoken sentences unless he asks for depth. No markdown headers, no bullet lists. Code only if he explicitly asked for code (it lands in the call chat, not your voice).`
-    : systemBlocks.full;
+
+  // ── ONE STARRA ───────────────────────────────────────────────────────────
+  // The SAME composed canon on every surface — operator console, deck chat and
+  // live call. The prompt no longer forks on `callVoice`: three surfaces that
+  // each built their own prompt is precisely why Classic got three different
+  // people. Order is load-bearing for the xAI prompt cache: her canon first
+  // (byte-identical every turn), then this turn's volatile context, then a
+  // short delivery note. Anything volatile in FRONT of the canon invalidates
+  // the cached prefix and bills the whole prompt at the uncached rate.
+  const CALL_DELIVERY_NOTE =
+    "LIVE CALL: You are speaking out loud on a live voice call. Reply in 1-3 short " +
+    "spoken sentences unless he asks for depth. No markdown headers, no bullet lists, " +
+    "no emoji — everything you write here is spoken aloud verbatim. Code only if he " +
+    "explicitly asked for it (it lands in the call chat, not your voice).";
+  const tier = brainTier();
+  const oneStarra = buildOneStarraPrompt(
+    tier.backupBrain ? { backupBrain: tier.backupBrain } : undefined,
+  );
+  const system = [
+    oneStarra,
+    systemBlocks.volatile,
+    callVoice ? CALL_DELIVERY_NOTE : "",
+  ]
+    .filter(Boolean)
+    .join("\n\n---\n\n");
 
   if (lastUser) {
     // Call turns: memory is the CLIENT's job (recordCallTurn — see the
@@ -843,8 +960,7 @@ export async function POST(req: Request) {
       | "ollama"
       | "anthropic"
       | "kimi"
-      | "grok"
-      | "freellm";
+      | "grok";
 
   const shellReply = lastUser ? await maybeShellReply(lastUser, req) : null;
   const toolReply = lastUser ? await maybeToolReply(lastUser) : null;
@@ -870,6 +986,15 @@ export async function POST(req: Request) {
           // Ollama -> offline canned message. Grok stays opt-in (prefer === "grok"
           // only) — never entered implicitly by auto.
           const kimiKeyed = await hostedAvailable("kimi");
+          // GROK IS THE STANDING BRAIN (Classic's ONE BRAIN order, 2026-08-06).
+          // `auto` now enters it — it is no longer opt-in-only — unless the
+          // spend meter says the emergency lane is forced, which is the ONE
+          // condition permitted to move her, and it is announced both to him
+          // (feed line below) and to her (backupBrain in the prompt).
+          const grokLane =
+            tier.provider === "grok" &&
+            (prefer === "auto" || prefer === "grok") &&
+            (await hostedAvailable("grok"));
           const useOllama =
             prefer === "ollama" ||
             (prefer === "auto" &&
@@ -892,27 +1017,11 @@ export async function POST(req: Request) {
               push(`\n\n[${label} link dropped mid-reply: ${emsg.slice(0, 80)}]`);
               return;
             }
-            // FreeLLM router rung (recursion-guarded: never from its own
-            // failure): before dropping to Ollama, try the local free-tier
-            // aggregator — auto mode is Kimi -> FreeLLM -> Ollama -> offline.
-            if (label !== "FreeLLM" && (await hostedAvailable("freellm"))) {
-              try {
-                const r = await streamHosted({
-                  provider: "freellm",
-                  system: clipSystemForLocal(system),
-                  messages: sanitizeMessagesForLocal(messages),
-                  onText: (t) => push(t),
-                  signal: req.signal,
-                });
-                pushFeed(
-                  "ALERT",
-                  `${label} failed (${emsg.slice(0, 60)}) — FreeLLM router took it (${r.model})`,
-                );
-                return;
-              } catch {
-                /* router down too — fall through to Ollama */
-              }
-            }
+            // The FreeLLM rung is GONE (2026-08-06, ONE BRAIN order): a third
+            // hosted brain in the fallback chain is a third Starra, which is
+            // the exact defect that order exists to kill. Local Ollama stays as
+            // the offline rung — that one is HER canon on this Mac, not a
+            // stranger's model.
             if (ollamaUp && hasModel) {
               pushFeed(
                 "ALERT",
@@ -938,6 +1047,40 @@ export async function POST(req: Request) {
               lastUser,
               onText: (t) => push(t),
             });
+          } else if (grokLane) {
+            // ── HER STANDING BRAIN ────────────────────────────────────────
+            // xAI grok-4.5, full canon, byte-identical prompt on every
+            // surface. No tiering here: the tiered builder exists only for
+            // Groq's capped free tier, and applying it to a lane that does not
+            // need it is what made her a different person on the call.
+            try {
+              const r = await streamHosted({
+                provider: "grok",
+                system,
+                messages,
+                onText: (t) => push(t),
+                signal: req.signal,
+              });
+              const zdr = zdrState();
+              pushFeed(
+                "ORACLE",
+                `Grok brain — ${r.model}${tier.reason === "normal" ? "" : ` (${tier.reason})`}`,
+              );
+              // PRIVACY IS REPORTED, NEVER ASSUMED — and it is NOT allowed to
+              // silently change who is answering. xAI's own header is the only
+              // source; when it says retention is on, Classic is told plainly
+              // and the decision (flip it in the xAI Console, or keep talking)
+              // stays his. Swapping her brain over it would be exactly the
+              // silent substitution docs/ONE_BRAIN.md forbids.
+              if (zdrBlocksHostedLane()) {
+                pushFeed(
+                  "ALERT",
+                  `xAI reports x-zero-data-retention: ${zdr.lastSeen} — ZDR is OFF for this key. Flip it in the xAI Console (only you can).`,
+                );
+              }
+            } catch (err) {
+              await localFallback("Grok", err);
+            }
           } else if (
             (prefer === "auto" || prefer === "kimi") &&
             kimiKeyed
@@ -949,10 +1092,20 @@ export async function POST(req: Request) {
               volatile: volatileExtras,
               includeUntrusted: Boolean(packPreview),
               includeSecurityTeam: !operatorScan.clean,
-              // A live web/weather lookup is the point of the turn — give the
-              // tiered budget headroom so the results fit (still < 8K TPM with
-              // a short query) instead of getting deferred.
-              maxTokens: weather?.ok || web?.ok ? 7900 : undefined,
+              // ONE budget, derived from the measured 8000-TPM wire limit
+              // (brain.ts). The old lookup-turn bump to 7900 was over the
+              // ceiling — it 413'd every turn (2026-08-05 call outage); web
+              // results ride the same budget and defer visibly if they miss.
+              // On a call the reply reserve is smaller (she speaks 1-3 short
+              // sentences), and that reclaimed room is exactly what lets her
+              // WHOLE canon — soul, brain, personality AND persona core — ship
+              // on the call without dropping any part of her.
+              maxTokens: callVoice ? KIMI_VOICE_SYSTEM_TOKEN_BUDGET : KIMI_SYSTEM_TOKEN_BUDGET,
+              // LIVE CALL: use the voice core. Her persona ships INSIDE it
+              // instead of competing for leftover budget (where it lost every
+              // single turn), at the cost of the ops/tooling block she does not
+              // need while talking to him. See buildCoreSystemPrompt.
+              voice: callVoice,
             });
             try {
               const r = await streamHosted({
@@ -961,6 +1114,11 @@ export async function POST(req: Request) {
                 messages: clampHistoryForKimi(messages),
                 onText: (t) => push(t),
                 signal: req.signal,
+                // Groq's TPM accounting bills prompt + max_tokens; without an
+                // explicit cap it reserves the model default and busts 8000.
+                maxOutputTokens: callVoice
+                  ? KIMI_VOICE_COMPLETION_RESERVE
+                  : KIMI_COMPLETION_RESERVE,
               });
               pushFeed(
                 "ORACLE",
@@ -969,42 +1127,11 @@ export async function POST(req: Request) {
             } catch (err) {
               await localFallback("Kimi", err);
             }
-          } else if (prefer === "grok" && (await hostedAvailable("grok"))) {
-            // xAI Grok — opt-in only (never entered by auto), no TPM cap, send
-            // the full canon (identical assembly).
-            try {
-              const r = await streamHosted({
-                provider: "grok",
-                system,
-                messages,
-                onText: (t) => push(t),
-                signal: req.signal,
-              });
-              pushFeed("ORACLE", `Grok brain — ${r.model}`);
-            } catch (err) {
-              await localFallback("Grok", err);
-            }
-          } else if (prefer === "freellm" && (await hostedAvailable("freellm"))) {
-            // FreeLLM router — explicit opt-in: the local free-tier aggregator
-            // carries the turn with the full canon (localhost, no TPM cap).
-            try {
-              const r = await streamHosted({
-                provider: "freellm",
-                system,
-                messages,
-                onText: (t) => push(t),
-                signal: req.signal,
-              });
-              pushFeed("ORACLE", `FreeLLM brain — ${r.model}`);
-            } catch (err) {
-              await localFallback("FreeLLM", err);
-            }
           } else if (
             anthropicKey &&
             prefer !== "ollama" &&
             prefer !== "kimi" &&
-            prefer !== "grok" &&
-            prefer !== "freellm"
+            prefer !== "grok"
           ) {
             if (useAgentTools) {
               // Phase 0: bounded tool loop (non-stream rounds → stub stream final).

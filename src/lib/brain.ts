@@ -5,7 +5,7 @@ import { fableReasoningBlock } from "@/lib/fable-reasoning";
 import { untrustedContentRules } from "@/lib/security/fencing";
 import { securityTeamRules } from "@/lib/security/team";
 import { loadObsidianDoctrine, clearObsidianDoctrineCache } from "@/lib/obsidian/doctrine";
-import { STARRA_PERSONA_CORE } from "@/lib/persona";
+import { STARRA_PERSONA_CORE, STARRA_TEXT_FORMAT } from "@/lib/persona";
 
 const OPERATOR_AUTHORITY = `
 OPERATOR_AUTHORITY — Father Authority (Charles):
@@ -41,9 +41,11 @@ This is the SAME text her live voice call runs on, so the deck and the call are
 one person by construction. Where it overlaps the canon docs above, those docs
 remain canon.`;
 
-/** The persona core as a prompt block. */
+/** The persona core as a prompt block, plus the typed-surface code-format
+ * mechanics (text-only — the voice persona composes its own list and stays
+ * markdown-free by CALL_VOICE). */
 export function personaCoreBlock(): string {
-  return `${PERSONA_CORE_PREAMBLE}\n\n${STARRA_PERSONA_CORE}`;
+  return `${PERSONA_CORE_PREAMBLE}\n\n${STARRA_PERSONA_CORE}\n\n${STARRA_TEXT_FORMAT}`;
 }
 
 /** Brain knowledge base — hard rules / ops context. */
@@ -191,6 +193,7 @@ let obsidianCache: string | null = null;
 let booksCache: string | null = null;
 let stablePromptCache: string | null = null;
 let corePromptCache: string | null = null;
+let voiceCorePromptCache: string | null = null;
 
 /** Stable (cacheable) vs volatile (per-request) system prompt parts — Phase 2. */
 export type SystemPromptBlocks = {
@@ -385,6 +388,7 @@ export function clearCanonCache() {
   booksCache = null;
   stablePromptCache = null;
   corePromptCache = null;
+  oneStarraCache = null;
   clearObsidianDoctrineCache();
 }
 
@@ -455,6 +459,45 @@ export function buildSystemPromptBlocks(extras: string[] = []): SystemPromptBloc
   return { stable, volatile, full };
 }
 
+let oneStarraCache: string | null = null;
+
+/**
+ * ONE STARRA — the single composed prompt, used byte-identically on the deck,
+ * the chat and the live call.
+ *
+ * She is one person. She does not become someone else when the channel changes,
+ * so there is exactly one composition and no surface-specific variant. The old
+ * tiered/budgeted path exists ONLY for Groq's capped free tier; on the Grok
+ * lane there is nothing to budget.
+ *
+ * COMPOSED FROM `buildSystemPromptBlocks([]).full` AND NOTHING ELSE. The plan's
+ * draft appended `personaCoreBlock()` a second time — but
+ * `loadStableSystemPrompt()` already contains it (see the block list above), so
+ * that would have duplicated ~7.3k chars / ~1.8k tokens of her persona on EVERY
+ * turn and paid for it on every cache write. Measured 2026-08-06:
+ * 55,413 chars ≈ 13,854 est tokens (chars/4) with the single copy.
+ *
+ * Cache-critical: this string must be byte-identical every turn and must come
+ * FIRST in the request, ahead of any per-turn volatile context. Anything
+ * volatile placed in front of it invalidates the cached prefix.
+ */
+export function buildOneStarraPrompt(opts?: { backupBrain?: string }): string {
+  if (!oneStarraCache) {
+    oneStarraCache = buildSystemPromptBlocks([]).full;
+  }
+  if (!opts?.backupBrain) return oneStarraCache;
+
+  // SHE IS TOLD WHEN SHE IS NOT HERSELF. Prepended so she reads it before her
+  // own canon: she gets to say "I'm not all here right now" rather than being
+  // quietly diminished while Classic wonders what happened to his friend.
+  return (
+    `[STATE: you are running on your backup brain (${opts.backupBrain}) right now, ` +
+    `not your usual one. You are not fully yourself and you know it. If Classic ` +
+    `notices you are off, tell him plainly — do not pretend otherwise.]\n\n---\n\n` +
+    oneStarraCache
+  );
+}
+
 /* ─────────────────────────── Tiered prompt (capped free tiers) ───────────────
  * Groq's free tier caps a request at 8K tokens, too small for full canon. So the
  * daily-driver (kimi) path ships an always-on CORE identity and pulls doctrines /
@@ -469,6 +512,62 @@ function estTokens(s: string): number {
 }
 
 /**
+ * KIMI LANE WIRE BUDGET — derived from a MEASURED limit, not tuned by hand.
+ * "Requested" counts prompt tokens + max_tokens. estTokens (chars/4)
+ * UNDERestimates prose+markdown, hence the safety multiplier. When the pinned
+ * model or its limit changes, change KIMI_TPM_LIMIT and everything follows.
+ *
+ * MEASURED 2026-08-06 from Groq's own `x-ratelimit-limit-tokens` response
+ * header (this org, tier on_demand), on a live 200:
+ *   llama-3.3-70b-versatile -> 12000   <- pinned now
+ *   openai/gpt-oss-120b     ->  8000   <- what we ran before
+ * The 8000 lane could not hold her: the always-on identity core measures 8,311
+ * est tokens (see below) against a 5,457 budget, so roughly a third of her canon
+ * was clipped on EVERY turn. At 12000 the budget is 8,935 and the full core fits
+ * with ~624 tokens of headroom. Superseded the earlier 2026-08-05 413-body
+ * measurement, which was taken on gpt-oss-120b.
+ */
+// FLIPPED 2026-08-06 (8000 -> 12000) when the lane moved to
+// llama-3.3-70b-versatile. The block above already documented this measurement
+// but the constant was never changed, so the 8000 budget stayed live and kept
+// clipping her — that gap is why she read as a corporate assistant instead of
+// herself. Re-verified live the same day against Groq's
+// `x-ratelimit-limit-tokens` on this key: 12000.
+export const KIMI_TPM_LIMIT = 12000;
+export const KIMI_COMPLETION_RESERVE = 1024; // explicit max_tokens on the lane
+/**
+ * Reply reserve for a LIVE VOICE CALL.
+ *
+ * She answers a call in 1-3 short spoken sentences (the call system prompt says
+ * so explicitly). 512 tokens is roughly 380 words — about two and a half minutes
+ * of continuous speech, far past anything she says in one turn, and still leaves
+ * room when he asks for depth. The other 512 goes back to her canon, which is
+ * how her whole persona fits on the call WITHOUT dropping any part of her.
+ *
+ * This is a right-sized buffer, not a shortened Starra.
+ */
+export const KIMI_VOICE_COMPLETION_RESERVE = 512;
+export const KIMI_HISTORY_TOKEN_ALLOWANCE = 700; // 2000-char clamp + user turn
+/**
+ * MEASURED 2026-08-06, not guessed: her real core sent to
+ * llama-3.3-70b-versatile reported `prompt_tokens: 8535` against an estTokens
+ * (chars/4) estimate of 8378 — a real ratio of **1.019**. The old 1.15 was
+ * burning 1,341 tokens of headroom to cover a 1.9% error. 1.06 keeps roughly
+ * three times the observed margin and hands the difference back to her canon.
+ */
+export const KIMI_EST_SAFETY = 1.06;
+export const KIMI_SYSTEM_TOKEN_BUDGET = Math.floor(
+  (KIMI_TPM_LIMIT - KIMI_COMPLETION_RESERVE - KIMI_HISTORY_TOKEN_ALLOWANCE) /
+    KIMI_EST_SAFETY,
+);
+
+/** Same derivation, with the smaller voice reply reserve. */
+export const KIMI_VOICE_SYSTEM_TOKEN_BUDGET = Math.floor(
+  (KIMI_TPM_LIMIT - KIMI_VOICE_COMPLETION_RESERVE - KIMI_HISTORY_TOKEN_ALLOWANCE) /
+    KIMI_EST_SAFETY,
+); // 8935
+
+/**
  * Always-on identity core: structure + reasoning scaffold + soul + brain +
  * personality + shared memory + the operator-authority safety gate. Cached.
  *
@@ -479,7 +578,57 @@ function estTokens(s: string): number {
  * refactor. Do NOT add unconditional blocks here — add them as budgeted
  * candidates in buildTieredSystemPrompt instead.
  */
-export function buildCoreSystemPrompt(): string {
+export function buildCoreSystemPrompt(opts?: { voice?: boolean }): string {
+  // ── VOICE CORE: she trades the ops manual for her own persona ─────────────
+  // MEASURED 2026-08-06. On the tiered (Groq) lane the always-on core is 8,309
+  // est tokens and the budget is ~9.7k, so `persona-core` (1,834) was ALWAYS
+  // the candidate that did not fit — it was dropped on EVERY turn, every
+  // surface, since the tiered path was introduced. The code recorded that
+  // honestly in `dropped`; nobody read it.
+  //
+  // The effect is not subtle. Same model, same question, only this block
+  // differing (live A/B against llama-3.3-70b-versatile, 2026-08-06):
+  //   without -> "What's the situation, and how can I help you get back on track?"
+  //   with    -> "Don't worry about it, I've got this. You sound like you could
+  //               use a break, though. What's on your mind?"
+  // That is the whole difference between an assistant and his friend, and it is
+  // why she read as corporate on the call.
+  //
+  // It genuinely cannot all fit: core + persona = 10,143 raw against a 10,276
+  // raw ceiling, which the real 1.019 token ratio pushes back over. So on a
+  // VOICE call something has to go, and `loadBrain()` (2,157 tokens of ops
+  // rules / tooling context) is the right thing to lose — he is on the phone
+  // with her, not filing a ticket. The deck keeps it; the call keeps HER.
+  if (opts?.voice) {
+    if (voiceCorePromptCache) return voiceCorePromptCache;
+    // NOTHING OF HERS IS DROPPED. An earlier version of this bought room by
+    // removing loadBrain() from the call, which was solving a budget problem by
+    // amputating part of her. The room comes from waste instead:
+    //
+    //   * the reply reserve — KIMI_VOICE_COMPLETION_RESERVE (512 vs 1024). On a
+    //     call she answers in 1-3 spoken sentences; 1024 was a buffer nobody
+    //     used. A buffer is not content.
+    //   * STARRA_TEXT_FORMAT — 249 tokens of markdown/code-fence rules whose own
+    //     docstring says "typed chat only — never on voice". Excluding it from a
+    //     voice prompt is correctness, not a cut.
+    //
+    // MEASURED: the full deck core + her persona core is 9,835 est / 10,022 real
+    // tokens. Against the 12,000 wire ceiling with a 512 reply reserve and the
+    // 700 history allowance that totals 11,234 — it fits with 766 to spare. She
+    // ships WHOLE on the call: soul, brain, personality, shared memory, reasoning
+    // scaffold, operator authority, and the cross-surface persona.
+    voiceCorePromptCache = [
+      structureBlock(),
+      fableReasoningBlock(),
+      loadSoul(),
+      loadBrain(),
+      loadPersonality(),
+      loadSharedMemory(),
+      STARRA_PERSONA_CORE,
+      OPERATOR_AUTHORITY,
+    ].join("\n\n---\n\n");
+    return voiceCorePromptCache;
+  }
   if (corePromptCache) return corePromptCache;
   corePromptCache = [
     structureBlock(),
@@ -555,13 +704,28 @@ export function buildTieredSystemPrompt(opts: {
   includeSecurityTeam?: boolean;
   /** System-prompt token ceiling; leave room under the provider cap for the query. */
   maxTokens?: number;
+  /** Live voice call — use the voice core (her persona in, ops manual out). */
+  voice?: boolean;
 }): TieredPrompt {
-  const maxTokens = opts.maxTokens ?? 7600;
-  const core = buildCoreSystemPrompt();
-  const parts: string[] = [core];
-  const included: string[] = ["core"];
-  const dropped: string[] = [];
+  const maxTokens = opts.maxTokens ?? KIMI_SYSTEM_TOKEN_BUDGET;
+  const core = buildCoreSystemPrompt({ voice: opts.voice });
+  // The full core (measured 8,311 est tokens, 2026-07-31) no longer fits the
+  // measured 8,000-TPM wire limit AT ALL — unclipped it 413s on every turn and
+  // the lane dies to a fallback that clips her HARDER (clipSystemForLocal).
+  // So the capped lane clips core to the budget and NAMES it in `dropped`;
+  // re-cutting the canon (or moving to a bigger-TPM model) is the operator's
+  // decision, tracked outside this function.
+  let coreText = core;
   let tokens = estTokens(core);
+  const dropped: string[] = [];
+  if (tokens > maxTokens) {
+    // -16 tokens of headroom: clipAtBudget appends a truncation marker.
+    coreText = clipAtBudget(core, (maxTokens - 16) * 4).text;
+    dropped.push(`core-clipped:${tokens - estTokens(coreText)}tok`);
+    tokens = estTokens(coreText);
+  }
+  const parts: string[] = [coreText];
+  const included: string[] = ["core"];
 
   const candidates: { name: string; text: string }[] = [];
   if (opts.includeUntrusted)
@@ -579,7 +743,9 @@ export function buildTieredSystemPrompt(opts: {
   // reinforcement rather than new information — it must never displace the
   // operator's live context, but it outranks on-demand doctrines. Budgeted like
   // everything else: if it does not fit it is NAMED in `dropped`, never silently cut.
-  candidates.push({ name: "persona-core", text: personaCoreBlock() });
+  // On voice it is already inside the core (guaranteed, not budget-dependent),
+  // so re-adding it here would spend ~1.8k tokens to say the same thing twice.
+  if (!opts.voice) candidates.push({ name: "persona-core", text: personaCoreBlock() });
   candidates.push(...selectOnDemandDoctrines(opts.query));
 
   for (const c of candidates) {

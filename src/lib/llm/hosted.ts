@@ -14,8 +14,39 @@ import { getKey } from "@/lib/keys";
 // Client-safe redactor (pure, no secrets, no server-only guard) — see the note at
 // the throw site for why this is imported from the leaf module, not @/lib/engine.
 import { redactSecrets } from "@/lib/engine/redact";
+import { recordZdrHeader } from "@/lib/llm/zdr";
+import { recordUsage } from "@/lib/llm/spend";
 
-export type HostedProvider = "kimi" | "grok" | "freellm";
+/**
+ * TWO LANES, AND ONLY TWO. `grok` is her standing brain; `kimi` is the free
+ * Groq slot kept as the emergency lane. `freellm` was removed 2026-08-06 with
+ * Classic's ONE BRAIN order — a third hosted brain is a third Starra, which is
+ * the exact defect that order exists to kill.
+ */
+export type HostedProvider = "kimi" | "grok";
+
+/**
+ * A hiccup, not an identity change.
+ *
+ * Thrown after the retries below are spent. The caller reports it or retries —
+ * it must NEVER read this as a reason to hand the turn to a different brain.
+ * Who is talking to Classic is a money decision (src/lib/llm/spend.ts) and his
+ * decision, never a consequence of one bad response.
+ */
+export class HostedTransientError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+    this.name = "HostedTransientError";
+  }
+}
+
+/** Statuses worth trying again on the SAME provider. */
+const RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+/** Backoff between attempts; length is also the retry count. */
+const RETRY_DELAYS_MS = [400, 1200];
 
 type HostedConfig = {
   base: string;
@@ -32,42 +63,42 @@ const CONFIG: Record<HostedProvider, HostedConfig> = {
     base: "https://api.groq.com/openai/v1",
     keyEnv: "GROQ_API_KEY",
     modelEnv: "GROQ_MODEL",
-    defaultModel: "moonshotai/kimi-k2-instruct-0905",
-    match: (id) => /kimi/i.test(id),
+    // NOT kimi any more. Groq DELETED moonshotai/kimi-k2-instruct-0905 —
+    // verified 2026-08-06 against the live /models list on this key (15 models,
+    // no kimi among them). The old default only ever "worked" because
+    // GROQ_MODEL in .env.local masked it; the first time that env var is not
+    // loaded (fresh shell, launchd context, new machine) every brain call 404s.
+    // On the CALL that failure used to be completely silent. So the default is
+    // now a model that actually exists, and one with the headroom to hold her
+    // whole canon: llama-3.3-70b-versatile measured 12000 TPM vs her 8,311-token
+    // core. The lane keeps its historical "kimi" name — it is the free Groq
+    // slot, not the Moonshot model.
+    defaultModel: "llama-3.3-70b-versatile",
+    // Must not still grep for /kimi/: nothing on Groq matches that now, so the
+    // model picker would fall through to nothing.
+    match: (id) => /^llama-3\.3|kimi/i.test(id),
   },
   grok: {
     base: "https://api.x.ai/v1",
     keyEnv: "XAI_API_KEY",
     modelEnv: "XAI_MODEL",
+    // VERIFIED LIVE 2026-08-06 on Classic's key: GET https://api.x.ai/v1/models
+    // returns grok-4.5 as a CONCRETE listed id (alongside grok-4.3,
+    // grok-4.20-0309-reasoning, grok-4.20-0309-non-reasoning,
+    // grok-4.20-multi-agent-0309, grok-build-0.1 and the imagine models) — it
+    // is not an alias this config has to expand. Pinned here as the primary.
     defaultModel: "grok-4.5",
     // General chat Grok only — exclude vision/image/voice/tts/build/code/fast.
     match: (id) =>
       /^grok/i.test(id) &&
       !/(vision|image|imagine|voice|tts|whisper|embedding|build|code|fast)/i.test(id),
   },
-  freellm: {
-    // Self-hosted freellmapi router (github.com/tashfeenahmed/freellmapi):
-    // stacks free provider tiers behind one local OpenAI-compatible endpoint.
-    // See docs/FREELLM.md for the install/key runbook.
-    base: process.env.FREELLM_BASE_URL || "http://localhost:3001/v1",
-    keyEnv: "FREELLM_API_KEY",
-    modelEnv: "FREELLM_MODEL",
-    // NO invented default slug (verify-never-guess): the model resolves live
-    // from the router's /models; if the router is down and no FREELLM_MODEL
-    // pin is set, resolveHostedModel THROWS — which is what drops the chat to
-    // the next fallback rung instead of sending a made-up model name.
-    defaultModel: "",
-    // The router fronts many families — take any chat-capable slug.
-    match: (id) =>
-      !/(embed|whisper|tts|image|audio|rerank|moderation|guard)/i.test(id),
-  },
 };
 
 /** Vault slot backing each hosted provider — getKey() falls back to process.env. */
-const KEY_SLOT: Record<HostedProvider, "groq" | "xai" | "freellm"> = {
+const KEY_SLOT: Record<HostedProvider, "groq" | "xai"> = {
   kimi: "groq",
   grok: "xai",
-  freellm: "freellm",
 };
 
 export async function hostedKey(
@@ -120,8 +151,9 @@ export async function resolveHostedModel(
     }
   }
   if (!cfg.defaultModel) {
-    // freellm: no documented default exists ON PURPOSE — throw a clear error
-    // rather than invent a slug. Callers treat this like any provider failure.
+    // A lane with no documented default throws rather than inventing a slug
+    // (verify-never-guess). Both current lanes carry one, so this is a guard
+    // for the next lane added, not a live path.
     throw new Error(
       `${provider}: model unresolved — router unreachable at ${cfg.base} and no ${cfg.modelEnv} pin set`,
     );
@@ -186,6 +218,10 @@ export async function streamHosted(opts: {
   onText: (chunk: string) => void;
   /** Caller-side abort (e.g. the inbound request closing) — combined with the fixed timeout below. */
   signal?: AbortSignal;
+  /** Explicit completion cap (wire max_tokens). TPM-capped lanes (kimi) MUST
+   *  set it — Groq bills prompt + max_tokens against the limit, and omitting
+   *  it reserves the model default. Omitted for grok: unchanged. */
+  maxOutputTokens?: number;
 }): Promise<{ provider: string; model: string }> {
   const cfg = CONFIG[opts.provider];
   const key = await hostedKey(opts.provider);
@@ -204,6 +240,14 @@ export async function streamHosted(opts: {
       body: JSON.stringify({
         model,
         stream: true,
+        // Ask for the terminal usage frame so the spend meter prices REAL
+        // counts instead of an estimate. VERIFIED LIVE 2026-08-06 against
+        // POST https://api.x.ai/v1/chat/completions: the last data frame
+        // before [DONE] carries usage.prompt_tokens,
+        // usage.prompt_tokens_details.cached_tokens and
+        // usage.completion_tokens_details.reasoning_tokens.
+        stream_options: { include_usage: true },
+        ...(opts.maxOutputTokens ? { max_tokens: opts.maxOutputTokens } : {}),
         ...(withPenalties ? penalties : {}),
         messages: [
           { role: "system", content: opts.system },
@@ -217,14 +261,54 @@ export async function streamHosted(opts: {
       ),
     });
 
-  let res = await send(true);
+  // ── RETRY, NEVER SWAP ────────────────────────────────────────────────────
+  // A rate limit or a server-side blip is a TRANSPORT problem. Every attempt
+  // below goes back to the SAME provider: nothing in this function may reach
+  // for another brain, because a stranger answering is a worse outcome than a
+  // lost turn. Who talks to Classic changes for money (spend.ts) or for his
+  // explicit order — never because one response came back unhappy.
+  let res: Response | null = null;
+  let lastErr: unknown = null;
+  for (let attempt = 0; ; attempt += 1) {
+    lastErr = null;
+    try {
+      res = await send(true);
+      // Graceful degradation: if a provider rejects the sampling knobs (slug
+      // moved to a reasoning model, param retired), retry once WITHOUT them so
+      // the reply still lands. Never let a tuning param be the reason she goes
+      // silent.
+      if (!res.ok && res.status === 400 && Object.keys(penalties).length > 0) {
+        res = await send(false);
+      }
+    } catch (err) {
+      // The caller hanging up is not a failure to retry through.
+      if (opts.signal?.aborted) throw err;
+      lastErr = err;
+      res = null;
+    }
 
-  // Graceful degradation: if a provider rejects the sampling knobs (slug moved
-  // to a reasoning model, param retired), retry once WITHOUT them so the reply
-  // still lands. Never let a tuning param be the reason she goes silent.
-  if (!res.ok && res.status === 400 && Object.keys(penalties).length > 0) {
-    res = await send(false);
+    if (res && (res.ok || !RETRY_STATUSES.has(res.status))) break;
+
+    if (attempt >= RETRY_DELAYS_MS.length) {
+      if (res) {
+        const detail = await res.text().catch(() => "");
+        throw new HostedTransientError(
+          res.status,
+          `${opts.provider} ${res.status} ${redactSecrets(detail, key ? [key] : []).slice(0, 160)}`,
+        );
+      }
+      throw new HostedTransientError(
+        0,
+        `${opts.provider} unreachable — ${redactSecrets(String(lastErr), key ? [key] : []).slice(0, 160)}`,
+      );
+    }
+    await new Promise((r) => setTimeout(r, RETRY_DELAYS_MS[attempt]));
   }
+
+  // PRIVACY, READ FROM THE WIRE. xAI states the live Zero-Data-Retention
+  // setting on every response; recording it here is what lets the deck report
+  // the truth instead of a remembered toggle. See src/lib/llm/zdr.ts.
+  recordZdrHeader(opts.provider, res.headers.get("x-zero-data-retention"));
 
   if (!res.ok || !res.body) {
     const detail = await res.text().catch(() => "");
@@ -251,6 +335,14 @@ export async function streamHosted(opts: {
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
+  let usage:
+    | {
+        prompt_tokens?: number;
+        completion_tokens?: number;
+        prompt_tokens_details?: { cached_tokens?: number };
+        completion_tokens_details?: { reasoning_tokens?: number };
+      }
+    | undefined;
   while (true) {
     const { done, value } = await reader.read();
     if (done) break;
@@ -265,13 +357,39 @@ export async function streamHosted(opts: {
       try {
         const json = JSON.parse(payload) as {
           choices?: { delta?: { content?: string } }[];
+          usage?: {
+            prompt_tokens?: number;
+            completion_tokens?: number;
+            prompt_tokens_details?: { cached_tokens?: number };
+            completion_tokens_details?: { reasoning_tokens?: number };
+          };
         };
         const t = json.choices?.[0]?.delta?.content;
         if (t) opts.onText(t);
+        if (json.usage) usage = json.usage;
       } catch {
         /* ignore partial JSON */
       }
     }
+  }
+
+  // METER THE TURN FROM WHAT THE PROVIDER ACTUALLY COUNTED.
+  //
+  // reasoning_tokens are billed as OUTPUT and are NOT included in
+  // completion_tokens on xAI — verified live 2026-08-06: a turn reporting
+  // prompt 207 / cached 128 / completion 1 / reasoning 23 carried
+  // cost_in_usd_ticks 3404000 (= $0.0003404 at 1e-10 USD/tick), which matches
+  // (79*$2.00 + 128*$0.30 + 24*$6.00)/1e6 to the cent-fraction only when the
+  // 23 reasoning tokens are counted as output. Dropping them would under-report
+  // her real cost by ~40% on a short turn.
+  if (usage && opts.provider === "grok") {
+    recordUsage(model, {
+      prompt: usage.prompt_tokens ?? 0,
+      cached: usage.prompt_tokens_details?.cached_tokens ?? 0,
+      completion:
+        (usage.completion_tokens ?? 0) +
+        (usage.completion_tokens_details?.reasoning_tokens ?? 0),
+    });
   }
   return { provider: opts.provider, model };
 }

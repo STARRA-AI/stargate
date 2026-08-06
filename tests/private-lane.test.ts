@@ -8,7 +8,12 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { parsePrivateCommand } from "../src/lib/private/commands";
-import { isLoopbackBase } from "../src/app/api/chat/route";
+import { isLoopbackBase } from "../src/lib/private/loopback";
+import {
+  privateChatRequestBody,
+  privateDocsPresent,
+  resetPrivateDocsProbe,
+} from "../src/app/api/chat/route";
 import {
   buildUserTurn,
   classifyChatFrame,
@@ -161,7 +166,9 @@ describe("parsePrivateCommand — ingest", () => {
  *     -> getMemory -> memoryForPrompt (route.ts) -> the system prompt
  *     -> Kimi/Grok/FreeLLM/Anthropic
  *   the same store -> callDigest (src/app/api/memory/route.ts:18-20)
- *     -> src/lib/voice/useVoiceCall.ts:1898-1902 -> xAI session instructions
+ *     -> src/lib/voice/useVoiceCall.ts:1944-1948 (the `/api/memory?digest=1`
+ *        fetch into memoryDigestRef) -> :2208 `ws.send(sessionUpdate(
+ *        memoryDigestRef.current, …))` -> xAI session instructions
  * So a recorded private turn does not stay private; it leaks on the NEXT
  * normal turn or the next call. These assertions look at CALLS, not mentions —
  * the branch's own comments name both functions to explain why they're absent.
@@ -644,7 +651,9 @@ describe("silence gate — live call (useVoiceCall.ts)", () => {
   it("decides the ask is private BEFORE the optimistic user commit", async () => {
     const body = stripComments(await kimiTurn());
     const decided = body.indexOf("parsePrivateCommand(t)");
-    const committed = body.indexOf('recordCallTurn("user", t)');
+    // No closing paren: the call carries a third `supersede` argument since
+    // the one-row-per-utterance guard landed (2026-08-06).
+    const committed = body.indexOf('recordCallTurn("user", t');
     assert.ok(decided >= 0, "runKimiTurn must classify the ask itself");
     assert.ok(
       decided < committed,
@@ -654,17 +663,32 @@ describe("silence gate — live call (useVoiceCall.ts)", () => {
 
   it("keeps a private ask out of the store and out of the hosted context", async () => {
     const body = stripComments(await kimiTurn());
+    // Block-scoped rather than proximity-matched: the guard's body grew when
+    // the one-row-per-utterance supersede landed (2026-08-06), and a
+    // character-budget regex would have to be re-tuned every time it changes.
+    // What actually matters is that BOTH escaping writes live inside the
+    // guard, and NEITHER exists anywhere else in the turn.
+    const guarded = between(body, "if (!privateAsk) {", "scheduleToolFastpath(t);");
+    assert.match(guarded, /recordCallTurn\("user", t/, "the shared-store write must sit behind the private guard");
     assert.match(
-      body,
-      /if \(!privateAsk\) \{[\s\S]{0,200}?recordCallTurn\("user", t\);[\s\S]{0,200}?callTurnsRef\.current\.push\(\{ role: "user", text: t \}\);/,
-      "both the shared-store write and the hosted-bound context push must sit behind the private guard",
+      guarded,
+      /callTurnsRef\.current\.push\(\{ role: "user", text: t \}\)/,
+      "the hosted-bound context push must sit behind the private guard",
+    );
+    // Nothing may write either one outside the guard.
+    const outside = body.replace(guarded, "");
+    assert.doesNotMatch(outside, /recordCallTurn\("user", t/, "a second unguarded store write would leak a private ask");
+    assert.doesNotMatch(
+      outside,
+      /callTurnsRef\.current\.push\(\{ role: "user"/,
+      "a second unguarded context push would ride a private ask to the hosted brain",
     );
   });
 
   it("never speaks a private reply and never stores it", async () => {
     const src = await readSrc(HOOK);
     const branch = stripComments(
-      between(src, "if (privateReply) {", "speakForced(spoken, reply);"),
+      between(src, "if (privateReply) {", "speakForced(spoken, shaped.text);"),
     );
     for (const forbidden of ["speakForced", "recordCallTurn"]) {
       assert.equal(
@@ -682,7 +706,7 @@ describe("silence gate — live call (useVoiceCall.ts)", () => {
 
   it("still shows the private reply in the call column", async () => {
     const branch = stripComments(
-      between(await readSrc(HOOK), "if (privateReply) {", "speakForced(spoken, reply);"),
+      between(await readSrc(HOOK), "if (privateReply) {", "speakForced(spoken, shaped.text);"),
     );
     assert.match(
       branch,
@@ -979,5 +1003,186 @@ describe("private lane — composed stream drive (marker → text → abort)", (
     assert.equal(res.privateTurn, false, "no frame was ever read");
     assert.equal(userMsg.private, true);
     assert.deepEqual(withoutPrivateTurns([userMsg]), []);
+  });
+});
+
+/* ─────────── TASK 6 — the no-RAG fast path for a documentless collection ──────
+ * A private turn measured 17-24 s warm on this Mac, and the dev-server log said
+ * where it went: `prompt eval time = 9994.13 ms / 169 tokens` against
+ * `eval time = 1034.83 ms / 7 tokens` — ~90 % of her think time is evaluating a
+ * retrieval-stuffed prompt (.superpowers/sdd/p2-task-4-report.md §6). Against an
+ * EMPTY collection that cost buys nothing at all: there is no document to ground
+ * on. So retrieval now runs only when there is something to retrieve.
+ *
+ * Two regimes, both pinned here on the REAL function the route calls:
+ *   docs present -> byte-identical to what shipped before (forced tool shape)
+ *   no docs      -> a plain completion with NO tools field whatsoever
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe("private fast path — the request body's two regimes", () => {
+  it("with documents: the forced semantic_search shape, unchanged", () => {
+    const body = privateChatRequestBody({
+      ask: "what did the contract say",
+      system: "sys",
+      useRag: true,
+    });
+    assert.deepEqual(body.tools, [
+      { name: "semantic_search", type: "semantic_search_v1" },
+    ]);
+    assert.deepEqual(body.tool_choice, {
+      type: "tool",
+      name: "semantic_search",
+    });
+    assert.deepEqual(body.tool_context, [
+      {
+        type: "ingested_artifact",
+        context_filter: { collection: "pgpt_collection" },
+      },
+    ]);
+    // The parts that must NOT vary with the regime.
+    assert.equal(body.stream, true);
+    assert.equal(body.system, "sys");
+    assert.deepEqual(body.messages, [
+      { role: "user", content: "what did the contract say" },
+    ]);
+  });
+
+  it("without documents: no tools field, no tool_choice, no tool_context", () => {
+    const body = privateChatRequestBody({
+      ask: "what is two plus two",
+      system: "sys",
+      useRag: false,
+    });
+    // Absent, not empty: `tool_context` without `tools` is a 4xx from the
+    // vendor, and `tool_choice` without `tools` forces a tool that was never
+    // given (chat_models.py:337-341).
+    assert.equal("tools" in body, false);
+    assert.equal("tool_choice" in body, false);
+    assert.equal("tool_context" in body, false);
+    // Everything else is the same turn it always was.
+    assert.equal(body.stream, true);
+    assert.equal(body.system, "sys");
+    assert.deepEqual(body.messages, [
+      { role: "user", content: "what is two plus two" },
+    ]);
+  });
+
+  it("the ONLY difference between the regimes is those three keys", () => {
+    const withRag = privateChatRequestBody({
+      ask: "a",
+      system: "s",
+      useRag: true,
+    }) as Record<string, unknown>;
+    const withoutRag = privateChatRequestBody({
+      ask: "a",
+      system: "s",
+      useRag: false,
+    }) as Record<string, unknown>;
+    const differing = [
+      ...new Set([...Object.keys(withRag), ...Object.keys(withoutRag)]),
+    ].filter(
+      (k) => JSON.stringify(withRag[k]) !== JSON.stringify(withoutRag[k]),
+    );
+    assert.deepEqual(differing.sort(), [
+      "tool_choice",
+      "tool_context",
+      "tools",
+    ]);
+  });
+});
+
+describe("private fast path — the probe that chooses the regime", () => {
+  const realFetch = globalThis.fetch;
+  const ac = new AbortController();
+
+  /** One stubbed artifacts-list response, and a count of how often it was hit. */
+  const stubList = (payload: unknown, ok = true) => {
+    let calls = 0;
+    globalThis.fetch = (async (url: string) => {
+      calls += 1;
+      assert.match(String(url), /\/artifacts\/list\?collection=pgpt_collection$/);
+      return {
+        ok,
+        json: async () => payload,
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    return () => calls;
+  };
+
+  const restore = () => {
+    globalThis.fetch = realFetch;
+    resetPrivateDocsProbe();
+  };
+
+  it("sees documents -> RAG stays on", async () => {
+    resetPrivateDocsProbe();
+    stubList({ data: [{ artifact: "smoke-test" }] });
+    try {
+      assert.equal(
+        await privateDocsPresent({ base: "http://127.0.0.1:8080/v1", signal: ac.signal }),
+        true,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("sees an empty collection -> the fast path is taken", async () => {
+    resetPrivateDocsProbe();
+    stubList({ object: "list", data: [] });
+    try {
+      assert.equal(
+        await privateDocsPresent({ base: "http://127.0.0.1:8080/v1", signal: ac.signal }),
+        false,
+      );
+    } finally {
+      restore();
+    }
+  });
+
+  it("memoizes inside the TTL — the probe is not per-turn overhead", async () => {
+    resetPrivateDocsProbe();
+    const calls = stubList({ data: [] });
+    try {
+      const base = "http://127.0.0.1:8080/v1";
+      await privateDocsPresent({ base, signal: ac.signal, now: 1_000_000 });
+      await privateDocsPresent({ base, signal: ac.signal, now: 1_030_000 });
+      assert.equal(calls(), 1, "second turn inside 60s must not re-probe");
+      // ...and expires, so `private ingest` is never ignored for long.
+      assert.equal(
+        await privateDocsPresent({ base, signal: ac.signal, now: 1_061_000 }),
+        false,
+      );
+      assert.equal(calls(), 2, "past the TTL it asks again");
+    } finally {
+      restore();
+    }
+  });
+
+  it("FAILS SAFE: a down service or a bad body keeps RAG on, uncached", async () => {
+    resetPrivateDocsProbe();
+    const base = "http://127.0.0.1:8080/v1";
+    // Non-200.
+    const calls = stubList({ data: [] }, false);
+    try {
+      assert.equal(await privateDocsPresent({ base, signal: ac.signal }), true);
+      assert.equal(await privateDocsPresent({ base, signal: ac.signal }), true);
+      assert.equal(calls(), 2, "an unknown answer must never be memoized");
+    } finally {
+      restore();
+    }
+    // Service down — fetch itself throws.
+    resetPrivateDocsProbe();
+    globalThis.fetch = (async () => {
+      throw new Error("fetch failed");
+    }) as unknown as typeof fetch;
+    try {
+      assert.equal(
+        await privateDocsPresent({ base, signal: ac.signal }),
+        true,
+        "connection refused must degrade to the previous behaviour, not to a wrong fast path",
+      );
+    } finally {
+      restore();
+    }
   });
 });
