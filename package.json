@@ -14,7 +14,7 @@
     "tools:bootstrap-obsidian-skills": "bash scripts/bootstrap-obsidian-skills.sh",
     "tools:bootstrap-plinius": "bash scripts/bootstrap-plinius-corpus.sh",
     "tools:distill": "node scripts/distill-prompt-patterns.mjs",
-    "tools:montage-status": "node -e \"const fs=require('fs');const p='vendor/OpenMontage/README.md';console.log(fs.existsSync(p)?'OpenMontage: present':'OpenMontage: missing — npm run tools:bootstrap')\"",
+    "tools:montage-status": "node -e \"const fs=require('fs');const p='vendor/OpenMontage/README.md';console.log(fs.existsSync(p)?'OpenMontage: present':'OpenMontage: missing \u2014 npm run tools:bootstrap')\"",
     "tools:montage-setup": "bash scripts/montage-setup.sh",
     "vault:init": "bash scripts/vault-init.sh",
     "vault:sync": "bash scripts/vault-sync.sh",
@@ -28,7 +28,8 @@
     "setup:mac": "bash scripts/setup_mac.sh",
     "test:v2": "npx --yes tsx --test tests/*.test.ts",
     "typecheck": "tsc --noEmit",
-    "face:download": "bash scripts/download-face-model.sh"
+    "face:download": "bash scripts/download-face-model.sh",
+    "backlog": "bash scripts/backlog"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
@@ -37,6 +38,7 @@
     "@pixiv/three-vrm": "^3.5.5",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
+    "docx": "9.7.1",
     "next": "15.5.20",
     "onnxruntime-web": "^1.27.0",
     "pdf-parse": "^2.4.5",

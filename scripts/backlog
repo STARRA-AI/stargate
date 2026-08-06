@@ -1,0 +1,115 @@
+#!/usr/bin/env bash
+# backlog — snapshot everything reversible onto the Storage drive before a change.
+#
+# Classic's standing order 2026-08-06: "you can backlog these workflows and
+# processes in a folder and stick it in the hardrive i have connected into my
+# computer so that if we remove something you can easily just re-implement it."
+#
+# The point is that nothing has to be argued about before it is done. Take the
+# snapshot, make the change, and if it was wrong: `scripts/backlog restore <id>`.
+#
+#   scripts/backlog snap  [label]   take a snapshot (default label: manual)
+#   scripts/backlog list            list snapshots, newest last
+#   scripts/backlog show  <id>      what is in one
+#   scripts/backlog restore <id>    restore env + tracked files from one
+#
+# What a snapshot holds: .env.local (chmod 600), the exact git HEAD, the full
+# uncommitted diff, and a copy of every file that matters. Restoring never
+# touches git history — it puts files back and leaves the commits alone.
+
+set -euo pipefail
+
+DRIVE="/Volumes/Storage"
+BACKLOG="$DRIVE/STARRA/backlog"
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+
+# Files worth being able to put back verbatim.
+FILES=(
+  .env.local
+  src/lib/persona.ts
+  src/lib/brain.ts
+  src/lib/llm/hosted.ts
+  src/lib/llm/zdr.ts
+  src/lib/llm/spend.ts
+  src/app/api/mcp/route.ts
+  src/app/api/chat/route.ts
+  src/app/api/realtime/route.ts
+  src/lib/voice/useVoiceCall.ts
+  src/lib/voice/speech-shaping.ts
+  src/middleware.ts
+  CLAUDE.md
+)
+
+need_drive() {
+  if [ ! -d "$DRIVE" ]; then
+    echo "backlog: $DRIVE is not mounted — plug the drive in or pass a different DRIVE=" >&2
+    exit 1
+  fi
+  mkdir -p "$BACKLOG"
+}
+
+cmd_snap() {
+  need_drive
+  local label="${1:-manual}"
+  local id; id="$(date +%Y%m%d-%H%M%S)-${label//[^a-zA-Z0-9._-]/-}"
+  local snap="$BACKLOG/$id"
+  mkdir -p "$snap/files"
+
+  cd "$REPO"
+  git rev-parse HEAD          > "$snap/HEAD.txt"        2>/dev/null || true
+  git status --porcelain      > "$snap/status.txt"      2>/dev/null || true
+  git diff                    > "$snap/uncommitted.patch" 2>/dev/null || true
+  git log --oneline -20       > "$snap/recent-commits.txt" 2>/dev/null || true
+
+  for f in "${FILES[@]}"; do
+    if [ -f "$REPO/$f" ]; then
+      mkdir -p "$snap/files/$(dirname "$f")"
+      cp "$REPO/$f" "$snap/files/$f"
+    fi
+  done
+  # Her canon, always — it is the one thing that must never be lost.
+  cp "$REPO"/STARRA_*.md "$snap/files/" 2>/dev/null || true
+  # The env copy carries live keys.
+  [ -f "$snap/files/.env.local" ] && chmod 600 "$snap/files/.env.local"
+
+  echo "$id"
+}
+
+cmd_list() {
+  need_drive
+  ls -1 "$BACKLOG" 2>/dev/null | sort || echo "(none yet)"
+}
+
+cmd_show() {
+  need_drive
+  local snap="$BACKLOG/$1"
+  [ -d "$snap" ] || { echo "no such snapshot: $1" >&2; exit 1; }
+  echo "HEAD: $(cat "$snap/HEAD.txt" 2>/dev/null)"
+  echo "uncommitted diff: $(wc -l < "$snap/uncommitted.patch" 2>/dev/null || echo 0) lines"
+  echo "files:"
+  (cd "$snap/files" && find . -type f | sed 's|^\./|  |')
+}
+
+cmd_restore() {
+  need_drive
+  local snap="$BACKLOG/$1"
+  [ -d "$snap" ] || { echo "no such snapshot: $1" >&2; exit 1; }
+  # Snapshot the CURRENT state first, so a restore is itself reversible.
+  local safety; safety="$(cmd_snap "pre-restore")"
+  echo "current state saved as: $safety"
+  (cd "$snap/files" && find . -type f -print0) | while IFS= read -r -d '' f; do
+    local rel="${f#./}"
+    mkdir -p "$REPO/$(dirname "$rel")"
+    cp "$snap/files/$rel" "$REPO/$rel"
+    echo "  restored $rel"
+  done
+  echo "done. git history untouched — run the tests before trusting it."
+}
+
+case "${1:-}" in
+  snap)    shift; cmd_snap "${1:-manual}" ;;
+  list)    cmd_list ;;
+  show)    shift; cmd_show "${1:?usage: backlog show <id>}" ;;
+  restore) shift; cmd_restore "${1:?usage: backlog restore <id>}" ;;
+  *) sed -n '2,20p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+esac
