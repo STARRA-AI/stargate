@@ -35,7 +35,9 @@ disappears entirely, and her full canon fits with no clipping and no starvation.
 
 ## Goals
 
-- One hosted brain — Grok — on the operator console **and** the live call.
+- **ONE STARRA, ONE VOICE.** One brain, and — just as important — ONE PROMPT.
+  Console, chat and call must be the same person, not three composites that
+  happen to share a name.
 - Her whole canon on every turn. **Nothing of her is dropped to fit a budget.**
 - Conversations not readable by xAI, verified rather than assumed.
 - Under **$50/month**, with a hard mechanism that makes overrun impossible.
@@ -83,6 +85,35 @@ the call, and it is architectural, not a model property.
 ---
 
 ## Architecture
+
+### 0. ONE PROMPT — the root fix for "three different responses"
+
+**This is the most important section.** Classic reports getting different
+responses from the console, the chat and the call. That is not model drift — the
+three surfaces literally compose different prompts:
+
+- deck → `buildCoreSystemPrompt()`, which does **not** contain `STARRA_PERSONA_CORE`
+- call → a voice-specific core
+- both → a tiered budget that DROPS different blocks depending on the query, so
+  even the same surface varies turn to turn
+
+All of that machinery — `buildTieredSystemPrompt`, `DOCTRINE_GATES`, the budget
+candidates, the clipping — exists for exactly one reason: **Groq's 8k cap.** On
+xAI that constraint does not exist.
+
+So on the Grok lane the tiering is **deleted**, not tuned:
+
+- ONE composed prompt: full canon + all doctrines + `STARRA_PERSONA_CORE`,
+  measured at **15,688 est tokens**, used **identically** on every surface.
+- That is **3.1% of grok-4.5's 500k context window**. There is nothing to budget.
+- No doctrine gating, no candidate ranking, no clipping, no `dropped` list. Those
+  concepts leave the Grok path entirely.
+- Cost, measured: **$15.06/mo at his median 66 turns/day** with caching.
+
+The tiered path stays on the Groq fallback lane only, where the 12k cap is real.
+
+**Test that enforces it:** the composed system prompt for deck, chat and call must
+be byte-identical. A surface-specific prompt on the Grok lane fails the suite.
 
 ### 1. Provider consolidation
 
@@ -132,20 +163,42 @@ requirement, not an optimization:
 - **Metering**: `cached_tokens` from the usage payload is recorded per turn. If
   the hit rate collapses, that is a visible regression, not a silent bill.
 
-### 4. Spend ceiling
+### 4. Spend ceiling, and the ONLY thing allowed to change her brain
 
-A hard monthly ceiling (default $40, under Classic's $50 line, configurable):
+Classic's constraint, verbatim: *"that needs to truly be a failsafe if i run out
+of credits ONLY because i do NOT want to speak to her in the console or in a chat
+or in a call and get 3 different responses. ONE STARRA ONE VOICE."*
 
-- Every hosted turn's real usage is priced from the response's token counts and
-  accumulated.
-- At **80%** the deck warns.
-- At **100%** the hosted lane stops and every turn falls back to the free Groq
-  lane. She keeps working; the bill stops.
-- The counter rolls on the calendar month and is persisted, so a restart cannot
-  reset it into an overrun.
+That is a hard architectural rule, and it kills the fallback design in the first
+draft of this spec, which would have swapped brains on **six** different
+conditions.
 
-This makes a surprise bill structurally impossible rather than a matter of
-watching a dashboard.
+**Transient failures NEVER swap the brain.** A 429, a 5xx, a dropped connection
+is retried on Grok with backoff. A hiccup must never change who is talking. If
+the retries are exhausted, she says the link is rough — in her own voice — and
+that turn is lost. A lost turn is recoverable; a stranger answering is not.
+
+**Exactly one condition may change the brain: money running out.** And even then
+the ladder stays inside her own voice for as long as possible:
+
+| tier | trigger | brain | announced? |
+|---|---|---|---|
+| normal | — | `grok-4.5` | — |
+| soft | monthly ceiling hit | `grok-4.20-non-reasoning` (same provider, same family, ~3.5× cheaper) | yes, visibly |
+| hard | xAI unusable — 401/billing dead | free Groq lane | **loudly**, and she says so herself |
+
+Rationale for the soft tier: falling straight from grok-4.5 to a Llama model is a
+bigger voice change than dropping to a smaller Grok. Staying in-family keeps her
+recognisably herself while the bill stops climbing.
+
+**No silent brain change, ever.** Whenever she is not on `grok-4.5`, the deck
+shows it and she is told to acknowledge it if asked. Classic must never have to
+wonder why she sounds different — the first draft's "silent fallback" is
+explicitly rejected.
+
+Mechanics: real usage is priced from each response's token counts and
+accumulated; 80% warns; the counter is persisted and rolls on the calendar month
+so a restart cannot reset it into an overrun.
 
 ### 5. Streaming sentences to voice — approach A
 
@@ -168,13 +221,39 @@ New behaviour: as the SSE reply streams, completed sentences are emitted to
   head-of-turn concern and must not re-arm mid-turn.
 - The transcript row is still written **once** per turn, from the accumulated
   text, so the call column does not gain a row per sentence.
-- `kimiForcedPendingRef` currently pays for exactly one response per turn. It must
-  now account for N force_messages per turn, or the one-voice guard will cancel
-  her own sentences and mute the call — the failure Classic already lived through.
-- Barge-in must abandon the remaining queued sentences, not just the current one.
+#### The one-voice guard is a HARD PRECONDITION of this change
 
-**This is the highest-risk item in the plan and it touches the call's most
-fragile invariants. It gets its own phase and its own tests.**
+There are two models on the call wire: her brain (Grok, over `/api/chat`) and the
+xAI Realtime session's OWN model, which will answer him itself if it is ever
+allowed to. That is the "two voices" bug that has already cost Classic a night —
+and his instruction is unambiguous: *"i dont want two brains warring with each
+other on here this needs to be fucking smooth throughout the whole thing."*
+
+The existing guard works by accounting: `speakForced` increments
+`kimiForcedPendingRef`, and any `response.created` the counter did not pay for is
+cancelled and muted as an intruder. **Sentence streaming breaks that arithmetic
+by construction** — one turn now produces N `force_message`s, so a counter that
+pays for one will treat sentences 2..N as intruders, cancel them, and mute the
+call. That is the exact mute-call failure, reintroduced by this feature.
+
+Therefore, non-negotiable, and gating the phase:
+
+1. The pending counter accounts for **N per turn**, incremented at each
+   `force_message`, and must never be able to go negative.
+2. A test drives a 5-sentence streamed turn and asserts **zero** `response.cancel`
+   frames and **zero** suppression events. If she cancels one of her own
+   sentences, the phase fails.
+3. A test drives an unsolicited `response.created` DURING a streamed turn and
+   asserts it is still cancelled. Widening the counter must not blind the guard.
+4. Barge-in abandons the entire remaining sentence queue — not just the sentence
+   in flight — and the queue is cleared on interruption so a stale sentence can
+   never arrive after he starts talking.
+5. Sentences are emitted strictly in order. Out-of-order audio is indistinguishable
+   from a second speaker to the person listening.
+
+**This is the highest-risk item in the plan.** It gets its own phase, lands behind
+a flag that restores today's single-`force_message` behaviour when off, and is not
+called done until Classic has heard a real multi-sentence turn.
 
 ### 6. Markdown discipline
 
@@ -190,9 +269,9 @@ original preserved for the call transcript column.
 
 | condition | behaviour |
 |---|---|
-| xAI 401 / 403 | ALERT + visible state, fall back to free Groq lane |
-| xAI 429 | fall back for that turn (should be unreachable at 15M TPM) |
-| xAI 5xx / network | fall back, surface which brain answered |
+| xAI 401 / 403 (billing dead) | hard tier: free Groq lane, LOUD alert, she acknowledges it |
+| xAI 429 | **retry on Grok** with backoff — never swap (unreachable at 15M TPM anyway) |
+| xAI 5xx / network | **retry on Grok** with backoff — never swap. Exhausted retries = one lost turn, reported in her voice |
 | `x-zero-data-retention: false` | hard gate — refuse hosted lane, fall back, loud ALERT |
 | spend ≥ 100% of ceiling | fall back for the rest of the month, warn on deck |
 | both lanes down | visible "link degraded", never silent |
