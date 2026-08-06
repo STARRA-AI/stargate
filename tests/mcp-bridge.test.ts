@@ -56,7 +56,7 @@ describe("bridge discipline, on the source", () => {
     // check gets sharper instead of being deleted: /api/mcp is the ONLY mcp
     // path allowed past the cookie gate, and it has to carry its own lock.
     const mw = read("src/middleware.ts");
-    const publicLine = /const PUBLIC_PREFIXES = \[(.*?)\]/s.exec(mw)?.[1] ?? "";
+    const publicLine = /const PUBLIC_PREFIXES = \[([\s\S]*?)\]/.exec(mw)?.[1] ?? "";
     const mcpEntries = [...publicLine.matchAll(/"([^"]*mcp[^"]*)"/g)].map((m) => m[1]);
     assert.deepEqual(mcpEntries, ["/api/mcp"], "only the inbound memory bridge may be public");
 
