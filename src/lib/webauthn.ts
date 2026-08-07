@@ -50,7 +50,9 @@ export function savePasskeys(list: StoredPasskey[]): void {
 export function rpFromRequest(req: Request): { rpID: string; origin: string } {
   const origin =
     req.headers.get("origin") ||
-    (req.headers.get("host") ? `http://${req.headers.get("host")}` : "http://localhost:3000");
+    (req.headers.get("host")
+      ? `${new URL(req.url).protocol}//${req.headers.get("host")}`
+      : "https://localhost:3000");
   let rpID = "localhost";
   try {
     rpID = new URL(origin).hostname;
@@ -69,7 +71,7 @@ export function rpFromRequest(req: Request): { rpID: string; origin: string } {
  */
 export function passkeyBlocker(rpID: string): string | null {
   if (/^\d{1,3}(\.\d{1,3}){3}$/.test(rpID) || rpID.includes(":")) {
-    return "Touch ID can't bind to an IP address. Open the deck at http://localhost:3000 — same deck, same login — and set it up there.";
+    return "Touch ID can't bind to an IP address. Open the deck at https://localhost:3000 — same deck, same login — and set it up there.";
   }
   return null;
 }

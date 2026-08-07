@@ -23,7 +23,7 @@ function resolvePython(): string {
 }
 
 /**
- * Launch the STARRA talking-avatar desktop app (~/Desktop/STARGATE/starra-avatar).
+ * Launch the STARRA talking-avatar desktop app (~/STARGATE/starra-avatar).
  * The deck server runs on this Mac, so it spawns the Python app locally and
  * hands it the deck's env (XAI_API_KEY flows through automatically). Localhost
  * only — a LAN/phone client can never spawn desktop processes on the Mac.

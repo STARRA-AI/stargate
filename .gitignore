@@ -92,7 +92,4 @@ certs/
 /.playwright-mcp/
 
 # Starra call service: cached copy of her canon (source of truth is src/lib/persona.ts)
-services/starra_call/.persona.generated.json
-services/starra_call/**/__pycache__/
-services/starra_call/.venv/
 .env.local.bak.*

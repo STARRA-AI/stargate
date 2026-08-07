@@ -1,4 +1,13 @@
-import { Fragment, type ReactNode } from "react";
+"use client";
+
+import {
+  Fragment,
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 
 /**
  * Tiny, dependency-free markdown renderer that emits React elements.
@@ -107,7 +116,7 @@ type Block =
   | { type: "p"; text: string }
   | { type: "h"; level: number; text: string }
   | { type: "list"; ordered: boolean; items: string[] }
-  | { type: "code"; code: string }
+  | { type: "code"; code: string; lang: string }
   | { type: "quote"; text: string }
   | { type: "hr" };
 
@@ -119,8 +128,10 @@ function toBlocks(src: string): Block[] {
   while (i < lines.length) {
     const line = lines[i];
 
-    // fenced code block
-    if (/^```/.test(line)) {
+    // fenced code block — the info string's first token is the language tag
+    const fence = /^```\s*(\S*)/.exec(line);
+    if (fence) {
+      const lang = fence[1].replace(/[^A-Za-z0-9#+._-]/g, "").slice(0, 20);
       const code: string[] = [];
       i++;
       while (i < lines.length && !/^```/.test(lines[i])) {
@@ -128,7 +139,7 @@ function toBlocks(src: string): Block[] {
         i++;
       }
       i++; // consume closing fence (or fall off EOF)
-      blocks.push({ type: "code", code: code.join("\n") });
+      blocks.push({ type: "code", code: code.join("\n"), lang });
       continue;
     }
 
@@ -207,6 +218,62 @@ function toBlocks(src: string): Block[] {
   return blocks;
 }
 
+/** How long the "Copied" acknowledgement stays lit on the copy control (ms). */
+const COPIED_MS = 1200;
+
+/**
+ * Sectioned-off code block: header bar with the fence's language tag and a
+ * one-click copy control over the raw code, pre below. This is the "give me
+ * code properly" surface — anywhere STARRA fences code, it renders as this.
+ */
+function CodeBlock({ code, lang }: { code: string; lang: string }) {
+  const [copied, setCopied] = useState(false);
+  const timerRef = useRef<number | null>(null);
+
+  useEffect(
+    () => () => {
+      if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    },
+    [],
+  );
+
+  const onCopy = useCallback(async () => {
+    try {
+      if (typeof navigator === "undefined" || !navigator.clipboard) return;
+      await navigator.clipboard.writeText(code);
+    } catch {
+      return;
+    }
+    setCopied(true);
+    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
+    timerRef.current = window.setTimeout(() => {
+      setCopied(false);
+      timerRef.current = null;
+    }, COPIED_MS);
+  }, [code]);
+
+  return (
+    <div className="md-codeblock">
+      <div className="md-codeblock-head">
+        <span className="md-codeblock-lang">{lang || "code"}</span>
+        <button
+          type="button"
+          className={
+            copied ? "md-codeblock-copy md-codeblock-copied" : "md-codeblock-copy"
+          }
+          aria-label={copied ? "Copied to clipboard" : "Copy this code block"}
+          onClick={onCopy}
+        >
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <pre className="md-pre">
+        <code>{code}</code>
+      </pre>
+    </div>
+  );
+}
+
 function Heading({ level, children }: { level: number; children: ReactNode }) {
   const cls = `md-h md-h${level}`;
   switch (level) {
@@ -255,9 +322,7 @@ export function renderMarkdown(src: string, trailing?: ReactNode): ReactNode {
           case "code":
             return (
               <Fragment key={key}>
-                <pre className="md-pre">
-                  <code>{b.code}</code>
-                </pre>
+                <CodeBlock code={b.code} lang={b.lang} />
                 {tail}
               </Fragment>
             );

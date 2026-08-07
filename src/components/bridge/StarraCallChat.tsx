@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { renderMarkdown } from "@/lib/markdown";
 import styles from "./StarraCallChat.module.css";
 
 /** How long the "Copied" acknowledgement stays lit on a copy control (ms). */
@@ -165,7 +166,9 @@ export function StarraCallChat({
           ) : (
             <div key={`a-${i}`} className={styles.assistantTurn}>
               <span className={styles.roleLabel}>STARRA</span>
-              <div className={styles.assistantText}>{m.text}</div>
+              <div className={`${styles.assistantText} ${styles.assistantMd} md`}>
+                {renderMarkdown(m.text)}
+              </div>
               <CopyButton
                 value={m.text}
                 label="Copy this message from STARRA"
@@ -188,7 +191,9 @@ export function StarraCallChat({
             {liveA ? (
               <div className={`${styles.assistantTurn} ${styles.live}`}>
                 <span className={styles.roleLabel}>STARRA</span>
-                <div className={styles.assistantText}>{liveA}</div>
+                <div className={`${styles.assistantText} ${styles.assistantMd} md`}>
+                  {renderMarkdown(liveA)}
+                </div>
               </div>
             ) : null}
           </div>

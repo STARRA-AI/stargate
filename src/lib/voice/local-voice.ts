@@ -63,254 +63,26 @@
  */
 
 import { speakableText } from "@/lib/voice/code-speech";
+import { splitSentences } from "@/lib/voice/speech-shaping";
 import { PIPER_VOICE_BASE, PIPER_VOICE_ID } from "@/lib/voice/piper-speak";
 import { MOUTH_SYNC_ENABLED } from "@/lib/voice/viseme-sync";
 import { getEngineState, publishVoice } from "@/lib/engine/bus";
 
 // ── THE SPLITTER ───────────────────────────────────────────────────────────
+//
+// MOVED. The scanner now lives in speech-shaping.ts, which imports nothing at
+// all, so the call client can stream sentences without pulling piper-speak,
+// viseme-sync and the engine bus (imported above) into its graph. Re-exported
+// here because this module's public surface is what every caller and
+// tests/local-voice.test.ts already import — moving the code must not move the
+// door. ONE implementation, two doors; never a second copy.
+export {
+  MIN_SENTENCE_CHARS,
+  MAX_SENTENCE_CHARS,
+  splitSentences,
+  takeSentences,
+} from "@/lib/voice/speech-shaping";
 
-/**
- * Shortest chunk worth its own synthesis pass. Under this it is merged with a
- * neighbour: "Copy." on its own is a clipped 300ms file plus a full session
- * round-trip, and the gap it opens is more audible than the fragment it saves.
- */
-export const MIN_SENTENCE_CHARS = 12;
-
-/**
- * Longest chunk we will hand to Piper in one go. This is a LATENCY cap, not a
- * grammar rule: the first sentence's synthesis is the whole time-to-first-word,
- * so a 900-character run-on with no full stop must still be broken up or she
- * says nothing for several seconds.
- */
-export const MAX_SENTENCE_CHARS = 240;
-
-/** Sentence-ending punctuation. `…` is here to be RECOGNISED, not to end one. */
-const TERMINATORS = ".!?…";
-/** Punctuation that belongs to the sentence it closes, after the terminator. */
-const CLOSERS = "\"')]}»”’";
-/** Where a run-on may be broken when nothing else offers a boundary. */
-const SOFT_BREAKS = ",;:—–";
-
-/**
- * Dotless abbreviations that must not end a sentence.
- *
- * Deliberately TIGHT. Every entry costs a real missed boundary when the word is
- * used normally, so "no", "min", "max" and the weekday names are OUT — "The
- * answer is no." is a sentence Classic will hear far more often than "No. 5".
- * Dotted forms (U.S., a.m., e.g.) need no entry at all: the interior-dot rule
- * in isAbbreviation covers every one of them.
- */
-const ABBREVIATIONS = new Set([
-  "mr", "mrs", "ms", "dr", "prof", "sr", "jr", "st", "vs", "etc",
-  "inc", "ltd", "co", "corp", "dept", "fig", "approx", "ave", "rd", "mt",
-  "rev", "gen", "capt", "sgt", "jan", "feb", "mar", "apr", "jun", "jul",
-  "aug", "sep", "sept", "oct", "nov", "dec",
-]);
-
-function isSpace(c: string): boolean {
-  return c === " " || c === "\t" || c === "\n" || c === "\r";
-}
-
-function isLetter(c: string): boolean {
-  return (c >= "a" && c <= "z") || (c >= "A" && c <= "Z");
-}
-
-/**
- * Is the `.` at `dot` the tail of an abbreviation rather than a full stop?
- *
- * Walks BACKWARDS over letters and dots — a loop, not a lookbehind, because
- * lookbehind is a syntax error in the WKWebView this deck runs in.
- *
- * Two rules, in order:
- *   - a token with an INTERIOR dot is an initialism (e.g / i.e / U.S / a.m),
- *   - a single-letter token is an initial (J. R. R. Tolkien).
- * Then the explicit list above, for the dotless ones.
- */
-function isAbbreviation(s: string, dot: number): boolean {
-  let i = dot - 1;
-  while (i >= 0 && (isLetter(s[i]) || s[i] === ".")) i -= 1;
-  const token = s.slice(i + 1, dot);
-  if (!token) return false;
-  if (token.indexOf(".") >= 0) return true;
-  if (token.length === 1) return true;
-  return ABBREVIATIONS.has(token.toLowerCase());
-}
-
-interface Span {
-  text: string;
-  /** Index in the source buffer where this chunk starts. */
-  start: number;
-  /** Index just past the chunk — where the next one begins. */
-  end: number;
-}
-
-/**
- * Find every COMPLETE sentence in `s`, plus the index where the unfinished tail
- * begins. Pure, and index-carrying so the streaming caller can hand the tail
- * back verbatim instead of re-joining a guess at the whitespace.
- */
-function scan(s: string): { spans: Span[]; restStart: number } {
-  const spans: Span[] = [];
-  let start = 0;
-
-  const emit = (from: number, to: number) => {
-    const text = s.slice(from, to).trim();
-    if (text) spans.push({ text, start: from, end: to });
-  };
-
-  for (let i = 0; i < s.length; i += 1) {
-    const c = s[i];
-
-    // A line break is a hard boundary: her replies are markdown, and a bullet
-    // is its own breath whether or not it carries a full stop.
-    if (c === "\n") {
-      emit(start, i);
-      start = i + 1;
-      continue;
-    }
-
-    if (TERMINATORS.indexOf(c) < 0) continue;
-
-    // Consume a RUN of terminators, so "..." and "?!" are considered as one.
-    let j = i;
-    while (j + 1 < s.length && TERMINATORS.indexOf(s[j + 1]) >= 0) j += 1;
-
-    // An ellipsis is a trailing-off pause inside a thought, not an end. Both
-    // spellings: "..." and the single character.
-    if ((c === "." && j > i) || c === "…") {
-      i = j;
-      continue;
-    }
-
-    // Take any closing quote/bracket with the sentence it closes.
-    let k = j;
-    while (k + 1 < s.length && CLOSERS.indexOf(s[k + 1]) >= 0) k += 1;
-
-    const next = k + 1 < s.length ? s[k + 1] : "";
-    // Mid-token dot: "3.14", "v1.2", "file.ts". Nothing to decide — a real
-    // boundary is always followed by whitespace or the end of the text.
-    if (next !== "" && !isSpace(next)) {
-      i = k;
-      continue;
-    }
-    if (c === "." && isAbbreviation(s, i)) {
-      i = k;
-      continue;
-    }
-
-    emit(start, k + 1);
-    start = k + 1;
-    i = k;
-  }
-
-  return { spans, restStart: start };
-}
-
-/**
- * Merge chunks that are too short to be worth a synthesis pass.
- *
- * `mergeTail` is the difference between the two callers: a complete text merges
- * a short LAST chunk backwards into its neighbour ("… green now. Copy."), while
- * the streaming caller must leave it alone so it can be rolled back into the
- * buffer and merged with whatever arrives next.
- */
-function coalesce(spans: Span[], mergeTail: boolean): Span[] {
-  const out: Span[] = [];
-  let pending: Span | null = null;
-  for (const span of spans) {
-    pending = pending
-      ? { text: `${pending.text} ${span.text}`, start: pending.start, end: span.end }
-      : span;
-    if (pending.text.length >= MIN_SENTENCE_CHARS) {
-      out.push(pending);
-      pending = null;
-    }
-  }
-  if (pending) {
-    const prev = mergeTail ? out.pop() : undefined;
-    out.push(
-      prev
-        ? { text: `${prev.text} ${pending.text}`, start: prev.start, end: pending.end }
-        : pending,
-    );
-  }
-  return out;
-}
-
-/**
- * Break a chunk that is over the latency cap at the last soft break (or space)
- * before it. Never drops or reorders a character — the pieces re-join to the
- * original, which the unit test pins.
- */
-function capLength(text: string): string[] {
-  if (text.length <= MAX_SENTENCE_CHARS) return [text];
-  const out: string[] = [];
-  let rest = text;
-  while (rest.length > MAX_SENTENCE_CHARS) {
-    const window = rest.slice(0, MAX_SENTENCE_CHARS);
-    let cut = -1;
-    for (let i = window.length - 1; i > 0; i -= 1) {
-      if (SOFT_BREAKS.indexOf(window[i]) >= 0) {
-        cut = i + 1;
-        break;
-      }
-    }
-    if (cut < 0) cut = window.lastIndexOf(" ");
-    // No break at all inside the window — a single enormous token. Hard-cut it
-    // rather than looping forever.
-    if (cut <= 0) cut = MAX_SENTENCE_CHARS;
-    const head = rest.slice(0, cut).trim();
-    if (head) out.push(head);
-    rest = rest.slice(cut).trim();
-  }
-  if (rest) out.push(rest);
-  return out;
-}
-
-/**
- * Split PROSE into the chunks her voice will speak, in order. Pure and total.
- *
- * Input is expected to be speakable already — use toSpeakableSentences for a
- * raw brain reply, which strips fenced code first.
- */
-export function splitSentences(prose: string): string[] {
-  if (!prose || !prose.trim()) return [];
-  const normalised = prose.replace(/\r\n/g, "\n");
-  const { spans, restStart } = scan(normalised);
-  const tail = normalised.slice(restStart).trim();
-  const all = tail
-    ? [...spans, { text: tail, start: restStart, end: normalised.length }]
-    : spans;
-  const out: string[] = [];
-  for (const span of coalesce(all, true)) {
-    for (const piece of capLength(span.text)) out.push(piece);
-  }
-  return out;
-}
-
-/**
- * The streaming form: everything that can be spoken NOW, plus the buffer tail
- * that is still arriving. `rest` is a verbatim slice of the input, so a caller
- * can append the next delta to it and call again with nothing lost.
- */
-export function takeSentences(buffer: string): { sentences: string[]; rest: string } {
-  if (!buffer) return { sentences: [], rest: "" };
-  const { spans, restStart } = scan(buffer);
-  const merged = coalesce(spans, false);
-  let cut = restStart;
-  const last = merged[merged.length - 1];
-  // A complete-but-tiny final chunk is held back rather than spoken alone —
-  // more text is on its way and will merge with it.
-  if (last && last.text.length < MIN_SENTENCE_CHARS) {
-    merged.pop();
-    cut = last.start;
-  }
-  const sentences: string[] = [];
-  for (const span of merged) {
-    for (const piece of capLength(span.text)) sentences.push(piece);
-  }
-  return { sentences, rest: buffer.slice(cut) };
-}
 
 /**
  * A brain reply reduced to the chunks her voice may say: fenced code dropped by
@@ -332,11 +104,13 @@ export function toSpeakableSentences(reply: string): string[] {
  * harmless (deck-prefs.ts:28-35).
  *
  * Precedence: localStorage (the live operator choice) beats
- * NEXT_PUBLIC_STARRA_LOCAL_VOICE (baked at build time) beats Cori.
+ * NEXT_PUBLIC_STARRA_LOCAL_VOICE (baked at build time) beats PIPER_VOICE_ID
+ * (Cori medium). This is the lever that puts `en_GB-cori-high` back — same
+ * voice, slower tier; see piper-speak.ts for the measured RTF.
  */
 export const LOCAL_VOICE_KEY = "stargate.localVoice";
 
-/** `en_GB-cori-high` — the shape every Piper voice id has. */
+/** `en_GB-cori-medium` — the shape every Piper voice id has. */
 const VOICE_ID_SHAPE = /^[a-z]{2}_[A-Z]{2}-[a-z0-9_]+-(x_low|low|medium|high)$/;
 
 function envVoice(): string | null {

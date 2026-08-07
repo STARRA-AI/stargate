@@ -602,6 +602,38 @@ body.low-power .star-ring { animation: none; }
 }
 .md-pre code { font-family: var(--mono); font-size: 12.5px; line-height: 1.55; color: var(--text-dim); white-space: pre; }
 
+/* ── sectioned code block (fenced ``` in a STARRA reply) ── */
+.md-codeblock {
+  border: 1px solid var(--border-soft);
+  border-radius: 10px;
+  background: rgba(9,4,18,0.7);
+  overflow: hidden;
+}
+.md-codeblock-head {
+  display: flex; align-items: center; justify-content: space-between; gap: 8px;
+  padding: 5px 8px 5px 14px;
+  border-bottom: 1px solid var(--border-soft);
+  background: rgba(176,77,252,0.08);
+}
+.md-codeblock-lang {
+  font-family: var(--display); font-size: 10px; font-weight: 700;
+  letter-spacing: 2px; text-transform: uppercase; color: var(--text-dim);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.md-codeblock-copy {
+  flex: none;
+  background: rgba(176,77,252,0.12); border: 1px solid var(--border);
+  color: var(--accent-glow);
+  font-family: var(--display); font-size: 10px; font-weight: 700; letter-spacing: 1.5px;
+  padding: 3px 10px; border-radius: 4px; cursor: pointer;
+  transition: background 0.18s ease-out, color 0.18s ease-out;
+  -webkit-tap-highlight-color: transparent;
+}
+.md-codeblock-copy:hover { background: rgba(176,77,252,0.3); color: var(--text); }
+.md-codeblock-copy:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
+.md-codeblock-copied { color: var(--text); border-color: var(--accent-glow); }
+.md-codeblock .md-pre { border: none; border-radius: 0; }
+
 .stream-caret {
   display: inline-block; width: 2px; height: 1em; margin-left: 3px;
   background: var(--accent-glow); vertical-align: text-bottom;

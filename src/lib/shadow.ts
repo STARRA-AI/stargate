@@ -4,11 +4,12 @@
  * a missing folder is zero, never a throw. No user input ever reaches paths.
  */
 import { promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 
 export const SHADOW_BASE =
   process.env.STARRA_SHADOW_DIR ||
-  "/Users/work/Desktop/STARGATE/silent shadow launch";
+  path.join(os.homedir(), "STARGATE", "silent shadow launch");
 
 export const SHADOW_QUEUES = {
   ready: "ready_to_publish",

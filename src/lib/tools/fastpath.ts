@@ -9,6 +9,13 @@ import {
   webSearch,
   webSearchQuery,
 } from "@/lib/tools/websearch";
+import {
+  parseReachCommand,
+  reachFeed,
+  reachRead,
+  reachStatus,
+  reachVideo,
+} from "@/lib/tools/reach";
 import { fenceUntrusted } from "@/lib/security/fencing";
 
 /**
@@ -45,6 +52,26 @@ export async function maybeToolReply(lastUser: string): Promise<string | null> {
   if (mcp?.kind === "call") {
     const r = await callMcpTool(mcp.server, mcp.tool, mcp.args);
     return r.ok ? r.text : `${mcp.server}.${mcp.tool} failed — ${r.text}`;
+  }
+
+  // AGENT REACH (2026-08-06): her hands on the open internet — read a page,
+  // pull a video, take a feed. Exact operator commands only, like the MCP
+  // bridge above. EVERY byte that comes back is attacker-controlled content
+  // off the public web, so it is fenced as untrusted data, never instructions.
+  const reach = parseReachCommand(lastUser);
+  if (reach) {
+    if (reach.kind === "status") {
+      const r = await reachStatus();
+      return fenceUntrusted(r.text, "agent-reach");
+    }
+    const r =
+      reach.kind === "read"
+        ? await reachRead(reach.url)
+        : reach.kind === "video"
+          ? await reachVideo(reach.url)
+          : await reachFeed(reach.url);
+    if (!r.ok) return `Couldn't reach that — ${r.text}`;
+    return fenceUntrusted(r.text, `agent-reach:${reach.kind}`);
   }
 
   if (

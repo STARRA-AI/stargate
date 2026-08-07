@@ -133,6 +133,16 @@ export async function POST() {
       // Carries ?model= — see XAI_REALTIME_DEFAULT_MODEL. A bare base URL here
       // would silently fall back to the grok-voice-latest alias on the socket.
       url: xaiRealtimeWsUrl(model),
+      // HER BRAIN IS KIMI (Classic's order, 2026-08-04): which brain drives
+      // the call. "kimi" (the default) = xAI is EARS + MOUTH only — the
+      // session never auto-answers (turn_detection null); the deck brain
+      // (/api/chat, LLM_PROVIDER) thinks and the session speaks its replies
+      // verbatim via force_message. STARRA_CALL_BRAIN=grok is the one-line
+      // rollback to the old bundled xAI brain+voice call.
+      callBrain:
+        (process.env.STARRA_CALL_BRAIN || "kimi").toLowerCase() === "grok"
+          ? "grok"
+          : "kimi",
     });
   } catch (e) {
     // Transport/abort errors quote the request they failed on — same scrub.

@@ -40,6 +40,14 @@ type Portfolio = {
   error?: string;
 };
 
+type StocksEngine = {
+  linked: boolean;
+  halted?: boolean;
+  paperOnly?: boolean;
+  decisions?: { symbol: string; decision: string; seconds?: number }[];
+  pendingApprovals?: unknown[];
+};
+
 type TankVote = { name: string; vote: string; conf: number };
 
 type Telemetry = {
@@ -118,6 +126,7 @@ export function Bridge() {
   const [vitals, setVitals] = useState<Vitals | null>(null);
   const [watchlist, setWatchlist] = useState<WatchMarket[]>([]);
   const [portfolio, setPortfolio] = useState<Portfolio>({ linked: false });
+  const [stocks, setStocks] = useState<StocksEngine>({ linked: false });
   const [tank, setTank] = useState<TankVote[]>([]);
   const [tankTopic, setTankTopic] = useState("");
   const [telemetry, setTelemetry] = useState<Telemetry | null>(null);
@@ -262,6 +271,17 @@ export function Bridge() {
         setWatchlist(d.watchlist ?? []);
         setPortfolio(d.portfolio ?? { linked: false });
       })
+      .catch(() => {});
+  }, 90_000 * pollMul);
+
+  useInterval(() => {
+    if (!bootDone) return;
+    fetch("/api/stocks")
+      .then((r) => {
+        if (!r.ok) throw new Error(String(r.status));
+        return r.json();
+      })
+      .then((d: StocksEngine) => setStocks(d ?? { linked: false }))
       .catch(() => {});
   }, 90_000 * pollMul);
 
@@ -835,6 +855,57 @@ export function Bridge() {
                     ))}
                 {!watchlist.length && !portfolio.positions?.length ? (
                   <div className="feed-empty">Reaching Kalshi uplink…</div>
+                ) : null}
+              </div>
+            </div>
+
+            <div className="panel" id="panel-stocks">
+              <div className="panel-head">
+                <span className="dot" />
+                <span className="panel-title">STOCKS ENGINE</span>
+                <div className="spacer" />
+                {stocks.linked ? (
+                  stocks.halted ? (
+                    <span className="panel-tag warn">■ HALTED</span>
+                  ) : (
+                    <span className="panel-tag pulse" style={{ color: "#6ee7a0" }}>
+                      ● PAPER LIVE
+                    </span>
+                  )
+                ) : (
+                  <span className="panel-tag warn">▲ ENGINE OFFLINE</span>
+                )}
+              </div>
+              <div className="row-list">
+                {stocks.linked && stocks.decisions?.length
+                  ? stocks.decisions.map((d) => (
+                      <div className="row-item" key={`${d.symbol}-${d.decision}`}>
+                        <span
+                          className="row-side"
+                          style={{
+                            background: /buy/i.test(d.decision)
+                              ? "#6ee7a0"
+                              : /sell/i.test(d.decision)
+                                ? "#ff6b8a"
+                                : "var(--text-dim)",
+                          }}
+                        >
+                          {d.decision.slice(0, 4).toUpperCase()}
+                        </span>
+                        <span className="row-market">{d.symbol}</span>
+                        <span className="row-pnl" style={{ color: "var(--text-dim)" }}>
+                          {d.seconds ? `${Math.round(d.seconds)}s debate` : ""}
+                        </span>
+                      </div>
+                    ))
+                  : null}
+                {stocks.linked && !stocks.decisions?.length ? (
+                  <div className="feed-empty">
+                    Engine linked — no decisions logged today. Run: scripts/run_brief.sh
+                  </div>
+                ) : null}
+                {!stocks.linked ? (
+                  <div className="feed-empty">Engine room offline — port 47401 not answering.</div>
                 ) : null}
               </div>
             </div>

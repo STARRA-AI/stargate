@@ -1,4 +1,5 @@
 import { createReadStream, promises as fs } from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import { Readable } from "node:stream";
 
@@ -25,7 +26,7 @@ export const runtime = "nodejs";
 
 const SPICY_DIR =
   process.env.STARRA_SPICY_DIR ||
-  "/Users/work/Desktop/STARGATE/starra-avatar/assets/spicy";
+  path.join(os.homedir(), "STARGATE/starra-avatar/assets/spicy");
 
 async function listClips(): Promise<string[]> {
   try {

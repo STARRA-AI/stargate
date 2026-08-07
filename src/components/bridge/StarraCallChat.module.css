@@ -135,6 +135,14 @@
   overflow-wrap: anywhere;
 }
 
+/* Markdown-rendered variant (composed with the global `md` class): the
+   renderer owns line structure, so pre-wrap comes off; double selector keeps
+   the transcript's 15px over .md's 14px. */
+.assistantText.assistantMd {
+  white-space: normal;
+  font-size: 15px;
+}
+
 /* Per-reply copy: hidden until hover on desktop; small but visible on touch. */
 .copyBtn {
   position: absolute;

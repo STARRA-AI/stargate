@@ -39,7 +39,12 @@
 // is a second copy that can drift; tests/private-lane.test.ts already pins this
 // one against a table of hostile inputs (numeric-only: "localhost" is REFUSED,
 // because a name is something a hosts file can move off-box).
-import { isLoopbackBase } from "@/app/api/chat/route";
+//
+// It comes from the LEAF module, not from "@/app/api/chat/route": importing it
+// from the chat route pulled that route's entire module graph — every hosted
+// provider, the tool fast-paths, the memory store — into this route for a
+// fifteen-line predicate.
+import { isLoopbackBase } from "@/lib/private/loopback";
 
 export const runtime = "nodejs";
 /** A cold whisper model load plus a long utterance; the service is local, but
