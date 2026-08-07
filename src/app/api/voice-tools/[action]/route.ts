@@ -105,11 +105,24 @@ async function fundingStatus(name: string, status: string): Promise<string> {
   return `Moved ${hit.name} from ${before} to ${status}.`;
 }
 
-export async function GET(req: Request) {
+/**
+ * The action is a PATH segment, not a query param, on purpose.
+ *
+ * xAI's console requires every query parameter to be declared under "Additional
+ * parameters" — which means the MODEL fills it. Letting her choose `action` at
+ * call time would mean a mis-picked verb writes to memory when she meant to
+ * read it. In the path, each console tool points at exactly one verb and the
+ * model cannot get it wrong: /api/voice-tools/remember, /recall, /note,
+ * /funding_status. The only thing she fills is the content.
+ */
+export async function GET(
+  req: Request,
+  ctx: { params: Promise<{ action: string }> },
+) {
   const gate = authorized(req);
   if (!gate.ok) return gate.res;
   const url = new URL(req.url);
-  const action = url.searchParams.get("action") ?? "";
+  const { action } = await ctx.params;
 
   try {
     switch (action) {
