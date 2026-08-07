@@ -43,6 +43,26 @@ export class HostedTransientError extends Error {
   }
 }
 
+/**
+ * PROMPT CACHE ROUTING — the single header that decides what her canon costs.
+ *
+ * xAI caches a stable prompt prefix and bills it at $0.30/M instead of $2.00/M,
+ * but only if requests land on the same server. `x-grok-conv-id` is what routes
+ * them there. Their own guidance: "Monitor cached_tokens — if consistently 0,
+ * verify your conversation ID."
+ *
+ * MEASURED LIVE 2026-08-06 with her real 13,734-token prompt on grok-4.5:
+ *   without the header:   128 cached / 13,734  = 0.9%   -> $0.0272 input/turn
+ *   with the header:   13,696 cached / 13,734  = 99.7%  -> $0.00418 input/turn
+ * At Classic's measured 66 turns/day that is ~$73/mo versus ~$11/mo.
+ *
+ * The id is deliberately CONSTANT rather than per-session. Her canon is the same
+ * prefix on every surface and every conversation, so one id lets the deck, the
+ * chat and the call all share one warm cache. A fresh uuid per request would
+ * route to a different server each time and is identical to sending nothing.
+ */
+const GROK_CONV_ID_DEFAULT = "starra-stargate";
+
 /** Statuses worth trying again on the SAME provider. */
 const RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
 /** Backoff between attempts; length is also the retry count. */
@@ -236,6 +256,10 @@ export async function streamHosted(opts: {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${key}`,
+        // Only the xAI lane understands this; Groq has no equivalent header.
+        ...(opts.provider === "grok"
+          ? { "x-grok-conv-id": process.env.STARRA_CONV_ID || GROK_CONV_ID_DEFAULT }
+          : {}),
       },
       body: JSON.stringify({
         model,
