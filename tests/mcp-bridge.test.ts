@@ -59,6 +59,11 @@ describe("bridge discipline, on the source", () => {
     const publicLine = /const PUBLIC_PREFIXES = \[([\s\S]*?)\]/.exec(mw)?.[1] ?? "";
     const mcpEntries = [...publicLine.matchAll(/"([^"]*mcp[^"]*)"/g)].map((m) => m[1]);
     assert.deepEqual(mcpEntries, ["/api/mcp"], "only the inbound memory bridge may be public");
+    // /api/voice-tools is the other token-gated public door (same STARRA_MCP_TOKEN,
+    // same fail-closed rule). Asserted here so a third one cannot appear unnoticed.
+    const publics = [...publicLine.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
+    assert.deepEqual(publics, ["/api/auth", "/api/mcp", "/api/voice-tools", "/login", "/starra-ca.crt"],
+      "every public path must be deliberate");
 
     const inbound = read("src/app/api/mcp/route.ts");
     assert.match(inbound, /STARRA_MCP_TOKEN/, "the public bridge must carry its own token");

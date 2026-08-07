@@ -9,7 +9,7 @@ import { authPassword, authCookieName, verifyToken } from "@/lib/auth";
 // reachable by xAI's servers, which cannot hold Classic's session cookie. It
 // fails CLOSED when that token is unset, so listing it here does not open it —
 // it moves the lock from the cookie to the token. See src/app/api/mcp/route.ts.
-const PUBLIC_PREFIXES = ["/login", "/api/auth", "/starra-ca.crt", "/api/mcp"];
+const PUBLIC_PREFIXES = ["/login", "/api/auth", "/starra-ca.crt", "/api/mcp", "/api/voice-tools"];
 
 export const config = {
   // NODEJS RUNTIME (stable since Next 15.5) ON PURPOSE — 2026-07-31: after a
