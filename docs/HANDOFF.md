@@ -1,139 +1,74 @@
-# STARGATE → Grok / Ara Handoff Pack
+# HANDOFF — 2026-08-08 ~04:45
 
-**Operator entry point.** This pack exports STARRA personality + ops intent for xAI Grok Build (coding agent) and Grok Voice Agent API (cloud speech-to-speech). Ground truth remains [`STARRA_STARGATE_UNIFIED.md`](../STARRA_STARGATE_UNIFIED.md) at repo root — do not paste the full unified doc into voice sessions.
+Written before Classic restarted the machine. **Everything is committed. Nothing is lost.**
 
-**Prior consensus:** Grok Build ≠ Bridge host. **Ara** = xAI built-in voice (`voice: "ara"`). Keep the STARGATE Bridge HUD; wire Ara later via Realtime WebSocket.
+## Machine state
 
----
+- **Deck** `~/STARGATE/stargate` — HEAD `f301e35`, 0 uncommitted.
+- **Engine** `~/STARGATE/engine` — HEAD `f46fcc5`, 0 uncommitted.
+- turbovec indexes intact: `~/STARGATE/turbovec-env/state/{claude,starra}-memory.tvim`.
+- Everything is STOPPED: deck dev server, crash guard, NocoDB, n8n, Ollama models, Chromium.
 
-## What this pack is
-
-| File | Role |
-|---|---|
-| [`HANDOFF.md`](HANDOFF.md) | This index — start here |
-| [`GROK_CODE_HANDOFF.md`](GROK_CODE_HANDOFF.md) | Inventory, limits, checklist (extended reference) |
-| [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md) | Compressed voice-safe system prompt (~6–8K) |
-| [`GROK_VOICE_SESSION.json`](GROK_VOICE_SESSION.json) | xAI Voice Agent `session.update` template |
-| [`GROK_TOOLS_SCHEMA.json`](GROK_TOOLS_SCHEMA.json) | Function-tool stubs mapping to STARGATE APIs |
-| [`API-SURFACE.md`](API-SURFACE.md) | Critical route table + key slots |
-| [`VOICE-INTEGRATION.md`](VOICE-INTEGRATION.md) | Realtime Ara swap spec vs current Piper loop |
-
-**Canon sources (copy separately if needed):** `STARRA_SOUL.md`, `STARRA_BRAIN.md`, `STARRA_SOUL_BOOK.md`, `STARRA_GUARDIAN.md`, `docs/MULTICA_DOCTRINE.md`, etc. See §3 in [`GROK_CODE_HANDOFF.md`](GROK_CODE_HANDOFF.md).
-
----
-
-## How to use
-
-### With Grok Build (repo work)
-
-Grok Build is a **terminal coding agent**, not a voice HUD. It runs in the repo cwd.
-
-```bash
-curl -fsSL https://x.ai/cli/install.sh | bash
-cd /Users/work/Projects/stargate
-grok
-```
-
-Point Grok at this pack:
-
-1. Read [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md) as project instructions (or paste into `AGENTS.md` excerpt).
-2. Use [`API-SURFACE.md`](API-SURFACE.md) when wiring routes.
-3. Use [`VOICE-INTEGRATION.md`](VOICE-INTEGRATION.md) when implementing the Realtime proxy.
-
-Grok Build does **not** replace `npm run starra` or the Bridge PWA.
-
-### With xAI Voice playground
-
-1. Create `XAI_API_KEY` at [console.x.ai](https://console.x.ai).
-2. Open Voice Agent playground (or connect via WebSocket).
-3. Paste contents of [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md) into **instructions**, or load [`GROK_VOICE_SESSION.json`](GROK_VOICE_SESSION.json) as your `session.update` payload (replace the `instructions` placeholder with the system file body).
-4. Set `voice: "eve"`, `model: grok-voice-think-fast-1.0` (pass the model as `?model=` on the WebSocket URL — that is what selects it).
-5. Attach tools from [`GROK_TOOLS_SCHEMA.json`](GROK_TOOLS_SCHEMA.json) if your client supports `function` tools — wire handlers to STARGATE `/api/*` when Bridge is running.
-
-Test operator voice: responses should open with "Copy." only when followed by substance. Never emoji. Never "Sure!".
-
-### With STARGATE Bridge (hybrid — recommended)
-
-Keep the HUD. Swap voice path when Realtime proxy lands:
+## Bring it back up
 
 ```
-Bridge (HUD, memory, deck) + Grok Voice (duplex STT/TTS) + xAI Chat (brain) + Ollama (offline fallback)
+cd ~/STARGATE/stargate && scripts/starra up
 ```
 
-See [`VOICE-INTEGRATION.md`](VOICE-INTEGRATION.md) for the swap spec.
+Optional side tools (NOT auto-started, deliberately):
 
----
+```
+cd ~/STARGATE/stargate && scripts/starra tools up
+```
 
-## Environment matrix
+The engine API starts with `starra up`. Verify it linked:
 
-| Variable / slot | Where set | Powers today | Target (Path A) |
-|---|---|---|---|
-| `XAI_API_KEY` / keys slot `xai` | `.env` or Settings → LINK APIS | Think Tank vote only | Chat brain + Realtime voice |
-| `ANTHROPIC_API_KEY` / `anthropic` | `.env` or vault | Full chat + agent tools | Keep as fallback / Think Tank |
-| `OPENAI_API_KEY` / `openai` | `.env` or vault | Realtime stub (`/api/realtime`) | Replace with xAI Realtime |
-| `OLLAMA_*` | `.env` | Local brain (1.8K prompt clip) | Offline fallback |
-| `multica_token` | vault | Multica workspaces/issues | Grok function tools → `/api/tools/multica` |
-| Kalshi slots | vault | Dragon Tradar deck | Unchanged |
-| `openalice_base_url` | vault | Market intel read | Unchanged |
+```
+curl -s http://127.0.0.1:47401/health
+```
 
-No secrets in this pack. Never commit `data/keys.json` or `.env.local`.
+## THE OPEN HARDWARE PROBLEM — unresolved, not software
 
----
+The Mac flips **AC ↔ battery every 1-4 seconds** with `PowerChime` firing (110+ connect
+events logged). Measured at load 3.5 AND at load 10 — **identical behavior, so load is not
+the variable.** The cable was already replaced. Battery reads `Condition: Normal`, 471 cycles.
+**Remaining suspects: the power adapter brick, or the charging port.** Try a different brick;
+inspect the port for lint (machine off, wooden toothpick, never metal); then service.
 
-## Path A vs Path B
+Separately and truthfully: **claude was measured at 99.3% CPU holding 1.1 GB.** Classic was
+right to call that out. macOS blames "Terminal" because claude runs beneath it. Keep ONE heavy
+thing running at a time on this machine.
 
-### Path A — Realtime Ara (recommended)
+## What shipped this session
 
-Full-duplex speech-to-speech via `wss://api.x.ai/v1/realtime?model=grok-voice-think-fast-1.0`.
+**Deck — 1516 tests / 0 failing, tsc clean, lint 0 errors, e2e 10/10:**
+- `820f2f0` Playwright net, 8 screens (health check uses `[data-nextjs-dialog]`; `nextjs-portal`
+  is the always-present Next 15 devtools indicator and would false-fail everything)
+- `d73d75e` interaction motion · `cf63089` primitive polish · `b7394df` double-dot fix
+- `b1585d7` loading skeletons · `06b3462` press feedback (11 targets, **0 call-path lines changed**)
+- `6d6287f` **her memory searched by meaning** — "the money thing" went from 0 hits across 1,265
+  memories to real conversations. Verified live on the running deck, not just unit-tested.
 
-> **PIN, do not use the alias.** `grok-voice-latest` repoints from Think Fast 1.0 to 2.0 on **2026-08-05**, taking audio from $0.05/min to $0.08/min (docs.x.ai/docs/models, fetched 2026-07-31). The `?model=` query parameter on the socket is the only thing that selects the model — `POST /v1/realtime/client_secrets` accepts only `expires_after`/`session`, so a `model` in that body is ignored.
+**Engine — 63 tests passing (was 40), `ALPACA_PAPER = True` UNCHANGED:**
+- `a20dcc6` first commit this repo ever had (it had NO git history)
+- `2684ee2` broker truth: Alpaca says **2 orders, both CANCELED, 0 fills, 0 positions** — ledger
+  and broker agree, no hidden position anywhere
+- `d32c7ba` risk state persists · `a5f3b0b` approval_id fix
+- `24bed64` **max_daily_loss_pct / max_open_positions / max_crypto_positions now actually
+  enforce** — they were dataclass fields read by no code. He had NO daily loss limit.
+- `f46fcc5` **kill switch no longer locks him inside his losses** (HALT used to refuse
+  close_position/sell_all/cancel too) + `scripts/panic.py`
+- `8ca369b` QuantStats monthly report — reporting only, never imported inside `engine_room/`
 
-- Voice: **Eve** (xAI built-in, female British; not Piper Cori). This matches the code — `src/app/api/realtime/route.ts` sends `voice: "eve"`.
-- Instructions: [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md).
-- Client: STARGATE Bridge (replace OpenAI Realtime stub) or xAI playground for testing.
-- Barge-in: server VAD (`turn_detection.type: server_vad`).
-- Tools: [`GROK_TOOLS_SCHEMA.json`](GROK_TOOLS_SCHEMA.json) → STARGATE API handlers.
+## NEXT, in priority order
 
-**Pros:** Low latency, native turn-taking, matches Book 1 full-duplex spec.  
-**Cons:** Cloud-only; API cost per minute.
-
-### Path B — TTS-only (interim)
-
-Keep current loop: Web Speech STT → `POST /api/chat` SSE → Piper/Web Speech TTS.
-
-- No Realtime WebSocket.
-- xAI Chat API (`grok-4.5` / `grok-3-mini`) as text brain when wired.
-- Ara voice only if you add a separate xAI TTS call (not in Bridge today).
-
-**Pros:** Minimal code change; works offline for STT/TTS fallbacks.  
-**Cons:** Higher latency; not true duplex; wake-word loop stays browser-side.
-
----
-
-## What cannot move 1:1
-
-| STARGATE piece | Why |
-|---|---|
-| Next.js HUD (reactor, deck, `deck.css`) | Grok Build is TUI, not STARGATE chrome |
-| Piper ONNX in browser | xAI Voice replaces TTS |
-| Web Speech wake word ("starra") | Grok Voice has its own VAD / turn detection |
-| Local Ollama 1.5B clip path | Different latency/cost; Grok is cloud |
-| `data/memory.json`, vault PDFs | Export separately; not in this pack |
-| Multica vendor clone | Needs PAT + `vendor/multica`; expose via tools/MCP |
-| Dragon Tradar / Kalshi feeds | STARGATE-specific routes |
-| Debug instrumentation | Keep in repo; strip only for external distribution |
-
----
-
-## Quick start (operator)
-
-1. Read this file.
-2. Get `XAI_API_KEY`.
-3. Test [`STARRA_GROK_SYSTEM.md`](STARRA_GROK_SYSTEM.md) in xAI Voice playground with voice **Ara**.
-4. Link xAI in Bridge Settings → LINK APIS (Think Tank works today).
-5. Choose hybrid: keep `npm run starra`, plan Realtime swap per [`VOICE-INTEGRATION.md`](VOICE-INTEGRATION.md).
-6. Optional: `cd stargate && grok` for repo edits only.
-
----
-
-*Traces to Book 1 §7 (voice), Book 3 (runtime brain), [`GROK_CODE_HANDOFF.md`](GROK_CODE_HANDOFF.md).*
+1. **Fix the charger.** Everything else waits on the machine staying alive.
+2. **Engine Tasks 6 and 7 remain** — plan at `~/STARGATE/engine/docs/plans/2026-08-08-engine-live-readiness.md`.
+   Task 6 is the honest gate: `paper_loop.py:206` still defines `clean = refusals == 0 and
+   errors == 0`, so **rejecting every trade still scores "clean"** and 10/10 is reachable with
+   zero trades. Real progress toward his gate is **0 of 10**.
+3. **NOTHING IS LIVE.** Task 9's live gate is untouched and out of scope until paper orders
+   actually fill.
+4. **Two things need Classic's own eyes, and no test can replace them:** look at the deck
+   (skeletons, press feedback, polish), and **hear a live call** — she should now introduce
+   herself as STARRA on every surface including private and offline.
