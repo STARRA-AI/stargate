@@ -16,6 +16,7 @@ import { FundingPanel } from "./FundingPanel";
 import { InstagramApproval } from "./InstagramApproval";
 import { LiveSky } from "./LiveSky";
 import ReactorSphere from "@/components/hud/ReactorSphere";
+import { deckBoot, tabSwitch, tabsIn } from "@/lib/ui/motion";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
@@ -140,6 +141,35 @@ export function Bridge() {
   const [reduced, setReduced] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
   const [mobileTab, setMobileTab] = useState<MobileTab>("today");
+
+  // ── THE DECK COMING ONLINE ──────────────────────────────────────────────
+  // Runs once, after paint. Chrome, then rails, then panels — the deck
+  // assembles around the reactor instead of blinking into existence. The
+  // reactor is left out on purpose: it is the single animated focal point and
+  // already has its own life off her voice.
+  const bootedRef = useRef(false);
+  useEffect(() => {
+    if (bootedRef.current) return; // StrictMode double-mount must not re-run it
+    bootedRef.current = true;
+    // rAF so the browser has painted the resting state first; animating from a
+    // frame that was never rendered produces a visible jump on slow mounts.
+    const id = requestAnimationFrame(() => {
+      deckBoot();
+      tabsIn(".mobile-tab");
+    });
+    return () => cancelAnimationFrame(id);
+  }, []);
+
+  // A tab switch re-keys the panel, so it remounts — bring the new one in.
+  // Skips the very first render, which the boot timeline above already owns.
+  const firstTabRef = useRef(true);
+  useEffect(() => {
+    if (firstTabRef.current) {
+      firstTabRef.current = false;
+      return;
+    }
+    tabSwitch(".mobile-panel");
+  }, [mobileTab]);
   const [callOpen, setCallOpen] = useState(false);
   const badgeCineRef = useRef<HTMLVideoElement>(null);
   const shineRef = useRef<HTMLVideoElement>(null);

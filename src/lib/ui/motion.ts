@@ -17,7 +17,7 @@
  * runtime — it must be named: `import { animate, stagger } from "animejs"`.
  */
 
-import { animate, stagger } from "animejs";
+import { animate, createTimeline, stagger } from "animejs";
 
 /**
  * The duration scale, in ms. Doctrine: panel/state shifts 180-240ms, badge
@@ -123,4 +123,88 @@ export function brighten(target: Target): void {
 export function dim(target: Target): void {
   if (prefersReducedMotion()) return;
   animate(target, { opacity: [1, 0.62], duration: DUR.state, ease: EASE.chrome });
+}
+
+/**
+ * THE DECK COMING ONLINE.
+ *
+ * One timeline, run once on mount. The order is the point: chrome first, then
+ * the rails carrying her panels, then the panels themselves — so the deck reads
+ * as ASSEMBLING around the reactor rather than everything appearing at once.
+ *
+ * The reactor is deliberately NOT in here. It is the deck's single animated
+ * focal point (design doctrine), it has its own life off her voice, and giving
+ * it a boot flourish would put two things in competition at exactly the moment
+ * the eye is looking for one.
+ *
+ * Nothing loops. When the timeline ends the deck is at rest.
+ */
+export function deckBoot(root: ParentNode = document): void {
+  if (prefersReducedMotion()) return;
+
+  const pick = (sel: string) => Array.from(root.querySelectorAll(sel));
+  const topbar = pick(".topbar");
+  const rails = pick(".col");
+  const panels = pick(".panel");
+
+  // Nothing on screen yet (or the markup moved) — do not animate a fiction.
+  if (!topbar.length && !rails.length && !panels.length) return;
+
+  const tl = createTimeline({ defaults: { ease: EASE.out } });
+
+  if (topbar.length) {
+    tl.add(topbar, { opacity: [0, 1], translateY: [-8, 0], duration: DUR.panel }, 0);
+  }
+  // Left rail from the left, right rail from the right — they arrive from where
+  // they live, which is what makes it read as assembly and not a fade. Two
+  // explicit tracks rather than one function-valued tween: anime.js v4 does not
+  // type a per-element function returning a [from, to] pair.
+  const leftRail = rails.filter((el) => !el.classList.contains("col-right"));
+  const rightRail = rails.filter((el) => el.classList.contains("col-right"));
+  if (leftRail.length) {
+    tl.add(leftRail, { opacity: [0, 1], translateX: [-18, 0], duration: DUR.panel }, 60);
+  }
+  if (rightRail.length) {
+    tl.add(rightRail, { opacity: [0, 1], translateX: [18, 0], duration: DUR.panel }, 60);
+  }
+  if (panels.length) {
+    tl.add(
+      panels,
+      {
+        opacity: [0, 1],
+        translateY: [10, 0],
+        duration: DUR.reveal,
+        delay: stagger(34),
+      },
+      120,
+    );
+  }
+}
+
+/**
+ * A mobile tab becoming active: the outgoing content is already gone (the panel
+ * is re-keyed and remounts), so this only has to bring the incoming one in.
+ * Deliberately shorter than a panel reveal — a tab switch should feel like a
+ * flick, not a page load.
+ */
+export function tabSwitch(target: Target): void {
+  if (prefersReducedMotion()) return;
+  animate(target, {
+    opacity: [0, 1],
+    translateX: [10, 0],
+    duration: DUR.state,
+    ease: EASE.out,
+  });
+}
+
+/** The tab bar itself, on first paint — the row lands left to right. */
+export function tabsIn(target: Target): void {
+  if (prefersReducedMotion()) return;
+  animate(target, {
+    opacity: [0, 1],
+    translateY: [6, 0],
+    duration: DUR.state,
+    ease: EASE.out,
+    delay: stagger(22),
+  });
 }
