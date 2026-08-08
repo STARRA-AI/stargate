@@ -35,6 +35,7 @@
  */
 
 import { getMemory, recordExchange } from "@/lib/memory/store";
+import { semanticRecall } from "@/lib/memory/semantic";
 import { authorizePublic, notePublicDenial } from "@/lib/api/public-auth";
 import { safePublicError } from "@/lib/api/public-errors";
 import { captureError } from "@/lib/errlog";
@@ -103,6 +104,17 @@ async function recallMemory(query: string, limit: number): Promise<string> {
   // A query is REQUIRED. Without one this would be a "dump her whole life"
   // endpoint sitting on the public internet.
   if (!q) return "No query given. Say what to look for.";
+
+  // Semantic recall first — contract guarantees it never rejects (null on any
+  // failure: missing index, Ollama down, python error, timeout). Belt and
+  // suspenders anyway: no new throw path reaches the caller from here.
+  let sem: string[] | null = null;
+  try {
+    sem = await semanticRecall(query, limit);
+  } catch {
+    sem = null;
+  }
+  if (sem && sem.length > 0) return sem.join("\n---\n");
 
   const store = await getMemory();
   const hits: string[] = [];
