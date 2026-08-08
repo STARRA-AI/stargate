@@ -1,0 +1,26 @@
+/* The reactor core. Deliberately a MODULE stylesheet, not deck.css: a
+   starra-loop run owns deck.css/options.css/globals.css concurrently, and two
+   writers on one file is a merge conflict, not parallelism. */
+
+/* Sits exactly where the existing core glow sits — same anchor vars, same
+   footprint, same layer — so it lands INSIDE the artwork's rings rather than
+   floating in the middle of the viewport. Mirrors deck.css:370-373
+   (.reactor-core-glow), read from source, never edited. */
+.wrap {
+  position: absolute;
+  left: var(--reactor-cx, 50%);
+  top: var(--reactor-cy, 49%);
+  width: 26vmin;
+  height: 26vmin;
+  margin: -13vmin 0 0 -13vmin;
+  z-index: 1;
+  pointer-events: none; /* the reactor is scenery — it must never eat a click */
+}
+
+.canvas {
+  width: 100%;
+  height: 100%;
+  /* The galaxy backdrop stays visible THROUGH her: screen blending keeps the
+     starfield reading behind the core instead of being punched out by it. */
+  mix-blend-mode: screen;
+}

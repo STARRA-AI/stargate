@@ -15,6 +15,7 @@ import { FlipRadar } from "./FlipRadar";
 import { FundingPanel } from "./FundingPanel";
 import { InstagramApproval } from "./InstagramApproval";
 import { LiveSky } from "./LiveSky";
+import ReactorSphere from "@/components/hud/ReactorSphere";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
@@ -604,6 +605,12 @@ export function Bridge() {
         <div className="reactor-ring reactor-ring-2" aria-hidden />
         <div className="reactor-ring reactor-ring-3" aria-hidden />
         <div className="reactor-core-glow" aria-hidden />
+        {/* HER VOICE, AT THE CENTRE (2026-08-07). The glow above still breathes
+            on its own clock; this sits in the same footprint and moves only
+            when SHE does, off the analyser bus her TTS and the live call both
+            publish to. The three rings above are untouched — Book 1's long
+            loops stay exactly as they were. */}
+        <ReactorSphere />
         <div className="ambient-dots" />
         <div className="ambient-scanlines" />
         <div className="ambient-sweep" />
