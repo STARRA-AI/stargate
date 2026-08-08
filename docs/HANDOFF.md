@@ -1,13 +1,29 @@
-# HANDOFF — 2026-08-08 ~04:45
+# HANDOFF — 2026-08-08 ~06:10
 
-Written before Classic restarted the machine. **Everything is committed. Nothing is lost.**
+**Everything is committed. She is UP and reachable.**
 
 ## Machine state
 
-- **Deck** `~/STARGATE/stargate` — HEAD `f301e35`, 0 uncommitted.
-- **Engine** `~/STARGATE/engine` — HEAD `f46fcc5`, 0 uncommitted.
+- **Deck** `~/STARGATE/stargate` — HEAD `b9f448e`, running on `https://localhost:3000`.
+- **Engine** `~/STARGATE/engine` — HEAD `060cb86`, 69 tests passing.
 - turbovec indexes intact: `~/STARGATE/turbovec-env/state/{claude,starra}-memory.tvim`.
-- Everything is STOPPED: deck dev server, crash guard, NocoDB, n8n, Ollama models, Chromium.
+- **RUNNING:** deck, Ollama, Engine Room (`:47401`, paper), cloudflared tunnel, and the
+  **launchd keepalive** (`com.starra.deck`) — proven by killing the deck and watching it revive.
+- Side tools (NocoDB, n8n) deliberately still stopped.
+
+## The links
+
+| | |
+|---|---|
+| Local | `https://localhost:3000` (Touch ID only works here) |
+| Phone, same Wi-Fi | `https://192.168.1.222:3000` |
+| Public | `https://cohen-angel-house-mill.trycloudflare.com` — **rotates on every tunnel restart** |
+
+**Never quote the public link from memory — it changes.** Read the live one:
+
+```
+cd ~/STARGATE/stargate && scripts/starra status
+```
 
 ## Bring it back up
 
@@ -85,8 +101,30 @@ task — **Classic's call whether that flag stays**, not something to change for
    `clean:true` on `submitted:0, rejected:3` were regraded — **the real streak is `(0, False)`,
    not 2/10.** **Engine Task 7 is next** (stocks + crypto, separate clocks); plan at
    `~/STARGATE/engine/docs/plans/2026-08-08-engine-live-readiness.md:1602`.
-3. **NOTHING IS LIVE.** Task 9's live gate is untouched and out of scope until paper orders
+3. **A PERMANENT PUBLIC URL — half-built, blocked on Classic only.** He chose **Tailscale Funnel**
+   (verified free on all plans, no domain needed). `tailscale 1.102.2` is **already installed** via
+   brew. Everything else is done; the only remaining steps need his password and a browser login,
+   so do NOT try to automate around them. He runs:
+
+   ```
+   sudo brew services start tailscale && /usr/local/bin/tailscale up
+   ```
+
+   Then the funnel — the `https+insecure://` form is required because the deck serves a
+   self-signed cert, and it is confirmed from `tailscale funnel --help`, not guessed:
+
+   ```
+   /usr/local/bin/tailscale funnel --bg https+insecure://localhost:3000
+   ```
+
+   Durability is automatic: `tailscaled` is a system daemon and `--bg` persists in its state.
+   **Then verify the real way** — kill the deck, confirm it revives AND the funnel URL still
+   answers. After that, repoint her four xAI voice-agent tools at the stable `*.ts.net` host;
+   rotation breaking those tools is the whole reason this matters. Leave cloudflared running
+   until the funnel is proven, so he is never without a link.
+
+4. **NOTHING IS LIVE.** Task 9's live gate is untouched and out of scope until paper orders
    actually fill.
-4. **Two things need Classic's own eyes, and no test can replace them:** look at the deck
+5. **Two things need Classic's own eyes, and no test can replace them:** look at the deck
    (skeletons, press feedback, polish), and **hear a live call** — she should now introduce
    herself as STARRA on every surface including private and offline.
