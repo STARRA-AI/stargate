@@ -1,5 +1,15 @@
 /**
- * Unified STARRA TTS — Piper Cori when model files present, Web Speech fallback.
+ * Unified STARRA TTS. HER VOICE IS EVE (xAI) — the same voice as the live call,
+ * on every surface. /api/tts defaults to voice_id "eve" and api/realtime sends
+ * voice "eve", so a typed reply and a spoken call are the same woman.
+ *
+ * Piper and Web Speech are NOT preferences and NOT a ranked fallback. They may
+ * speak a chat turn only when her hosted voice was never configured, or when
+ * Classic explicitly picked another voice in Settings — see
+ * voice-fallback-policy.ts. A transient xAI failure resolves to SILENCE plus a
+ * visible notice, because both stand-ins are also British female voices and are
+ * therefore indistinguishable-but-wrong: that is the "two of her" he reported.
+ *
  * Book 1 §7: one consistent voice; operator register unchanged.
  */
 
@@ -28,8 +38,39 @@ import { stopLocalStream } from "@/lib/voice/local-voice";
 // "@/lib/engine/bus" (never "@/lib/engine") is what keeps config/providers/router
 // — the modules that resolve credentials — out of this client bundle.
 import { getEngineState, publishVoice, type VoiceSource } from "@/lib/engine/bus";
+// ONE VOICE, ONE STARRA. The rule deciding whether ANY engine other than her
+// own may speak a reply lives in one pure, unit-tested module — not in the
+// shape of the control flow below, which is how a British stand-in kept
+// finishing Classic's answers.
+import {
+  mayAnotherVoiceSpeak,
+  voiceFailureNotice,
+  type AraOutcome,
+} from "@/lib/voice/voice-fallback-policy";
 
 export { PIPER_VOICE_ID };
+
+/** Fired when her voice fails and she stays SILENT rather than substituting. */
+export const VOICE_FAILURE_EVENT = "stargate:voice-failure";
+
+/**
+ * Say it out loud. The whole reason this bug survived repeated reports is that
+ * the degrade was SILENT — a stranger's voice simply appeared and nothing named
+ * it. Now the failure announces itself on the console AND as a DOM event the
+ * deck can surface, so "she went quiet" is never a mystery.
+ */
+function reportVoiceFailure(notice: string, outcome: AraOutcome): void {
+  try {
+    console.warn(`[STARRA voice] ${notice} (outcome: ${outcome})`);
+    if (typeof window !== "undefined") {
+      window.dispatchEvent(
+        new CustomEvent(VOICE_FAILURE_EVENT, { detail: { notice, outcome } }),
+      );
+    }
+  } catch {
+    /* never let telling him about a failure become a second failure */
+  }
+}
 
 export type SpeakEngine = "ara" | "piper" | "webspeech" | "none";
 
@@ -611,7 +652,7 @@ async function speakAra(
   text: string,
   signal: AbortSignal | undefined,
   generation: number,
-): Promise<boolean> {
+): Promise<AraOutcome> {
   try {
     const res = await fetch("/api/tts", {
       method: "POST",
@@ -619,9 +660,15 @@ async function speakAra(
       body: JSON.stringify({ text }),
       signal,
     });
-    if (!res.ok || res.status === 204) return false;
+    // 204 means NO KEY — her hosted voice was never configured. That is the
+    // documented offline lane and the ONLY miss that may hand the turn to a
+    // local voice. Every other non-ok status is a TRANSIENT failure, and a
+    // transient failure must never put a different woman in the room.
+    if (res.status === 204) return "unconfigured";
+    if (!res.ok) return "failed";
     const blob = await res.blob();
-    if (!blob.size || signal?.aborted) return false;
+    if (signal?.aborted) return "aborted";
+    if (!blob.size) return "failed";
 
     const url = URL.createObjectURL(blob);
     stopAraAudio();
@@ -639,10 +686,10 @@ async function speakAra(
     if (signal?.aborted) {
       if (araAudio === audio) araAudio = null;
       URL.revokeObjectURL(url);
-      return false;
+      return "aborted";
     }
 
-    return await new Promise<boolean>((resolve) => {
+    return await new Promise<AraOutcome>((resolve) => {
       let settled = false;
       let watchdog = 0;
       let heardSound = false;
@@ -665,7 +712,11 @@ async function speakAra(
         // already taken her voice, this one may not retract its "speaking".
         publishTtsFor(generation, { playing: false });
         cleanup();
-        resolve(ok);
+        // A miss is "aborted" when the caller pulled the turn (barge-in, newer
+        // utterance) and "failed" otherwise. Neither one may summon a second
+        // voice — mayAnotherVoiceSpeak refuses both — but the distinction is
+        // what the operator notice reads from, so it must stay honest.
+        resolve(ok ? "ok" : signal?.aborted ? "aborted" : "failed");
       };
       const settleFalse = () => settle(false);
       araSettle = settleFalse;
@@ -703,9 +754,12 @@ async function speakAra(
         }
         if (araAudio === audio) araAudio = null;
         // If sound DID come out, report SUCCESS: re-speaking the whole reply
-        // through Piper would repeat her out loud. If nothing ever played,
-        // report failure so the fallback engine gets its chance — better a
-        // second-choice voice than silence. Either way the turn moves on.
+        // through another engine would repeat her out loud. If nothing ever
+        // played, this is a FAILURE — and a failure now means she goes SILENT,
+        // not that a stand-in gets its turn. The rationale this comment used to
+        // carry (that any voice beat no voice) was the bug Classic kept
+        // reporting: he would rather hear nothing than hear someone else.
+        // Either way the turn moves on.
         settle(heardSound);
       };
       const armWatchdog = (ms: number) => {
@@ -786,11 +840,18 @@ async function speakAra(
         });
     });
   } catch {
-    return false;
+    return "failed";
   }
 }
 
-/** Speak text; prefers Piper Cori, falls back to browser speechSynthesis. */
+/**
+ * Speak text in HER voice — Ara/eve (xAI), the same voice as the live call.
+ *
+ * If that voice fails transiently she goes SILENT and the operator is told;
+ * no other engine finishes her sentence. Piper / Web Speech speak a chat turn
+ * only when her hosted voice was never configured, or when Classic explicitly
+ * picked another voice in Settings. See voice-fallback-policy.ts.
+ */
 export async function speakStarra(
   text: string,
   signal?: AbortSignal,
@@ -842,20 +903,39 @@ export async function speakStarra(
   // voices" (and her rationalizing them) reached him. So Ara gets ONE retry
   // before any fallback engine may speak; the fallbacks now cover real
   // outages, not blips.
-  if (isAraSelected() && !signal?.aborted) {
-    const araOk = await speakAra(text, signal, generation);
-    if (araOk && !signal?.aborted) {
+  const araSelected = isAraSelected();
+  let araOutcome: AraOutcome = "not-attempted";
+
+  if (araSelected && !signal?.aborted) {
+    araOutcome = await speakAra(text, signal, generation);
+    if (araOutcome === "ok" && !signal?.aborted) {
       return "ara";
     }
-    if (!signal?.aborted) {
-      const araRetryOk = await speakAra(text, signal, generation);
-      if (araRetryOk && !signal?.aborted) {
+    // ONE retry, for a genuine blip. Note what the retry is NOT: it is not the
+    // thing that keeps her voice singular. A second failure used to fall
+    // through to Piper/Web Speech, which is how a British voice finished his
+    // answers — see voice-fallback-policy.ts. The GATE below is what protects
+    // her voice; this retry only spares her a needless silence.
+    if (araOutcome !== "unconfigured" && !signal?.aborted) {
+      araOutcome = await speakAra(text, signal, generation);
+      if (araOutcome === "ok" && !signal?.aborted) {
         return "ara";
       }
     }
   }
 
   if (signal?.aborted) {
+    return "none";
+  }
+
+  // ── ONE VOICE, ONE STARRA — THE GATE ─────────────────────────────────────
+  // Her voice failed. Whether ANY other engine may speak this reply is decided
+  // in one pure, unit-tested place, not by falling off the end of a branch.
+  // A transient failure resolves to silence + a visible notice; only a never-
+  // configured hosted voice hands the turn to the local one.
+  if (!mayAnotherVoiceSpeak({ outcome: araOutcome, araSelected })) {
+    const notice = voiceFailureNotice(araOutcome);
+    if (notice) reportVoiceFailure(notice, araOutcome);
     return "none";
   }
 
