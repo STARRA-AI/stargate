@@ -35,7 +35,7 @@
  */
 
 import { getMemory, recordExchange } from "@/lib/memory/store";
-import { semanticRecall } from "@/lib/memory/semantic";
+import { semanticRecall, mergeRecall } from "@/lib/memory/semantic";
 import { authorizePublic, notePublicDenial } from "@/lib/api/public-auth";
 import { safePublicError } from "@/lib/api/public-errors";
 import { captureError } from "@/lib/errlog";
@@ -105,17 +105,19 @@ async function recallMemory(query: string, limit: number): Promise<string> {
   // endpoint sitting on the public internet.
   if (!q) return "No query given. Say what to look for.";
 
-  // Semantic recall first — contract guarantees it never rejects (null on any
-  // failure: missing index, Ollama down, python error, timeout). Belt and
-  // suspenders anyway: no new throw path reaches the caller from here.
+  // Meaning lane. Contract guarantees it never rejects (null on any failure:
+  // missing index, Ollama down, python error, timeout). Belt and suspenders
+  // anyway: no new throw path reaches the caller from here.
   let sem: string[] | null = null;
   try {
     sem = await semanticRecall(query, limit);
   } catch {
     sem = null;
   }
-  if (sem && sem.length > 0) return sem.join("\n---\n");
 
+  // Exact/fresh lane — the LIVE store. This is not a fallback, it is the only
+  // lane that can see a memory stored since the last index build, and nothing
+  // rebuilds that index (see mergeRecall's header). Both lanes always run.
   const store = await getMemory();
   const hits: string[] = [];
   for (const e of store.working) {
@@ -127,9 +129,9 @@ async function recallMemory(query: string, limit: number): Promise<string> {
   for (const s of store.summaries) {
     if (s.toLowerCase().includes(q)) hits.push(s);
   }
-  if (hits.length === 0) return `Nothing in memory about "${query}".`;
-  // Newest last in the store, so the tail is the most recent and most relevant.
-  return hits.slice(-limit).join("\n---\n");
+  const merged = mergeRecall(hits, sem, limit);
+  if (merged.length === 0) return `Nothing in memory about "${query}".`;
+  return merged.join("\n---\n");
 }
 
 async function callTool(name: string, args: Record<string, unknown>): Promise<string> {
