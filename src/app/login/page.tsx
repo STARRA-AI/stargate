@@ -129,7 +129,7 @@ export default function LoginPage() {
 
   const panel: React.CSSProperties = {
     width: "min(360px, 90vw)",
-    padding: "34px 28px",
+    padding: "16px",
     borderRadius: 16,
     background: "rgba(12, 5, 24, 0.72)",
     border: "1px solid rgba(176, 77, 252, 0.34)",
@@ -151,7 +151,7 @@ export default function LoginPage() {
   });
   const ghostBtn: React.CSSProperties = {
     width: "100%",
-    marginTop: 10,
+    marginTop: 12,
     padding: "11px 14px",
     borderRadius: 10,
     border: "1px solid rgba(176, 77, 252, 0.3)",
@@ -180,10 +180,10 @@ export default function LoginPage() {
           <div style={{ fontSize: 12, letterSpacing: "0.34em", fontWeight: 700, color: "#b98cff" }}>
             STARGATE
           </div>
-          <div style={{ fontSize: 11, letterSpacing: "0.2em", color: "#7a63a8", marginTop: 6 }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.2em", color: "#7a63a8", marginTop: 12 }}>
             YOU&apos;RE IN
           </div>
-          <div style={{ marginTop: 22, fontSize: 12.5, color: "#c9b8ff", lineHeight: 1.6 }}>
+          <div style={{ marginTop: 12, fontSize: 12.5, color: "#c9b8ff", lineHeight: 1.6 }}>
             Set up Touch&nbsp;ID / Face&nbsp;ID so you can unlock STARGATE without the password
             next time?
           </div>
@@ -194,7 +194,7 @@ export default function LoginPage() {
             type="button"
             onClick={passkeyRegister}
             disabled={busy}
-            style={{ ...primaryBtn(!busy), marginTop: 18 }}
+            style={{ ...primaryBtn(!busy), marginTop: 12 }}
           >
             {busy ? "…" : "SET UP TOUCH ID"}
           </button>
@@ -211,11 +211,11 @@ export default function LoginPage() {
           <div style={{ fontSize: 12, letterSpacing: "0.34em", fontWeight: 700, color: "#b98cff" }}>
             STARGATE
           </div>
-          <div style={{ fontSize: 11, letterSpacing: "0.2em", color: "#7a63a8", marginTop: 6 }}>
+          <div style={{ fontSize: 11, letterSpacing: "0.2em", color: "#7a63a8", marginTop: 12 }}>
             OPERATOR ACCESS
           </div>
 
-          <div style={{ position: "relative", marginTop: 26 }}>
+          <div style={{ position: "relative", marginTop: 12 }}>
             <input
               type={show ? "text" : "password"}
               value={pw}
@@ -281,12 +281,12 @@ export default function LoginPage() {
             </div>
           ) : null}
 
-          <button type="submit" disabled={busy || !pw} style={{ ...primaryBtn(!busy && !!pw), marginTop: 18 }}>
+          <button type="submit" disabled={busy || !pw} style={{ ...primaryBtn(!busy && !!pw), marginTop: 12 }}>
             {busy ? "…" : "ENTER"}
           </button>
 
           <button type="button" onClick={passkeyLogin} disabled={busy} style={ghostBtn}>
-            🔒 UNLOCK WITH TOUCH ID
+            UNLOCK WITH TOUCH ID
           </button>
         </form>
       )}

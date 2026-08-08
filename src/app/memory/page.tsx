@@ -35,7 +35,7 @@ export default function MemoryPage() {
           PROCESSING
         </p>
       ) : (
-        <div className="grid gap-4 md:grid-cols-3">
+        <div className="deck-grid">
           <Tier
             title={`Working (${data.working.length})`}
             items={data.working.map(
@@ -55,11 +55,11 @@ export default function MemoryPage() {
 
 function Tier({ title, items }: { title: string; items: string[] }) {
   return (
-    <section className="panel-etch flex flex-col gap-2 p-4">
-      <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
+    <section className="deck-panel">
+      <h2 className="deck-title">
         {title}
       </h2>
-      <ul className="space-y-2 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
+      <ul className="deck-stack font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
         {items.length === 0 ? (
           <li className="text-[var(--star)]">EMPTY</li>
         ) : (

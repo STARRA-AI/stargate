@@ -8,31 +8,41 @@ export default function ConnectorsPage() {
 
   return (
     <ScreenShell title="Connectors">
-      <p className="mb-4 font-[family-name:var(--font-mono)] text-xs text-[var(--star)]">
+      <p className="mb-4 deck-note">
         OAuth wires when keys are present. Tiles stay available until then.
       </p>
-      <div className="grid gap-3 md:grid-cols-2">
+      <div className="deck-grid">
         {connectors.map((c) => (
-          <article key={c.id} className="panel-etch flex items-center justify-between p-4">
-            <div>
-              <h2 className="font-[family-name:var(--font-display)] text-sm tracking-[0.2em] text-[var(--chrome)] uppercase">
-                {c.name}
-              </h2>
-              <p className="mt-1 font-[family-name:var(--font-mono)] text-[11px] tracking-widest text-[var(--star)] uppercase">
-                {c.status === "connected"
-                  ? "● connected"
-                  : c.status === "error"
-                    ? "◆ error — reauth"
-                    : "○ available"}
-              </p>
+          <article key={c.id} className="deck-panel">
+            <div className="flex items-center justify-between gap-3">
+              <div>
+                <h2 className="font-[family-name:var(--font-display)] text-sm tracking-[0.2em] text-[var(--chrome)] uppercase">
+                  {c.name}
+                </h2>
+                <span
+                  className={`mt-1 deck-badge ${
+                    c.status === "connected"
+                      ? "is-ok"
+                      : c.status === "error"
+                        ? "is-danger"
+                        : "is-idle"
+                  }`}
+                >
+                  {c.status === "connected"
+                    ? "● connected"
+                    : c.status === "error"
+                      ? "◆ error — reauth"
+                      : "○ available"}
+                </span>
+              </div>
+              <button
+                type="button"
+                disabled
+                className="border border-[var(--border)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.2em] text-[var(--star)] uppercase opacity-60"
+              >
+                Connect
+              </button>
             </div>
-            <button
-              type="button"
-              disabled
-              className="border border-[var(--border)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.2em] text-[var(--star)] uppercase opacity-60"
-            >
-              Connect
-            </button>
           </article>
         ))}
       </div>

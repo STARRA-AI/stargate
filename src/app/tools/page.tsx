@@ -442,20 +442,46 @@ export default function ToolsPage() {
     }
   }
 
+  /**
+   * The ops-feed verdict, read off the SAME `status` string the feed already
+   * renders — no new state, no changed transition. Every failure path still
+   * writes `status`, so a failure still reaches BOTH the badge and the feed.
+   */
+  const statusTone = status.includes("LINK DEGRADED")
+    ? "is-danger"
+    : status.startsWith("EXECUTING") || status.startsWith("HELD")
+      ? "is-warn"
+      : "is-ok";
+  const statusLabel = status.includes("LINK DEGRADED")
+    ? "◆ Link degraded"
+    : status.startsWith("EXECUTING")
+      ? "◆ Executing"
+      : status.startsWith("HELD")
+        ? "◆ Held — confirm"
+        : "● Ok";
+
   return (
     <ScreenShell title="Tools">
       {status && (
-        <p className="mb-4 font-[family-name:var(--font-mono)] text-xs tracking-widest text-[var(--magenta)] uppercase">
-          {status}
-        </p>
+        <div className="mb-4 flex flex-wrap items-center gap-3">
+          <span className={`deck-badge ${statusTone}`}>{statusLabel}</span>
+          <p className="font-[family-name:var(--font-mono)] text-xs tracking-widest text-[var(--magenta)] uppercase">
+            {status}
+          </p>
+        </div>
       )}
 
-      <div className="grid gap-4 lg:grid-cols-2 xl:grid-cols-4">
+      <div className="deck-grid">
         {/* Repomix */}
-        <section className="panel-etch flex flex-col gap-3 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            Repomix
-          </h2>
+        <section className="deck-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="deck-title">Repomix</h2>
+            <span
+              className={`deck-badge ${repomix.hasPack ? "is-ok" : "is-idle"}`}
+            >
+              {repomix.hasPack ? "● Pack ready" : "○ No pack"}
+            </span>
+          </div>
           <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
             Pack this codebase into an AI-readable XML dump for deep inspections.
           </p>
@@ -477,10 +503,19 @@ export default function ToolsPage() {
         </section>
 
         {/* OpenMontage — canonical video path */}
-        <section className="panel-etch flex flex-col gap-3 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            OpenMontage
-          </h2>
+        <section className="deck-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="deck-title">OpenMontage</h2>
+            <span
+              className={`deck-badge ${montage?.ready ? "is-ok" : montage?.present ? "is-warn" : "is-danger"}`}
+            >
+              {montage?.ready
+                ? "● Ready"
+                : montage?.present
+                  ? "◆ Not ready"
+                  : "○ No vendor"}
+            </span>
+          </div>
           <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
             Canonical video studio for Silent Shadow Shorts and Book of Starra. Queue a brief;
             an agent renders via{" "}
@@ -557,10 +592,25 @@ export default function ToolsPage() {
         </section>
 
         {/* Prompts */}
-        <section className="panel-etch flex flex-col gap-3 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            Prompt structure
-          </h2>
+        <section className="deck-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="deck-title">Prompt structure</h2>
+            <span
+              className={`deck-badge ${
+                !prompts?.present
+                  ? "is-danger"
+                  : prompts.distilled
+                    ? "is-ok"
+                    : "is-warn"
+              }`}
+            >
+              {!prompts?.present
+                ? "○ No clone"
+                : prompts.distilled
+                  ? "● Distilled"
+                  : "◆ Not distilled"}
+            </span>
+          </div>
           <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
             Distill section patterns from system_prompts_leaks into STARRA scaffold. Tone stays operator.
           </p>
@@ -586,13 +636,35 @@ export default function ToolsPage() {
         </section>
 
         {/* Multica */}
-        <section className="panel-etch flex flex-col gap-3 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            Multica
-          </h2>
+        <section className="deck-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="deck-title">Multica</h2>
+            <span
+              className={`deck-badge ${
+                multica?.vendorPresent && multica.cliPresent && multica.tokenLinked
+                  ? "is-ok"
+                  : multica?.vendorPresent
+                    ? "is-warn"
+                    : "is-danger"
+              }`}
+            >
+              {multica?.vendorPresent && multica.cliPresent && multica.tokenLinked
+                ? "● Linked"
+                : multica?.vendorPresent
+                  ? "◆ Needs PAT / CLI"
+                  : "○ No vendor"}
+            </span>
+          </div>
           <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
             Agents as teammates — workspaces, issues, skills. External muscle for STARRA.
           </p>
+          <span
+            className={`deck-badge self-start ${workspaces.length || issues.length ? "is-ok" : "is-idle"}`}
+          >
+            {workspaces.length || issues.length
+              ? `● Board · ${workspaces.length} ws · ${issues.length} issues`
+              : "○ Board not loaded"}
+          </span>
           <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
             {multica?.vendorPresent ? "● vendor present" : "○ run bootstrap-multica"} ·{" "}
             {multica?.cliPresent
@@ -652,10 +724,25 @@ export default function ToolsPage() {
         </section>
 
         {/* OpenAlice */}
-        <section className="panel-etch flex flex-col gap-3 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            OpenAlice
-          </h2>
+        <section className="deck-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="deck-title">OpenAlice</h2>
+            <span
+              className={`deck-badge ${
+                openalice?.runtimeReachable
+                  ? "is-ok"
+                  : openalice?.vendorPresent
+                    ? "is-warn"
+                    : "is-danger"
+              }`}
+            >
+              {openalice?.runtimeReachable
+                ? "● Runtime up"
+                : openalice?.vendorPresent
+                  ? "◆ Runtime offline"
+                  : "○ No vendor"}
+            </span>
+          </div>
           <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
             Alice market intel — research, issues, inbox readout. Trade execution stays gated in OpenAlice.
           </p>
@@ -712,271 +799,278 @@ export default function ToolsPage() {
             {openalice?.guide}
           </p>
         </section>
-      </div>
-
-      <section className="panel-etch mt-4 space-y-4 p-4">
-        <div className="flex flex-wrap items-start gap-3">
-          <div>
-            <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-              Memory / Vault
-            </h2>
-            <p className="mt-2 max-w-3xl font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
-              Three layers: local Obsidian markdown (long-term), STARRA grammar +
-              gated note ops (assistant), private Git sync (backup). Never into
-              the app repo.
-            </p>
-          </div>
-          <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
-            <span>
-              {obsidian?.present ? "● vault online" : "○ vault missing"} ·{" "}
-              {obsidian?.noteCount ?? 0} notes
-            </span>
-            <span>path · {obsidian?.vaultRootRel ?? "data/vault"}</span>
-            <span>
-              skills ·{" "}
-              {obsidian?.skillsVendorPresent ? "vendor present" : "optional clone"}
-            </span>
-          </div>
-        </div>
-
-        <div className="grid gap-2 font-[family-name:var(--font-mono)] text-[11px] text-[var(--chrome)] md:grid-cols-3">
-          <p>
-            <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
-              L1 memory
-            </span>
-            <br />
-            {obsidian?.layers.longTermMemory ?? "—"}
-          </p>
-          <p>
-            <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
-              L2 assistant
-            </span>
-            <br />
-            {obsidian?.layers.assistant ?? "—"}
-          </p>
-          <p>
-            <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
-              L3 backup
-            </span>
-            <br />
-            {obsidian?.layers.backupSync ?? "—"}
-          </p>
-        </div>
-
-        <div className="flex flex-wrap gap-2">
-          <button
-            type="button"
-            onClick={() => void initVault()}
-            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-          >
-            Init vault
-          </button>
-          <button
-            type="button"
-            onClick={() => void listVaultNotes()}
-            className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-          >
-            List notes
-          </button>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <div className="space-y-3">
-            <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
-              Search
-              <div className="mt-1 flex gap-2">
-                <input
-                  value={vaultQuery}
-                  onChange={(e) => setVaultQuery(e.target.value)}
-                  className="focus-magenta w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
-                />
-                <button
-                  type="button"
-                  onClick={() => void searchVault()}
-                  className="focus-magenta border border-[var(--purple)] px-3 py-1 font-[family-name:var(--font-display)] text-[10px] tracking-[0.2em] uppercase"
+        <section className="deck-panel deck-panel-wide">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="deck-stack">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="deck-title">Memory / Vault</h2>
+                <span
+                  className={`deck-badge ${obsidian?.present ? "is-ok" : "is-danger"}`}
                 >
-                  Go
-                </button>
+                  {obsidian?.present
+                    ? `● Vault online · ${obsidian.noteCount ?? 0} notes`
+                    : "○ Vault missing — init"}
+                </span>
               </div>
-            </label>
-            <ul className="max-h-36 space-y-1 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
-              {vaultSearchHits.map((h) => (
-                <li key={`${h.rel}-${h.line}`}>
-                  {h.rel}:{h.line} · {h.snippet}
-                </li>
-              ))}
-              {vaultNotes.slice(0, 12).map((n) => (
-                <li key={n.rel}>
-                  {n.rel} · {n.bytes}b
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="space-y-3">
-            <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
-              Path
-              <input
-                value={notePath}
-                onChange={(e) => setNotePath(e.target.value)}
-                className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
-              />
-            </label>
-            <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
-              Content
-              <textarea
-                value={noteContent}
-                onChange={(e) => setNoteContent(e.target.value)}
-                rows={5}
-                className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
-              />
-            </label>
-            {confirmToken ? (
-              <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--magenta)]">
-                Confirm token · {confirmToken} — re-run overwrite to apply
+              <p className="max-w-3xl font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+                Three layers: local Obsidian markdown (long-term), STARRA grammar +
+                gated note ops (assistant), private Git sync (backup). Never into
+                the app repo.
               </p>
-            ) : null}
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={() => void writeVaultNote("create")}
-                className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-              >
-                Create
-              </button>
-              <button
-                type="button"
-                onClick={() => void writeVaultNote("append")}
-                className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-              >
-                Append
-              </button>
-              <button
-                type="button"
-                onClick={() => void writeVaultNote("overwrite")}
-                className="focus-magenta border border-[var(--magenta)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-              >
-                Overwrite (gated)
-              </button>
+            </div>
+            <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
+              <span>
+                {obsidian?.present ? "● vault online" : "○ vault missing"} ·{" "}
+                {obsidian?.noteCount ?? 0} notes
+              </span>
+              <span>path · {obsidian?.vaultRootRel ?? "data/vault"}</span>
+              <span>
+                skills ·{" "}
+                {obsidian?.skillsVendorPresent ? "vendor present" : "optional clone"}
+              </span>
             </div>
           </div>
-        </div>
 
-        <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
-          {obsidian?.guide} · docs/OBSIDIAN_MEMORY.md · npm run vault:sync
-        </p>
-      </section>
-
-      <section className="panel-etch mt-4 space-y-4 p-4">
-        <div className="flex flex-wrap items-start gap-3">
-          <div>
-            <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-              Funding intel
-            </h2>
-            <p className="mt-2 max-w-3xl font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
-              {funding?.stance ??
-                "Normalizing public funding sources into operator-ready registry entries."}
+          <div className="grid gap-2 font-[family-name:var(--font-mono)] text-[11px] text-[var(--chrome)] md:grid-cols-3">
+            <p>
+              <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
+                L1 memory
+              </span>
+              <br />
+              {obsidian?.layers.longTermMemory ?? "—"}
+            </p>
+            <p>
+              <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
+                L2 assistant
+              </span>
+              <br />
+              {obsidian?.layers.assistant ?? "—"}
+            </p>
+            <p>
+              <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
+                L3 backup
+              </span>
+              <br />
+              {obsidian?.layers.backupSync ?? "—"}
             </p>
           </div>
-          <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
-            <span>sources · {funding?.summary.counts.total ?? "—"}</span>
-            <span>usable now · {funding?.summary.counts.acceptedNow ?? "—"}</span>
-            <span>future hooks · {funding?.summary.counts.futureHooks ?? "—"}</span>
-            <span>excluded · {funding?.summary.counts.rejected ?? "—"}</span>
-          </div>
-        </div>
 
-        <div className="flex flex-wrap gap-2 font-[family-name:var(--font-mono)] text-[10px] uppercase">
-          {(funding?.keyHooks ?? []).map((hook) => (
-            <span
-              key={hook.id}
-              className={`border px-2 py-1 ${
-                hook.linked
-                  ? "border-[var(--ok)] text-[var(--ok)]"
-                  : "border-[var(--border)] text-[var(--star)]"
-              }`}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void initVault()}
+              className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
             >
-              {hook.linked ? "●" : "○"} {hook.label}
-            </span>
-          ))}
-        </div>
+              Init vault
+            </button>
+            <button
+              type="button"
+              onClick={() => void listVaultNotes()}
+              className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+            >
+              List notes
+            </button>
+          </div>
 
-        <div className="grid gap-4 xl:grid-cols-3">
-          {(funding?.registry ?? []).map((source) => (
-            <article key={source.id} className="border border-[var(--border-soft)] p-4">
-              <div className="flex items-start gap-2">
-                <div>
-                  <h3 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.24em] text-[var(--chrome)] uppercase">
-                    {source.name}
-                  </h3>
-                  <p className="mt-1 font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
-                    {source.repo}
-                  </p>
+          <div className="grid gap-4 lg:grid-cols-2">
+            <div className="space-y-3">
+              <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+                Search
+                <div className="mt-1 flex gap-2">
+                  <input
+                    value={vaultQuery}
+                    onChange={(e) => setVaultQuery(e.target.value)}
+                    className="focus-magenta w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => void searchVault()}
+                    className="focus-magenta border border-[var(--purple)] px-3 py-1 font-[family-name:var(--font-display)] text-[10px] tracking-[0.2em] uppercase"
+                  >
+                    Go
+                  </button>
                 </div>
-                <span
-                  className={`ml-auto font-[family-name:var(--font-mono)] text-[10px] tracking-widest uppercase ${
-                    source.fit === "accepted"
-                      ? "text-[var(--ok)]"
-                      : source.fit === "future_hook"
-                        ? "text-[var(--magenta)]"
-                        : "text-[var(--danger)]"
-                  }`}
-                >
-                  {source.fit === "accepted"
-                    ? "LIVE NOW"
-                    : source.fit === "future_hook"
-                      ? "HOOK LATER"
-                      : "EXCLUDED"}
-                </span>
-              </div>
-
-              <p className="mt-3 font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
-                {source.summary}
-              </p>
-              <p className="mt-2 font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--magenta)]">
-                USE NOW: {source.useNow}
-              </p>
-              <p className="mt-2 font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--star)]">
-                WHY: {source.reason}
-              </p>
-
-              <div className="mt-3 flex flex-wrap gap-2 font-[family-name:var(--font-mono)] text-[10px] uppercase">
-                <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
-                  {source.kind.replaceAll("_", " ")}
-                </span>
-                <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
-                  {source.domain.replaceAll("_", " ")}
-                </span>
-                <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
-                  access · {source.access.replaceAll("_", " ")}
-                </span>
-              </div>
-
-              <ul className="mt-3 space-y-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--chrome)]">
-                {source.operatorActions.map((action) => (
-                  <li key={action}>◆ {action}</li>
+              </label>
+              <ul className="max-h-36 space-y-1 overflow-auto font-[family-name:var(--font-mono)] text-[10px] text-[var(--chrome)]">
+                {vaultSearchHits.map((h) => (
+                  <li key={`${h.rel}-${h.line}`}>
+                    {h.rel}:{h.line} · {h.snippet}
+                  </li>
+                ))}
+                {vaultNotes.slice(0, 12).map((n) => (
+                  <li key={n.rel}>
+                    {n.rel} · {n.bytes}b
+                  </li>
                 ))}
               </ul>
+            </div>
 
-              <div className="mt-4 flex items-center gap-3">
-                <a
-                  href={source.url}
-                  target="_blank"
-                  rel="noreferrer"
+            <div className="space-y-3">
+              <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+                Path
+                <input
+                  value={notePath}
+                  onChange={(e) => setNotePath(e.target.value)}
+                  className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+                />
+              </label>
+              <label className="block font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+                Content
+                <textarea
+                  value={noteContent}
+                  onChange={(e) => setNoteContent(e.target.value)}
+                  rows={5}
+                  className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-xs normal-case tracking-normal text-[var(--chrome)]"
+                />
+              </label>
+              {confirmToken ? (
+                <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--magenta)]">
+                  Confirm token · {confirmToken} — re-run overwrite to apply
+                </p>
+              ) : null}
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  onClick={() => void writeVaultNote("create")}
                   className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
                 >
-                  Open source
-                </a>
-                {source.futureHooks.length > 0 ? (
-                  <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
-                    hooks · {source.futureHooks.join(" · ")}
-                  </span>
-                ) : null}
+                  Create
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void writeVaultNote("append")}
+                  className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+                >
+                  Append
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void writeVaultNote("overwrite")}
+                  className="focus-magenta border border-[var(--magenta)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+                >
+                  Overwrite (gated)
+                </button>
               </div>
-            </article>
-          ))}
-        </div>
-      </section>
+            </div>
+          </div>
+
+          <p className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)]">
+            {obsidian?.guide} · docs/OBSIDIAN_MEMORY.md · npm run vault:sync
+          </p>
+        </section>
+
+        <section className="deck-panel deck-panel-wide">
+          <div className="flex flex-wrap items-start gap-3">
+            <div className="deck-stack">
+              <div className="flex flex-wrap items-center gap-2">
+                <h2 className="deck-title">Funding intel</h2>
+                <span
+                  className={`deck-badge ${funding ? "is-ok" : "is-idle"}`}
+                >
+                  {funding
+                    ? `● ${funding.summary.counts.acceptedNow} usable now`
+                    : "○ Reading registry"}
+                </span>
+              </div>
+              <p className="max-w-3xl font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+                {funding?.stance ??
+                  "Normalizing public funding sources into operator-ready registry entries."}
+              </p>
+            </div>
+            <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
+              <span>sources · {funding?.summary.counts.total ?? "—"}</span>
+              <span>usable now · {funding?.summary.counts.acceptedNow ?? "—"}</span>
+              <span>future hooks · {funding?.summary.counts.futureHooks ?? "—"}</span>
+              <span>excluded · {funding?.summary.counts.rejected ?? "—"}</span>
+            </div>
+          </div>
+
+          <div className="flex flex-wrap gap-2">
+            {(funding?.keyHooks ?? []).map((hook) => (
+              <span
+                key={hook.id}
+                className={`deck-badge ${hook.linked ? "is-ok" : "is-idle"}`}
+              >
+                {hook.linked ? "●" : "○"} {hook.label}
+              </span>
+            ))}
+          </div>
+
+          <div className="deck-grid">
+            {(funding?.registry ?? []).map((source) => (
+              <article key={source.id} className="deck-panel">
+                <div className="flex items-start gap-2">
+                  <div>
+                    <h3 className="deck-subtitle">{source.name}</h3>
+                    <p className="mt-1 font-[family-name:var(--font-mono)] text-[10px] tracking-widest text-[var(--star)] uppercase">
+                      {source.repo}
+                    </p>
+                  </div>
+                  <span
+                    className={`deck-badge ml-auto ${
+                      source.fit === "accepted"
+                        ? "is-ok"
+                        : source.fit === "future_hook"
+                          ? "is-warn"
+                          : "is-danger"
+                    }`}
+                  >
+                    {source.fit === "accepted"
+                      ? "● Live now"
+                      : source.fit === "future_hook"
+                        ? "◆ Hook later"
+                        : "○ Excluded"}
+                  </span>
+                </div>
+
+                <p className="font-[family-name:var(--font-mono)] text-xs leading-relaxed text-[var(--chrome)]">
+                  {source.summary}
+                </p>
+                <p className="font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--magenta)]">
+                  USE NOW: {source.useNow}
+                </p>
+                <p className="font-[family-name:var(--font-mono)] text-[11px] leading-relaxed text-[var(--star)]">
+                  WHY: {source.reason}
+                </p>
+
+                <div className="flex flex-wrap gap-2 font-[family-name:var(--font-mono)] text-[10px] uppercase">
+                  <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
+                    {source.kind.replaceAll("_", " ")}
+                  </span>
+                  <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
+                    {source.domain.replaceAll("_", " ")}
+                  </span>
+                  <span className="border border-[var(--border)] px-2 py-1 text-[var(--star)]">
+                    access · {source.access.replaceAll("_", " ")}
+                  </span>
+                </div>
+
+                <ul className="space-y-1 font-[family-name:var(--font-mono)] text-[11px] text-[var(--chrome)]">
+                  {source.operatorActions.map((action) => (
+                    <li key={action}>◆ {action}</li>
+                  ))}
+                </ul>
+
+                <div className="flex items-center gap-3">
+                  <a
+                    href={source.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="focus-magenta border border-[var(--purple)] px-3 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+                  >
+                    Open source
+                  </a>
+                  {source.futureHooks.length > 0 ? (
+                    <span className="font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
+                      hooks · {source.futureHooks.join(" · ")}
+                    </span>
+                  ) : null}
+                </div>
+              </article>
+            ))}
+          </div>
+        </section>
+      </div>
     </ScreenShell>
   );
 }

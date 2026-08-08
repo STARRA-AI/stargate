@@ -58,7 +58,7 @@ export default function BriefPage() {
 
   return (
     <ScreenShell title="Brief">
-      <section className="panel-etch p-5 font-[family-name:var(--font-mono)] text-sm leading-relaxed whitespace-pre-wrap text-[var(--chrome)]">
+      <section className="deck-panel font-[family-name:var(--font-mono)] text-sm leading-relaxed whitespace-pre-wrap text-[var(--chrome)]">
         {text}
       </section>
     </ScreenShell>

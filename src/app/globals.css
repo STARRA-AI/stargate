@@ -9,6 +9,7 @@
   --star: #c4b5fd;
   --danger: #ff3d81;
   --ok: #8b5cf6;
+  --warn: #ffd166;
   --border: color-mix(in oklab, var(--purple) 35%, transparent);
   --border-soft: color-mix(in oklab, var(--purple) 18%, transparent);
   --panel: color-mix(in oklab, var(--void-2) 88%, transparent);
@@ -81,28 +82,6 @@ a:hover {
     transform: rotate(-360deg);
   }
 }
-@keyframes badge-breathe {
-  0%,
-  100% {
-    transform: scale(1);
-    filter: drop-shadow(0 0 8px var(--purple));
-  }
-  50% {
-    transform: scale(1.05);
-    filter: drop-shadow(0 0 22px var(--magenta));
-  }
-}
-@keyframes badge-strobe {
-  0%,
-  100% {
-    filter: drop-shadow(0 0 6px var(--magenta));
-    opacity: 1;
-  }
-  50% {
-    filter: drop-shadow(0 0 28px var(--magenta));
-    opacity: 0.75;
-  }
-}
 @keyframes star-drift-a {
   from {
     background-position: 0 0;
@@ -129,30 +108,11 @@ a:hover {
     transform: translateY(0);
   }
 }
-@keyframes pulse-dim {
-  0%,
-  100% {
-    opacity: 0.45;
-  }
-  50% {
-    opacity: 1;
-  }
-}
-
 .ring-outer {
   animation: spin-cw 40s linear infinite;
 }
 .ring-inner {
   animation: spin-ccw 18s linear infinite;
-}
-.badge-idle {
-  animation: badge-breathe 3s ease-in-out infinite;
-}
-.badge-listening {
-  animation: badge-strobe 0.6s ease-in-out infinite;
-}
-.badge-thinking {
-  animation: spin-ccw 2s linear infinite;
 }
 .starfield-a {
   animation: star-drift-a 60s linear infinite;
@@ -161,7 +121,8 @@ a:hover {
   animation: star-drift-b 120s linear infinite;
 }
 
-.panel-etch {
+.panel-etch,
+.deck-panel {
   background: var(--panel);
   border: 1px solid var(--border);
   box-shadow:
@@ -175,16 +136,100 @@ a:hover {
   outline-offset: 3px;
 }
 
+/* ==========================================================================
+   DECK PRIMITIVES v1 — the design system for every screen.
+   Panel padding, card gap, section title and status badge come from here,
+   never from hand-picked Tailwind spacing. Names are frozen by contract:
+   rename nothing, add nothing — escalate instead.
+   `.deck-panel` shares `.panel-etch`'s decoration above (one rule, no
+   duplication) and adds only its own rhythm below.
+   ========================================================================== */
+
+.deck-grid {
+  display: grid;
+  gap: 16px;
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.deck-panel {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deck-panel-wide {
+  grid-column: 1 / -1;
+}
+
+.deck-stack {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.deck-title {
+  font-family: var(--font-display);
+  font-size: 11px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--star);
+  font-weight: 700;
+  margin: 0;
+}
+
+.deck-subtitle {
+  font-family: var(--font-display);
+  font-size: 10px;
+  letter-spacing: 0.28em;
+  text-transform: uppercase;
+  color: var(--chrome);
+  font-weight: 700;
+  margin: 0;
+}
+
+.deck-note {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--star);
+  line-height: 1.5;
+  margin: 0;
+}
+
+.deck-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  padding: 2px 8px;
+  border-radius: 999px;
+  border: 1px solid currentColor;
+  background: color-mix(in oklab, currentColor 10%, transparent);
+}
+
+/* Badge states — a second class alongside `.deck-badge`. Exactly these four. */
+.deck-badge.is-ok {
+  color: var(--ok);
+}
+.deck-badge.is-warn {
+  color: var(--warn);
+}
+.deck-badge.is-danger {
+  color: var(--danger);
+}
+.deck-badge.is-idle {
+  color: var(--star);
+  opacity: 0.75;
+}
+
 @media (prefers-reduced-motion: reduce) {
   .ring-outer,
   .ring-inner,
-  .badge-thinking,
   .starfield-a,
   .starfield-b {
     animation: none !important;
-  }
-  .badge-idle,
-  .badge-listening {
-    animation: pulse-dim 2.4s ease-in-out infinite !important;
   }
 }

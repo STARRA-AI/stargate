@@ -2,6 +2,7 @@
 
 import { RoutinesTable } from "@/components/bridge/RoutinesTable";
 import { ScreenShell } from "@/components/hud/ScreenShell";
+import { VoicePicker } from "@/components/screens/settings/VoicePanel";
 import type { Tier1Data } from "@/lib/context/tier1";
 import { KEY_GROUP_LABELS, KEY_SLOTS } from "@/lib/keys";
 import { useEffect, useState } from "react";
@@ -56,10 +57,34 @@ function LlmStatus() {
       .catch(() => setStatus("◆ LINK DEGRADED"));
   }, []);
 
+  /**
+   * The lane verdict, read off the SAME string the panel already renders — no
+   * new state, no second fetch. Degraded is danger, a missing key is a warn
+   * (she still answers, just not on the lane you picked), pre-flight is idle.
+   */
+  const tone = status.startsWith("◆")
+    ? "is-danger"
+    : status === "CHECKING LINK"
+      ? "is-idle"
+      : status.includes("NO KEY")
+        ? "is-warn"
+        : "is-ok";
+  const label = status.startsWith("◆")
+    ? "◆ Link degraded"
+    : status === "CHECKING LINK"
+      ? "○ Checking link"
+      : status.includes("NO KEY")
+        ? "◆ Lane needs a key"
+        : "● Brain online";
+
   return (
-    <p className="font-[family-name:var(--font-mono)] text-[10px] tracking-wide text-[var(--magenta)] uppercase">
-      {status}
-    </p>
+    <div className="deck-stack">
+      {/* self-start: deck-stack is a flex column, which would stretch the pill. */}
+      <span className={`deck-badge self-start ${tone}`}>{label}</span>
+      <p className="font-[family-name:var(--font-mono)] text-[10px] tracking-wide text-[var(--magenta)] uppercase">
+        {status}
+      </p>
+    </div>
   );
 }
 
@@ -85,115 +110,10 @@ function WakeWordToggle() {
       <span>
         Wake word — say &quot;starra&quot; (mic stays listening while deck is open)
       </span>
-      <button
-        type="button"
-        onClick={() => void toggle()}
-        className="focus-magenta shrink-0 border border-[var(--border)] px-3 py-1 text-[10px] tracking-widest uppercase"
-        aria-pressed={on}
-      >
-        {on ? "ON" : "OFF"}
-      </button>
-    </label>
-  );
-}
-
-/**
- * BOOT GREETING + MUTE ON BOOT (G2). Backed by Agent A's
- * `@/lib/voice/deck-prefs` (SHARED CONTRACT §2), imported dynamically the
- * same way WakeWordToggle imports wake-word above.
- */
-function BootGreetingSettings() {
-  const [text, setText] = useState("Evening, Classic.");
-  const [muted, setMuted] = useState(false);
-  const [saved, setSaved] = useState(false);
-
-  useEffect(() => {
-    void import("@/lib/voice/deck-prefs").then(
-      ({ getBootGreeting, getBootGreetingMuted }) => {
-        setText(getBootGreeting());
-        setMuted(getBootGreetingMuted());
-      },
-    );
-  }, []);
-
-  async function save() {
-    const { setBootGreeting } = await import("@/lib/voice/deck-prefs");
-    setBootGreeting(text);
-    setSaved(true);
-    window.setTimeout(() => setSaved(false), 1500);
-  }
-
-  async function toggleMuted() {
-    const { setBootGreetingMuted, getBootGreetingMuted } = await import(
-      "@/lib/voice/deck-prefs"
-    );
-    const next = !getBootGreetingMuted();
-    setBootGreetingMuted(next);
-    setMuted(next);
-  }
-
-  return (
-    <div className="space-y-2 border-t border-[var(--border)] pt-3">
-      <label className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
-        Boot greeting
-        <input
-          type="text"
-          value={text}
-          onChange={(e) => setText(e.target.value)}
-          className="focus-magenta mt-1 w-full border border-[var(--border)] bg-transparent px-2 py-1 text-[var(--chrome)]"
-        />
-      </label>
-      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        Spoken once after boot.
-      </p>
-      <button
-        type="button"
-        onClick={() => void save()}
-        className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-      >
-        {saved ? "Saved" : "Save greeting"}
-      </button>
-      <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-body)] text-xs text-[var(--chrome)]">
-        <span>Mute on boot — skip the spoken greeting</span>
-        <button
-          type="button"
-          onClick={() => void toggleMuted()}
-          className="focus-magenta shrink-0 border border-[var(--border)] px-3 py-1 text-[10px] tracking-widest uppercase"
-          aria-pressed={muted}
-        >
-          {muted ? "ON" : "OFF"}
-        </button>
-      </label>
-    </div>
-  );
-}
-
-/**
- * SYNC REPLIES (G3). Default OFF per contract. Backed by
- * `@/lib/voice/deck-prefs` (SHARED CONTRACT §2).
- */
-function SyncRepliesToggle() {
-  const [on, setOn] = useState(false);
-
-  useEffect(() => {
-    void import("@/lib/voice/deck-prefs").then(({ getSyncReplies }) => {
-      setOn(getSyncReplies());
-    });
-  }, []);
-
-  async function toggle() {
-    const { setSyncReplies, getSyncReplies } = await import(
-      "@/lib/voice/deck-prefs"
-    );
-    const next = !getSyncReplies();
-    setSyncReplies(next);
-    setOn(next);
-  }
-
-  return (
-    <div className="space-y-1 border-t border-[var(--border)] pt-3">
-      <label className="flex items-center justify-between gap-3 font-[family-name:var(--font-body)] text-xs text-[var(--chrome)]">
-        <span>Sync replies to voice</span>
+      <span className="flex shrink-0 items-center gap-2">
+        <span className={`deck-badge ${on ? "is-ok" : "is-idle"}`}>
+          {on ? "● Listening" : "○ Wake off"}
+        </span>
         <button
           type="button"
           onClick={() => void toggle()}
@@ -202,197 +122,8 @@ function SyncRepliesToggle() {
         >
           {on ? "ON" : "OFF"}
         </button>
-      </label>
-      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        ON holds the text until her voice actually starts; OFF streams text
-        first (better for long answers).
-      </p>
-    </div>
-  );
-}
-
-/**
- * MIC MODE (G3) — three-way selector bound to Agent A's
- * `@/lib/voice/mic-state` (SHARED CONTRACT §1). Mirrors the same deliberate
- * two-step ARM/CONFIRM gate as MicStateBadge (src/components/bridge/
- * MicStateBadge.tsx) — OPEN MIC is a hard-rule state, reachable only by a
- * deliberate operator action everywhere it can be set, not just the deck
- * composer.
- */
-function MicModeSetting() {
-  const [mode, setMode] = useState<"muted" | "wake" | "open">("wake");
-  const [confirming, setConfirming] = useState(false);
-
-  useEffect(() => {
-    let unsubscribe: (() => void) | undefined;
-    void import("@/lib/voice/mic-state").then((m) => {
-      setMode(m.getMicMode());
-      unsubscribe = m.subscribeMicMode(setMode);
-    });
-    return () => unsubscribe?.();
-  }, []);
-
-  async function choose(next: "muted" | "wake" | "open") {
-    const { setMicMode } = await import("@/lib/voice/mic-state");
-    setMicMode(next);
-    setMode(next);
-    setConfirming(false);
-  }
-
-  const pillBase =
-    "focus-magenta border px-3 py-1 font-[family-name:var(--font-display)] text-[10px] tracking-widest uppercase";
-
-  return (
-    <div className="space-y-2 border-t border-[var(--border)] pt-3">
-      <span className="block font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]">
-        Mic mode
       </span>
-      <div className="flex flex-wrap items-center gap-2">
-        <button
-          type="button"
-          onClick={() => void choose("muted")}
-          aria-pressed={mode === "muted"}
-          className={`${pillBase} ${mode === "muted" ? "border-[var(--magenta)] text-[var(--magenta)]" : "border-[var(--border)] text-[var(--chrome)]"}`}
-        >
-          MUTED
-        </button>
-        <button
-          type="button"
-          onClick={() => void choose("wake")}
-          aria-pressed={mode === "wake"}
-          className={`${pillBase} ${mode === "wake" ? "border-[var(--magenta)] text-[var(--magenta)]" : "border-[var(--border)] text-[var(--chrome)]"}`}
-        >
-          WAKE WORD
-        </button>
-        {mode === "open" ? (
-          <button
-            type="button"
-            onClick={() => void choose("wake")}
-            aria-pressed
-            className={`${pillBase} border-[var(--danger)] bg-[var(--danger)] text-[#1a0410]`}
-          >
-            DISARM (OPEN MIC ARMED)
-          </button>
-        ) : confirming ? (
-          <span className="flex flex-wrap items-center gap-2">
-            <button
-              type="button"
-              onClick={() => void choose("open")}
-              className={`${pillBase} border-[var(--danger)] text-[var(--danger)]`}
-            >
-              CONFIRM ARM
-            </button>
-            <button
-              type="button"
-              onClick={() => setConfirming(false)}
-              className={`${pillBase} border-[var(--border)] text-[var(--chrome)]`}
-            >
-              CANCEL
-            </button>
-          </span>
-        ) : (
-          <button
-            type="button"
-            onClick={() => setConfirming(true)}
-            aria-pressed={false}
-            className={`${pillBase} border-[var(--danger)] text-[var(--danger)]`}
-          >
-            ARM OPEN MIC…
-          </button>
-        )}
-      </div>
-      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        OPEN MIC never survives a reload — it always comes back as WAKE WORD.
-      </p>
-    </div>
-  );
-}
-
-function VoicePicker() {
-  const [voices, setVoices] = useState<SpeechSynthesisVoice[]>([]);
-  const [selected, setSelected] = useState<string>("");
-  const [autoName, setAutoName] = useState<string>("");
-  const [piperReady, setPiperReady] = useState<boolean | null>(null);
-
-  useEffect(() => {
-    let mounted = true;
-    void import("@/lib/voice/voice-select").then(
-      ({ voicesReady, getStoredVoiceUri, pickStarraVoice }) => {
-        void voicesReady().then((list) => {
-          if (!mounted) return;
-          setVoices(list);
-          // Unset → Ara is the default primary voice.
-          setSelected(getStoredVoiceUri() ?? "ara");
-          setAutoName(pickStarraVoice(list)?.name ?? "system default");
-        });
-      },
-    );
-    void import("@/lib/voice/piper-speak").then(({ piperModelAvailable }) => {
-      void piperModelAvailable().then((ok) => {
-        if (mounted) setPiperReady(ok);
-      });
-    });
-    return () => {
-      mounted = false;
-    };
-  }, []);
-
-  async function choose(uri: string) {
-    const { setStoredVoiceUri } = await import("@/lib/voice/voice-select");
-    setStoredVoiceUri(uri || null);
-    setSelected(uri);
-  }
-
-  async function test() {
-    const { speakStarra, stopAllSpeech } = await import("@/lib/voice/speak");
-    stopAllSpeech();
-    await speakStarra("Copy. STARGATE online. Standing by, operator.");
-  }
-
-  return (
-    <section id="voice" className="panel-etch space-y-3 p-4">
-      <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-        STARRA voice
-      </h2>
-      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        ● Eve (xAI TTS) — her one voice, the same British voice as the live
-        call. Piper Cori and Web Speech are fallback only, used offline or when
-        xAI is unreachable.{" "}
-        {piperReady === null
-          ? "Checking Piper model…"
-          : piperReady
-            ? "Piper ready."
-            : "Piper offline — run: npm run voice:download."}
-      </p>
-      <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
-        Pick a specific Web Speech voice to override her. AUTO prefers British
-        English female — current auto pick: {autoName}.
-      </p>
-      <select
-        value={selected}
-        onChange={(e) => void choose(e.target.value)}
-        className="focus-magenta w-full border border-[var(--border)] bg-[var(--void)] px-2 py-2 font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
-        aria-label="STARRA voice"
-      >
-        <option value="ara">Eve (xAI) — her voice, same as the call</option>
-        <option value="auto">AUTO — Web Speech picks</option>
-        {voices.map((v) => (
-          <option key={v.voiceURI} value={v.voiceURI}>
-            {v.name} ({v.lang})
-          </option>
-        ))}
-      </select>
-      <button
-        type="button"
-        onClick={() => void test()}
-        className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-      >
-        Test voice
-      </button>
-      <BootGreetingSettings />
-      <SyncRepliesToggle />
-      <MicModeSetting />
-    </section>
+    </label>
   );
 }
 
@@ -434,6 +165,13 @@ for (const s of KEY_SLOTS) {
   if (!GROUP_ORDER.includes(s.group)) GROUP_ORDER.push(s.group);
 }
 
+/**
+ * KEY VAULT — stays IN this file on purpose. tests/engine-minors-key-provenance
+ * .test.ts:336-353 asserts the shadowing copy against the SOURCE TEXT of
+ * src/app/settings/page.tsx; moving it to a component silently blinds that
+ * guard. `id="link-apis"` is LOAD-BEARING — Bridge.tsx:468,650,735,789,998
+ * deep-links to /settings#link-apis.
+ */
 function KeyVault() {
   const [slots, setSlots] = useState<KeySlot[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
@@ -486,11 +224,28 @@ function KeyVault() {
     }
   }
 
+  const linkedCount = slots.filter((s) => s.linked).length;
+
   return (
-    <section id="link-apis" className="panel-etch space-y-3 p-4 md:col-span-2">
-      <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-        Link APIs
-      </h2>
+    <section id="link-apis" className="deck-panel deck-panel-wide">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <h2 className="deck-title">Link APIs</h2>
+        <span
+          className={`deck-badge ${
+            slots.length === 0
+              ? "is-idle"
+              : linkedCount === slots.length
+                ? "is-ok"
+                : linkedCount > 0
+                  ? "is-warn"
+                  : "is-danger"
+          }`}
+        >
+          {slots.length === 0
+            ? "○ Reading vault"
+            : `● ${linkedCount}/${slots.length} linked`}
+        </span>
+      </div>
       <p className="font-[family-name:var(--font-body)] text-[11px] text-[var(--star)]">
         Paste a key, hit STORE KEYS. Keys live in data/keys.json on this
         machine only — never committed. Each key lights up the panel listed
@@ -500,11 +255,9 @@ function KeyVault() {
         const items = slots.filter((s) => SLOT_GROUP.get(s.id) === group);
         if (!items.length) return null;
         return (
-          <div key={group} className="space-y-3">
-            <h3 className="font-[family-name:var(--font-display)] text-[10px] tracking-[0.28em] text-[var(--star)] uppercase">
-              {KEY_GROUP_LABELS[group] ?? group}
-            </h3>
-            <div className="grid gap-3 md:grid-cols-2">
+          <div key={group} className="deck-stack">
+            <h3 className="deck-subtitle">{KEY_GROUP_LABELS[group] ?? group}</h3>
+            <div className="deck-grid">
               {items.map((s) => (
                 <label
                   key={s.id}
@@ -513,9 +266,7 @@ function KeyVault() {
                   <span className="flex flex-wrap items-center gap-2">
                     {s.label}
                     <span
-                      className={
-                        s.linked ? "text-[var(--ok)]" : "text-[var(--danger)]"
-                      }
+                      className={`deck-badge ${s.linked ? "is-ok" : "is-danger"}`}
                     >
                       {s.linked ? `● linked ${s.masked}` : "○ not linked"}
                     </span>
@@ -525,7 +276,7 @@ function KeyVault() {
                       </span>
                     )}
                     {s.shadowedByEngine && (
-                      <span className="border border-[var(--danger)] px-1 text-[10px] tracking-widest text-[var(--danger)] uppercase">
+                      <span className="deck-badge is-warn">
                         OVERRIDDEN IN OPTIONS
                       </span>
                     )}
@@ -555,18 +306,34 @@ function KeyVault() {
           </div>
         );
       })}
-      <button
-        type="button"
-        onClick={() => void save()}
-        className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-      >
-        Store keys
-      </button>
-      {saved && (
-        <span className="ml-3 font-[family-name:var(--font-mono)] text-xs text-[var(--magenta)]">
-          {saved}
-        </span>
-      )}
+      <div className="flex flex-wrap items-center gap-3">
+        <button
+          type="button"
+          onClick={() => void save()}
+          className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+        >
+          Store keys
+        </button>
+        {saved && (
+          <span
+            className={`deck-badge ${
+              saved.startsWith("LINK DEGRADED")
+                ? "is-danger"
+                : saved.startsWith("STORED BUT OUTRANKED")
+                  ? "is-warn"
+                  : "is-ok"
+            }`}
+          >
+            {saved.startsWith("LINK DEGRADED")
+              ? "◆ Link degraded"
+              : saved.startsWith("STORED BUT OUTRANKED")
+                ? "◆ Stored but outranked"
+                : "● Keys stored"}
+          </span>
+        )}
+      </div>
+      {/* The verdict is the badge; the full sentence stays — it carries the WHY. */}
+      {saved && <p className="deck-note">{saved}</p>}
     </section>
   );
 }
@@ -602,15 +369,13 @@ export default function SettingsPage() {
 
   return (
     <ScreenShell title="Settings">
-      <div className="grid gap-5 md:grid-cols-2">
+      <div className="deck-grid">
         <KeyVault />
         <VoicePicker />
-        <section className="panel-etch space-y-4 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            Deck
-          </h2>
+        <section className="deck-panel">
+          <h2 className="deck-title">Deck</h2>
           <WakeWordToggle />
-          <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+          <p className="deck-note">
             Wake: say &quot;starra&quot; or ⌥ + Space · Launch:{" "}
             <span className="text-[var(--magenta)]">npm run starra</span> · Brain:
             Kimi/Groq daily driver · Grok opt-in · Ollama fallback
@@ -618,10 +383,13 @@ export default function SettingsPage() {
           <LlmStatus />
         </section>
 
-        <section className="panel-etch space-y-3 p-4">
-          <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.28em] text-[var(--star)] uppercase">
-            Tier-1 context
-          </h2>
+        <section className="deck-panel">
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <h2 className="deck-title">Tier-1 context</h2>
+            <span className={`deck-badge ${tier1 ? "is-ok" : "is-idle"}`}>
+              {tier1 ? "● Loaded" : "○ Processing"}
+            </span>
+          </div>
           {!tier1 ? (
             <p className="font-[family-name:var(--font-mono)] text-xs text-[var(--star)]">
               PROCESSING
@@ -638,7 +406,7 @@ export default function SettingsPage() {
                   }
                 />
               </label>
-              <p className="font-[family-name:var(--font-mono)] text-[11px] text-[var(--star)]">
+              <p className="deck-note">
                 {tier1.tasks.filter((t) => !t.done).length} open tasks ·{" "}
                 {tier1.projects.filter((p) => p.status === "active").length}{" "}
                 active projects · {tier1.goals.length} goals
@@ -661,18 +429,22 @@ export default function SettingsPage() {
                   });
                 }}
               />
-              <button
-                type="button"
-                onClick={() => void saveContext()}
-                className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
-              >
-                Save context
-              </button>
-              {saved && (
-                <span className="ml-3 font-[family-name:var(--font-mono)] text-xs text-[var(--magenta)]">
-                  {saved}
-                </span>
-              )}
+              <div className="flex flex-wrap items-center gap-3">
+                <button
+                  type="button"
+                  onClick={() => void saveContext()}
+                  className="focus-magenta border border-[var(--purple)] px-4 py-2 font-[family-name:var(--font-display)] text-[10px] tracking-[0.25em] uppercase"
+                >
+                  Save context
+                </button>
+                {saved && (
+                  <span
+                    className={`deck-badge ${saved === "STORED" ? "is-ok" : "is-danger"}`}
+                  >
+                    {saved === "STORED" ? "● Stored" : "◆ Link degraded"}
+                  </span>
+                )}
+              </div>
             </>
           )}
         </section>

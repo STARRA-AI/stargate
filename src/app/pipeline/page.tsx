@@ -67,14 +67,14 @@ export default function PipelinePage() {
       ) : (
         <div className="grid gap-4 md:grid-cols-4">
           {STAGES.map((stage) => (
-            <div key={stage} className="flex flex-col gap-3">
-              <h2 className="font-[family-name:var(--font-display)] text-[11px] tracking-[0.3em] text-[var(--star)] uppercase">
+            <div key={stage} className="deck-stack">
+              <h2 className="deck-title">
                 {stage}
               </h2>
               {cards
                 .filter((c) => c.stage === stage)
                 .map((c) => (
-                  <article key={c.id} className="panel-etch p-3">
+                  <article key={c.id} className="deck-panel">
                     <h3 className="font-[family-name:var(--font-body)] text-base font-semibold text-[var(--chrome)]">
                       {c.title}
                     </h3>

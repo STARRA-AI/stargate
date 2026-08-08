@@ -397,8 +397,6 @@ body.low-power .reactor-core-glow { animation: none; }
 }
 .reactor {
   position: absolute; top: 50%; left: 50%; width: 0; height: 0;
-  --pupil-scale: 1;
-
   overflow: visible;
 }
 .eye-socket {
