@@ -16,6 +16,7 @@ import { FundingPanel } from "./FundingPanel";
 import { InstagramApproval } from "./InstagramApproval";
 import { LiveSky } from "./LiveSky";
 import ReactorSphere from "@/components/hud/ReactorSphere";
+import { Starfield } from "@/components/bridge/Starfield";
 import { deckBoot, pressable, tabSwitch, tabsIn } from "@/lib/ui/motion";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
@@ -633,6 +634,15 @@ export function Bridge() {
             + a breathing core glow (deck.css, centered on --reactor-cx/cy).
             ECO + prefers-reduced-motion + hidden tab hold all of it still. */}
         <div className="galaxy-spin" aria-hidden />
+        {/* The starfield's two layers drift via `background-position` (globals.css
+            :121-126), which repaints the full 1680x1000 layer every frame — it is
+            never composited. ECO exists to still exactly that, and the stylesheet
+            has no `body.low-power` rule for it, so the gate lives here. Precedent:
+            `.ambient-sweep` is dropped outright under ECO (deck.css:1540).
+            prefers-reduced-motion is already handled in CSS (globals.css:250-256),
+            which freezes the layers rather than removing them — leave that path
+            alone, a reduced-motion user should still see stars. */}
+        {!eco && <Starfield />}
         <LiveSky />
         <div className="reactor-ring reactor-ring-1" aria-hidden />
         <div className="reactor-ring reactor-ring-2" aria-hidden />
