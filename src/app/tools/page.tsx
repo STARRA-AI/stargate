@@ -837,21 +837,21 @@ export default function ToolsPage() {
                 L1 memory
               </span>
               <br />
-              {obsidian?.layers.longTermMemory ?? "—"}
+              {obsidian?.layers?.longTermMemory ?? "—"}
             </p>
             <p>
               <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
                 L2 assistant
               </span>
               <br />
-              {obsidian?.layers.assistant ?? "—"}
+              {obsidian?.layers?.assistant ?? "—"}
             </p>
             <p>
               <span className="text-[var(--magenta)] uppercase tracking-widest text-[10px]">
                 L3 backup
               </span>
               <br />
-              {obsidian?.layers.backupSync ?? "—"}
+              {obsidian?.layers?.backupSync ?? "—"}
             </p>
           </div>
 
@@ -968,7 +968,7 @@ export default function ToolsPage() {
                   className={`deck-badge ${funding ? "is-ok" : "is-idle"}`}
                 >
                   {funding
-                    ? `● ${funding.summary.counts.acceptedNow} usable now`
+                    ? `● ${funding.summary?.counts?.acceptedNow ?? 0} usable now`
                     : "○ Reading registry"}
                 </span>
               </div>
@@ -978,10 +978,10 @@ export default function ToolsPage() {
               </p>
             </div>
             <div className="ml-auto grid min-w-56 gap-1 font-[family-name:var(--font-mono)] text-[10px] text-[var(--star)] uppercase">
-              <span>sources · {funding?.summary.counts.total ?? "—"}</span>
-              <span>usable now · {funding?.summary.counts.acceptedNow ?? "—"}</span>
-              <span>future hooks · {funding?.summary.counts.futureHooks ?? "—"}</span>
-              <span>excluded · {funding?.summary.counts.rejected ?? "—"}</span>
+              <span>sources · {funding?.summary?.counts?.total ?? "—"}</span>
+              <span>usable now · {funding?.summary?.counts?.acceptedNow ?? "—"}</span>
+              <span>future hooks · {funding?.summary?.counts?.futureHooks ?? "—"}</span>
+              <span>excluded · {funding?.summary?.counts?.rejected ?? "—"}</span>
             </div>
           </div>
 
