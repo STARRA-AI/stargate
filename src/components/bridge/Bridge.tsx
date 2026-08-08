@@ -16,7 +16,7 @@ import { FundingPanel } from "./FundingPanel";
 import { InstagramApproval } from "./InstagramApproval";
 import { LiveSky } from "./LiveSky";
 import ReactorSphere from "@/components/hud/ReactorSphere";
-import { deckBoot, tabSwitch, tabsIn } from "@/lib/ui/motion";
+import { deckBoot, pressable, tabSwitch, tabsIn } from "@/lib/ui/motion";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
@@ -480,7 +480,10 @@ export function Bridge() {
                 key={tab}
                 type="button"
                 className={`mobile-tab${mobileTab === tab ? " active" : ""}`}
-                onClick={() => setMobileTab(tab as MobileTab)}
+                onClick={(e) => {
+                  setMobileTab(tab as MobileTab);
+                  pressable(e.currentTarget);
+                }}
                 aria-pressed={mobileTab === tab}
               >
                 {label}
@@ -723,7 +726,10 @@ export function Bridge() {
             type="button"
             className={`eco-btn${eco ? " on" : ""}`}
             title="Low power — pauses decorative animations"
-            onClick={() => setEco((v) => !v)}
+            onClick={(e) => {
+              setEco((v) => !v);
+              pressable(e.currentTarget);
+            }}
           >
             {eco ? "ECO ON" : "ECO"}
           </button>
@@ -735,7 +741,10 @@ export function Bridge() {
             type="button"
             className="eco-btn"
             title="Reload the deck — fresh page, memory re-synced"
-            onClick={() => window.location.reload()}
+            onClick={(e) => {
+              pressable(e.currentTarget);
+              window.location.reload();
+            }}
           >
             REFRESH
           </button>
@@ -743,14 +752,24 @@ export function Bridge() {
             type="button"
             className="eco-btn"
             title="Morning briefing call — sixty seconds across every panel"
-            onClick={openBriefing}
+            onClick={(e) => {
+              openBriefing();
+              pressable(e.currentTarget);
+            }}
           >
             BRIEF
           </button>
         </header>
 
         {briefBanner ? (
-          <button type="button" className="brief-banner" onClick={openBriefing}>
+          <button
+            type="button"
+            className="brief-banner"
+            onClick={(e) => {
+              openBriefing();
+              pressable(e.currentTarget);
+            }}
+          >
             MORNING BRIEFING READY — TAP TO HEAR IT
           </button>
         ) : null}
@@ -769,11 +788,19 @@ export function Bridge() {
                     ● LIVE MRR
                   </span>
                 ) : mrrUnlinkedStripe ? (
-                  <Link href="/settings#link-apis" className="panel-tag warn">
+                  <Link
+                    href="/settings#link-apis"
+                    className="panel-tag warn"
+                    onClick={(e) => pressable(e.currentTarget)}
+                  >
                     ▲ LINK STRIPE
                   </Link>
                 ) : null}
-                <Link href="/settings" className="panel-tag">
+                <Link
+                  href="/settings"
+                  className="panel-tag"
+                  onClick={(e) => pressable(e.currentTarget)}
+                >
                   EDIT
                 </Link>
               </div>
@@ -823,7 +850,11 @@ export function Bridge() {
                     ● LIVE UPLINK
                   </span>
                 ) : (
-                  <Link href="/settings#link-apis" className="panel-tag warn">
+                  <Link
+                    href="/settings#link-apis"
+                    className="panel-tag warn"
+                    onClick={(e) => pressable(e.currentTarget)}
+                  >
                     ▲ LINK KALSHI API
                   </Link>
                 )}
@@ -1035,6 +1066,7 @@ export function Bridge() {
                   href="/settings#link-apis"
                   className="panel-tag warn"
                   style={{ marginTop: "auto" }}
+                  onClick={(e) => pressable(e.currentTarget)}
                 >
                   ▲ LINK STATS API for bots/users/trades
                 </Link>
@@ -1102,14 +1134,20 @@ export function Bridge() {
                         <button
                           type="button"
                           className="btn-approve"
-                          onClick={() => void decide(pr.id, "approve")}
+                          onClick={(e) => {
+                            void decide(pr.id, "approve");
+                            pressable(e.currentTarget);
+                          }}
                         >
                           APPROVE
                         </button>
                         <button
                           type="button"
                           className="btn-later"
-                          onClick={() => void decide(pr.id, "later")}
+                          onClick={(e) => {
+                            void decide(pr.id, "later");
+                            pressable(e.currentTarget);
+                          }}
                         >
                           LATER
                         </button>
