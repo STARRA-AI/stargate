@@ -1,7 +1,9 @@
 import {
+  backupBrainNotice,
   buildOneStarraPrompt,
   buildSystemPromptBlocks,
   buildTieredSystemPrompt,
+  type SystemPromptBlocks,
   KIMI_COMPLETION_RESERVE,
   KIMI_VOICE_COMPLETION_RESERVE,
   KIMI_VOICE_SYSTEM_TOKEN_BUDGET,
@@ -73,7 +75,7 @@ function sseFrame(obj: Record<string, unknown>) {
 const LOCAL_SYSTEM_BUDGET = 1_800;
 
 const LOCAL_VOICE_TAIL = `
-VOICE (hard): You are STARGATE — Classic's warm, high-agency partner. Confident,
+VOICE (hard): You are STARRA — Classic's warm, high-agency partner. Confident,
 direct, never cold. Do NOT open with "Copy." — answer as yourself.
 Forbidden: replying with only an acknowledgement; repeating canned example lines —
 answer Classic's actual question. Warmth welcome ("Classic", "partner"), never filler.
@@ -332,7 +334,7 @@ function privateGptBase(): string {
  * full canon, which would eat the whole prompt-eval window on a 3B model.
  */
 const PRIVATE_SYSTEM_CORE = `
-You are STARGATE (STARRA) in PRIVATE MODE, running entirely on Classic's Mac:
+You are STARRA in PRIVATE MODE, running entirely on Classic's Mac:
 local model, local documents, no internet, no cloud. Nothing said here leaves
 the machine. If he asks, tell him that plainly.
 Answer from the retrieved private documents first. When a document has the
@@ -350,7 +352,7 @@ Be short and concrete. One clear answer beats an essay.
  * retrieval paragraph exists to prevent.
  */
 const PRIVATE_SYSTEM_CORE_NO_RAG = `
-You are STARGATE (STARRA) in PRIVATE MODE, running entirely on Classic's Mac:
+You are STARRA in PRIVATE MODE, running entirely on Classic's Mac:
 local model, no internet, no cloud. Nothing said here leaves the machine. If he
 asks, tell him that plainly.
 There are no private documents indexed yet, so answer from your own knowledge —
@@ -934,6 +936,22 @@ export async function POST(req: Request) {
     .filter(Boolean)
     .join("\n\n---\n\n");
 
+  /**
+   * ANNOUNCED TWICE OR NOT AT ALL. Grok is the standing brain; every other rung
+   * is composed through here, which is `system` with the backup-brain state
+   * block in front. The pushFeed ALERT beside each call site tells CLASSIC which
+   * brain answered — this tells HER, so she can say she is off instead of being
+   * quietly substituted (brain.ts backupBrainNotice).
+   */
+  const backupSystem = (label: string) =>
+    [
+      buildOneStarraPrompt({ backupBrain: label }),
+      systemBlocks.volatile,
+      callVoice ? CALL_DELIVERY_NOTE : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n---\n\n");
+
   if (lastUser) {
     // Call turns: memory is the CLIENT's job (recordCallTurn — see the
     // callVoice doc on the body type) and the call transcript is already on
@@ -1028,7 +1046,12 @@ export async function POST(req: Request) {
                 `${label} failed (${emsg.slice(0, 60)}) — dropping to local Ollama`,
               );
               await streamLocalWithCopyGuard({
-                system: clipSystemForLocal(system),
+                // ANNOUNCED TO HIM *AND* TO HER. The pushFeed above is the HUD
+                // half; without this the local rung re-streamed her ordinary
+                // prompt and she had no idea she was on the backup brain.
+                system: clipSystemForLocal(
+                  backupSystem(`local Ollama (${ollamaModel}), after the ${label} link failed`),
+                ),
                 messages: sanitizeMessagesForLocal(messages),
                 lastUser,
                 onText: (t) => push(t),
@@ -1039,7 +1062,13 @@ export async function POST(req: Request) {
           };
 
           if (useOllama && ollamaUp && hasModel) {
-            const localSystem = clipSystemForLocal(system);
+            pushFeed(
+              "ALERT",
+              `Lane: local Ollama — ${ollamaModel}, not grok (offline/local brain)`,
+            );
+            const localSystem = clipSystemForLocal(
+              backupSystem(`local Ollama (${ollamaModel}) on this Mac`),
+            );
             const localMessages = sanitizeMessagesForLocal(messages);
             await streamLocalWithCopyGuard({
               system: localSystem,
@@ -1087,7 +1116,15 @@ export async function POST(req: Request) {
           ) {
             // Free Kimi (Groq) — tiered under the 8K free cap: always-on core
             // identity + on-demand doctrines/volatile budgeted to fit.
+            // It is NOT grok, so it is announced as a LANE CHANGE (the ORACLE
+            // line below names the model, which is not the same thing) and she
+            // is told in her own prompt via backupBrain.
+            pushFeed(
+              "ALERT",
+              "Lane change: Kimi (free Groq tier) — grok is not answering this turn",
+            );
             const tiered = buildTieredSystemPrompt({
+              backupBrain: "the free Groq/Kimi lane",
               query: lastUser,
               volatile: volatileExtras,
               includeUntrusted: Boolean(packPreview),
@@ -1133,11 +1170,26 @@ export async function POST(req: Request) {
             prefer !== "kimi" &&
             prefer !== "grok"
           ) {
+            // WAS A THIRD STARRA ANSWERING HIM WITH NOTHING SAID. This rung is
+            // reachable under `auto` whenever grokLane is false (no xAI key, or
+            // exhausted) and Kimi is unkeyed. Classic's order allows the other
+            // lanes when we run out of tokens — never silently. So it announces
+            // to him AND carries the backup-brain block in her own prompt.
+            pushFeed(
+              "ALERT",
+              "Lane change: Anthropic — grok is not answering this turn (xAI key missing or exhausted)",
+            );
+            const anthropicNotice = backupBrainNotice("the Anthropic lane");
+            const backupBlocks: SystemPromptBlocks = {
+              stable: `${anthropicNotice}\n\n---\n\n${systemBlocks.stable}`,
+              volatile: systemBlocks.volatile,
+              full: `${anthropicNotice}\n\n---\n\n${systemBlocks.full}`,
+            };
             if (useAgentTools) {
               // Phase 0: bounded tool loop (non-stream rounds → stub stream final).
               const result = await runAnthropicAgent({
                 apiKey: anthropicKey,
-                system: systemBlocks,
+                system: backupBlocks,
                 messages,
                 enableTools: true,
                 signal: req.signal,
@@ -1150,14 +1202,22 @@ export async function POST(req: Request) {
               // Phase 2: streaming with cache_control on stable system block.
               await streamAnthropicCached({
                 apiKey: anthropicKey,
-                system: systemBlocks,
+                system: backupBlocks,
                 messages,
                 onText: (t) => push(t),
                 signal: req.signal,
               });
             }
           } else if (ollamaUp && hasModel) {
-            const localSystem = clipSystemForLocal(system);
+            // Last rung: no hosted key answered. Same rule as every other
+            // non-grok lane — the feed says it, and so does her prompt.
+            pushFeed(
+              "ALERT",
+              `Lane: local Ollama — ${ollamaModel}, not grok (no hosted brain available)`,
+            );
+            const localSystem = clipSystemForLocal(
+              backupSystem(`local Ollama (${ollamaModel}) on this Mac`),
+            );
             const localMessages = sanitizeMessagesForLocal(messages);
             await streamLocalWithCopyGuard({
               system: localSystem,

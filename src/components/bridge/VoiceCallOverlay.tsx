@@ -37,6 +37,26 @@ import { publishCallLive, useEngineBus } from "@/lib/engine/bus";
 // seam the contract requires be checked. `analyser` being null stays a normal
 // state — StarraClipFace renders today's exact behavior when it is null.
 
+/**
+ * LIVE CALL COLUMN — Bug 2 fix. Every new call used to open showing the whole
+ * prior conversation because `chatMessages` prepended `history` (the
+ * PERSISTENT deck chat from useStargateStream, folded back in by
+ * resyncHistory() on close — see the effect at :156-159) ahead of this call's
+ * own `transcript`. Classic's words: "every call starts with a FRESH log."
+ * The fix is to render ONLY the live call's transcript here — old
+ * conversations move behind an explicit "Past conversations" control (Bug 3),
+ * they never silently prefill this column.
+ *
+ * Pure + exported so the contract is provable without a DOM
+ * (tests/call-chat-fresh.test.ts): an empty transcript composes to an empty
+ * list no matter how much deck history exists.
+ */
+export function composeCallChatMessages(
+  transcript: { role: "user" | "assistant"; text: string }[],
+): { role: "user" | "assistant"; text: string }[] {
+  return transcript.map((m) => ({ role: m.role, text: m.text }));
+}
+
 function statusCopy(state: VoiceCallState): string {
   switch (state) {
     case "listening":
@@ -146,8 +166,11 @@ export function VoiceCallOverlay({
   const ringbackRef = useRef<HTMLAudioElement>(null);
 
   // Shared brain stream — the fallback answer path when no live call can
-  // carry a typed message, and the source of the deck-chat half of the column.
-  const { history, streaming, sendMessage, resyncHistory, stopSpeaking } =
+  // carry a typed message. `history` (the persistent deck chat) is deliberately
+  // NOT read into the live column any more (Bug 2, see composeCallChatMessages
+  // above) — resyncHistory() below still folds the call's turns INTO it once
+  // the call closes, so the deck chat outside the call keeps remembering.
+  const { streaming, sendMessage, resyncHistory, stopSpeaking } =
     useStargateStream();
   // ONE TRANSCRIPT: when the call closes, fold its recorded turns from the
   // shared store into the visible deck history — she "remembers" the call in
@@ -331,17 +354,12 @@ export function VoiceCallOverlay({
     };
   }, [open]);
 
-  // One conversation in the chat: the live-call turns + the typed/brain turns.
-  // CHRONOLOGICAL: older deck history first, live call turns after (confirmed
-  // review finding: transcript-first rendered newest-above-oldest, so the
-  // auto-scrolled column pinned to yesterday's chat while new call turns
-  // landed off-screen above it).
+  // One call, one fresh log: this call's own transcript only (Bug 2). See
+  // composeCallChatMessages above for why `history` is no longer folded in
+  // here.
   const chatMessages = useMemo(
-    () => [
-      ...history.map((m) => ({ role: m.role, text: m.content })),
-      ...transcript.map((m) => ({ role: m.role, text: m.text })),
-    ],
-    [transcript, history],
+    () => composeCallChatMessages(transcript),
+    [transcript],
   );
 
   // Mirror connect/disconnect in refs so the open/close effect reacts only to

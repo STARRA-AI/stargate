@@ -39,6 +39,72 @@
   color: var(--text-dim);
 }
 
+.headerActions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* Bug 3 — "Past conversations" control: same visual weight as .copyAll so it
+   reads as a peer action, not a new kind of chrome. */
+.pastToggleBtn {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-dim);
+  background: color-mix(in oklab, var(--void-2) 70%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 5px 10px;
+  cursor: pointer;
+  transition: color 140ms ease, border-color 140ms ease, background 140ms ease;
+}
+
+.pastToggleBtn:hover {
+  color: var(--text);
+  border-color: color-mix(in oklab, var(--magenta) 55%, transparent);
+  background: color-mix(in oklab, var(--purple) 14%, transparent);
+}
+
+/* Browse-list rows: read-only, one call each. */
+.sessionRow {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+  width: 100%;
+  text-align: left;
+  background: color-mix(in oklab, var(--void-2) 60%, transparent);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 10px 13px;
+  cursor: pointer;
+  transition: border-color 140ms ease, background 140ms ease;
+}
+
+.sessionRow:hover,
+.sessionRow:focus-visible {
+  border-color: color-mix(in oklab, var(--magenta) 55%, transparent);
+  background: color-mix(in oklab, var(--purple) 14%, transparent);
+}
+
+.sessionDate {
+  font-family: var(--mono);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  color: var(--text-faint);
+}
+
+.sessionPreview {
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.4;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
+
 .copyAll {
   font-family: var(--mono);
   font-size: 10px;
@@ -285,7 +351,9 @@
   .copyBtn,
   .composerInput,
   .attachBtn,
-  .sendBtn {
+  .sendBtn,
+  .pastToggleBtn,
+  .sessionRow {
     transition: none;
   }
 }

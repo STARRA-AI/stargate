@@ -183,12 +183,14 @@ describe("xhigh review findings — each confirmed defect stays dead", () => {
     );
   });
 
-  it("the call column is chronological: history before live transcript", () => {
+  // Bug 2: this used to pin the OPPOSITE contract ("history before live
+  // transcript"). Folding the persistent deck history into the call column is
+  // exactly why every new call opened showing the whole prior conversation, so
+  // the composition is now transcript-only (composeCallChatMessages).
+  it("the call column is the live transcript only — deck history is never folded in", () => {
     const src = read("src/components/bridge/VoiceCallOverlay.tsx");
-    const historyAt = src.indexOf("...history.map");
-    const transcriptAt = src.indexOf("...transcript.map");
-    assert.ok(historyAt > 0 && transcriptAt > 0);
-    assert.ok(historyAt < transcriptAt, "history must render above the live call turns");
+    assert.ok(!src.includes("...history.map"), "deck history must not prefill the call column");
+    assert.match(src, /composeCallChatMessages\(transcript\)/);
   });
 });
 

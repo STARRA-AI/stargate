@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { renderMarkdown } from "@/lib/markdown";
+import type { CallLogSession } from "@/lib/memory/call-log";
 import styles from "./StarraCallChat.module.css";
 
 /** How long the "Copied" acknowledgement stays lit on a copy control (ms). */
@@ -83,6 +84,18 @@ async function readAttachment(file: File): Promise<string> {
   return `[attached file: ${file.name} (${Math.round(file.size / 1024)} KB) — not shown inline]`;
 }
 
+/** Human-readable stamp for a past-conversation row. Falls back to the raw
+ * string rather than throwing on a malformed timestamp. */
+function formatSessionDate(iso: string): string {
+  const d = new Date(iso);
+  return Number.isNaN(d.getTime()) ? iso : d.toLocaleString();
+}
+
+/** One-line preview of a past conversation for the browse list. */
+function sessionPreview(s: CallLogSession): string {
+  return s.turns[0]?.text.trim() || "(empty call)";
+}
+
 /** Grok-style transcript panel for STARRA's voice call: committed turns plus
  * in-progress partials, with per-reply and whole-transcript copy. When `onSend`
  * is provided it also renders a composer so Classic can type to her and attach
@@ -104,6 +117,59 @@ export function StarraCallChat({
   const fileRef = useRef<HTMLInputElement>(null);
   const [input, setInput] = useState("");
 
+  // PAST CONVERSATIONS (Bug 3) — browsing old calls never touches the live
+  // transcript; it is a read-only overlay on top of the same panel. "live" is
+  // the call in progress (default, unchanged behavior); "list" is the fetched
+  // session index; "session" is one full session opened read-only.
+  const [pastMode, setPastMode] = useState<"live" | "list" | "session">("live");
+  const [sessions, setSessions] = useState<CallLogSession[]>([]);
+  const [sessionsStatus, setSessionsStatus] = useState<"idle" | "loading" | "error">("idle");
+  const [openSession, setOpenSession] = useState<CallLogSession | null>(null);
+  const [sessionStatus, setSessionStatus] = useState<"idle" | "loading" | "error">("idle");
+
+  const openPastList = useCallback(async () => {
+    setPastMode("list");
+    setSessionsStatus("loading");
+    try {
+      const r = await fetch("/api/calls");
+      if (!r.ok) {
+        setSessionsStatus("error");
+        return;
+      }
+      const j = (await r.json()) as { sessions?: CallLogSession[] };
+      setSessions(Array.isArray(j.sessions) ? j.sessions : []);
+      setSessionsStatus("idle");
+    } catch {
+      setSessionsStatus("error");
+    }
+  }, []);
+
+  const openPastSession = useCallback(async (id: string) => {
+    setPastMode("session");
+    setSessionStatus("loading");
+    try {
+      const r = await fetch(`/api/calls?id=${encodeURIComponent(id)}`);
+      if (!r.ok) {
+        setSessionStatus("error");
+        return;
+      }
+      const j = (await r.json()) as CallLogSession;
+      if (!Array.isArray(j.turns)) {
+        setSessionStatus("error");
+        return;
+      }
+      setOpenSession(j);
+      setSessionStatus("idle");
+    } catch {
+      setSessionStatus("error");
+    }
+  }, []);
+
+  const backToLive = useCallback(() => {
+    setPastMode("live");
+    setOpenSession(null);
+  }, []);
+
   const submit = useCallback(() => {
     const t = input.trim();
     if (!t || busy || !onSend) return;
@@ -122,85 +188,147 @@ export function StarraCallChat({
     [input, onSend],
   );
 
-  const liveU = liveUser?.trim() ? liveUser : "";
-  const liveA = liveAssistant?.trim() ? liveAssistant : "";
-  const isEmpty = messages.length === 0 && !liveU && !liveA;
+  const liveU = pastMode === "live" && liveUser?.trim() ? liveUser : "";
+  const liveA = pastMode === "live" && liveAssistant?.trim() ? liveAssistant : "";
+  // In "session" mode the displayed turns are the opened past call, read-only;
+  // otherwise (live) they are this call's own messages (Bug 2 — never deck
+  // history, see composeCallChatMessages in VoiceCallOverlay.tsx).
+  const displayMessages = useMemo(
+    () =>
+      pastMode === "session"
+        ? (openSession?.turns.map((t) => ({ role: t.role, text: t.text })) ?? [])
+        : messages,
+    [pastMode, openSession, messages],
+  );
+  const isEmpty = pastMode === "live" && messages.length === 0 && !liveU && !liveA;
 
-  // Auto-scroll to newest whenever committed or live content changes.
+  // Auto-scroll: newest row on the live/session transcript; the browse list
+  // stays pinned to its top (already newest-first from the API).
   useEffect(() => {
     const el = scrollRef.current;
     if (!el) return;
-    el.scrollTop = el.scrollHeight;
-  }, [messages, liveU, liveA]);
+    el.scrollTop = pastMode === "list" ? 0 : el.scrollHeight;
+  }, [pastMode, displayMessages, liveU, liveA, sessions]);
 
-  const transcript = messages
+  const transcript = displayMessages
     .map((m) => `${m.role === "user" ? "You" : "STARRA"}: ${m.text}`)
     .join("\n");
 
   return (
     <div className={styles.chat}>
       <div className={styles.header}>
-        <span className={styles.headerLabel}>TRANSCRIPT</span>
-        {messages.length > 0 ? (
-          <CopyButton
-            value={transcript}
-            label="Copy the whole transcript"
-            className={styles.copyAll}
-            copiedClassName={styles.copyAllCopied}
-            idleText="Copy all"
-          />
-        ) : null}
+        <span className={styles.headerLabel}>
+          {pastMode === "live"
+            ? "TRANSCRIPT"
+            : pastMode === "list"
+              ? "PAST CONVERSATIONS"
+              : "PAST CONVERSATION"}
+        </span>
+        <div className={styles.headerActions}>
+          {pastMode === "live" && displayMessages.length > 0 ? (
+            <CopyButton
+              value={transcript}
+              label="Copy the whole transcript"
+              className={styles.copyAll}
+              copiedClassName={styles.copyAllCopied}
+              idleText="Copy all"
+            />
+          ) : null}
+          {pastMode === "live" ? (
+            <button
+              type="button"
+              className={styles.pastToggleBtn}
+              onClick={() => void openPastList()}
+            >
+              Past conversations
+            </button>
+          ) : (
+            <button type="button" className={styles.pastToggleBtn} onClick={backToLive}>
+              Back to live call
+            </button>
+          )}
+        </div>
       </div>
 
-      <div className={styles.list} ref={scrollRef}>
-        {isEmpty ? (
-          <p className={styles.empty}>Your conversation will show here.</p>
-        ) : null}
-
-        {messages.map((m, i) =>
-          m.role === "user" ? (
-            <div key={`u-${i}`} className={styles.userTurn}>
-              <span className={styles.roleLabel}>YOU</span>
-              <div className={styles.userText}>{m.text}</div>
-            </div>
+      {pastMode === "list" ? (
+        <div className={styles.list} ref={scrollRef}>
+          {sessionsStatus === "loading" ? (
+            <p className={styles.empty}>Loading…</p>
+          ) : sessionsStatus === "error" ? (
+            <p className={styles.empty}>Couldn&apos;t load past conversations.</p>
+          ) : sessions.length === 0 ? (
+            <p className={styles.empty}>No past conversations yet.</p>
           ) : (
-            <div key={`a-${i}`} className={styles.assistantTurn}>
-              <span className={styles.roleLabel}>STARRA</span>
-              <div className={`${styles.assistantText} ${styles.assistantMd} md`}>
-                {renderMarkdown(m.text)}
-              </div>
-              <CopyButton
-                value={m.text}
-                label="Copy this message from STARRA"
-                className={styles.copyBtn}
-                copiedClassName={styles.copyBtnCopied}
-                idleText="Copy"
-              />
-            </div>
-          ),
-        )}
+            sessions.map((s) => (
+              <button
+                key={s.id}
+                type="button"
+                className={styles.sessionRow}
+                onClick={() => void openPastSession(s.id)}
+              >
+                <span className={styles.sessionDate}>{formatSessionDate(s.startedAt)}</span>
+                <span className={styles.sessionPreview}>{sessionPreview(s)}</span>
+              </button>
+            ))
+          )}
+        </div>
+      ) : (
+        <div className={styles.list} ref={scrollRef}>
+          {isEmpty ? (
+            <p className={styles.empty}>Your conversation will show here.</p>
+          ) : null}
+          {pastMode === "session" && sessionStatus === "loading" ? (
+            <p className={styles.empty}>Loading…</p>
+          ) : null}
+          {pastMode === "session" && sessionStatus === "error" ? (
+            <p className={styles.empty}>Couldn&apos;t load this conversation.</p>
+          ) : null}
 
-        {liveU || liveA ? (
-          <div className={styles.liveBlock} aria-live="polite">
-            {liveU ? (
-              <div className={`${styles.userTurn} ${styles.live}`}>
+          {displayMessages.map((m, i) =>
+            m.role === "user" ? (
+              <div key={`u-${i}`} className={styles.userTurn}>
                 <span className={styles.roleLabel}>YOU</span>
-                <div className={styles.userText}>{liveU}</div>
+                <div className={styles.userText}>{m.text}</div>
               </div>
-            ) : null}
-            {liveA ? (
-              <div className={`${styles.assistantTurn} ${styles.live}`}>
+            ) : (
+              <div key={`a-${i}`} className={styles.assistantTurn}>
                 <span className={styles.roleLabel}>STARRA</span>
                 <div className={`${styles.assistantText} ${styles.assistantMd} md`}>
-                  {renderMarkdown(liveA)}
+                  {renderMarkdown(m.text)}
                 </div>
+                <CopyButton
+                  value={m.text}
+                  label="Copy this message from STARRA"
+                  className={styles.copyBtn}
+                  copiedClassName={styles.copyBtnCopied}
+                  idleText="Copy"
+                />
               </div>
-            ) : null}
-          </div>
-        ) : null}
-      </div>
+            ),
+          )}
 
-      {onSend ? (
+          {liveU || liveA ? (
+            <div className={styles.liveBlock} aria-live="polite">
+              {liveU ? (
+                <div className={`${styles.userTurn} ${styles.live}`}>
+                  <span className={styles.roleLabel}>YOU</span>
+                  <div className={styles.userText}>{liveU}</div>
+                </div>
+              ) : null}
+              {liveA ? (
+                <div className={`${styles.assistantTurn} ${styles.live}`}>
+                  <span className={styles.roleLabel}>STARRA</span>
+                  <div className={`${styles.assistantText} ${styles.assistantMd} md`}>
+                    {renderMarkdown(liveA)}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
+        </div>
+      )}
+
+      {pastMode === "live" && onSend ? (
         <form
           className={styles.composer}
           onSubmit={(e) => {

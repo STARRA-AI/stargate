@@ -39,8 +39,14 @@ const memoryRoute = read("src/app/api/memory/route.ts");
 const memoryStore = read("src/lib/memory/store.ts");
 const callDigestSrc = read("src/lib/memory/call-digest.ts");
 
-/** The exact length of her locked spoken persona before the core was extracted. */
-const LOCKED_VOICE_PERSONA_CHARS = 7445;
+/**
+ * The exact length of her locked spoken persona before the core was extracted.
+ * 7445 -> 7488 (2026-08-08): the ONLY intended byte change since the extraction
+ * is her NAME. She is STARRA; STARGATE is the deck she runs. See
+ * tests/persona-identity.test.ts, which pins the rename itself — this number
+ * still does its job, catching any OTHER drift in the locked spoken text.
+ */
+const LOCKED_VOICE_PERSONA_CHARS = 7488;
 
 describe("one person across the Call and the Deck", () => {
   it("the call's identity has exactly ONE source: src/lib/persona.ts", () => {

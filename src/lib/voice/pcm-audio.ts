@@ -118,4 +118,42 @@ export function rms(frame: Float32Array): number {
   return Math.sqrt(sum / frame.length);
 }
 
+/**
+ * WHERE A PLAYBACK FRAME LANDS ON THE CLOCK — and whether the queue is the
+ * problem or the victim.
+ *
+ * Her audio arrives as many small deltas per second and is scheduled
+ * back-to-back on the AudioContext clock: each buffer starts at the tail of the
+ * one before it (`nextStart`), never before `now`. Two very different faults
+ * look identical from the outside ("the call is laggy"):
+ *
+ *   LAG      `leadMs` is large — frames are arriving faster than they play, so
+ *            the queue has built a backlog and she is speaking behind herself.
+ *   STARVING `nextStart` has already fallen behind `now` — the queue drained
+ *            before the next frame arrived, so there was an audible GAP and
+ *            this frame starts immediately. That is a dropout, not latency, and
+ *            adding buffering makes it worse.
+ *
+ * Pure arithmetic so the distinction is testable without an AudioContext
+ * (tests/call-latency-boundaries.test.ts). `nextStart <= 0` is the reset value
+ * — no queue exists yet — and is never reported as a dropout.
+ */
+export interface PlaybackLead {
+  /** AudioContext time this buffer should be started at. */
+  startAt: number;
+  /** How far in the future that is, in ms. 0 means "playing right now". */
+  leadMs: number;
+  /** The queue had already run dry when this frame arrived. */
+  starving: boolean;
+}
+
+export function playbackLead(ctxTime: number, nextStart: number): PlaybackLead {
+  const startAt = Math.max(ctxTime, nextStart);
+  return {
+    startAt,
+    leadMs: (startAt - ctxTime) * 1000,
+    starving: nextStart > 0 && nextStart <= ctxTime,
+  };
+}
+
 export const REALTIME_SAMPLE_RATE = XAI_SAMPLE_RATE;

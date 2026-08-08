@@ -5,6 +5,7 @@ import {
   REALTIME_SAMPLE_RATE,
   decodePlaybackFrame,
   encodeMicFrame,
+  playbackLead,
   rms,
 } from "@/lib/voice/pcm-audio";
 import { addVoiceSeconds } from "@/lib/voice/voiceCost";
@@ -204,6 +205,39 @@ function postFeedLine(tag: string, text: string): void {
 }
 
 /**
+ * THE CALL LOG — one line per turn, keyed by this call's `callId`.
+ *
+ * Same hard constraint as postFeedLine, for the same reason: it rides the audio
+ * path, so it is never awaited, both the sync throw and the async rejection are
+ * swallowed, and nothing branches on its result. A dead /api/calls costs a
+ * missing log line and nothing else.
+ *
+ * The route and the on-disk shape are Agent C's (src/app/api/calls/route.ts,
+ * src/lib/memory/call-log.ts) — this is only the emitter. `id` is null between
+ * calls, when there is nothing to key a turn to.
+ *
+ * A PRIVATE turn NEVER reaches here: the caller sites sit inside the same
+ * `!privateAsk` / non-private branches the shared memory store is gated on.
+ */
+function postCallLogTurn(
+  id: string | null,
+  role: "user" | "assistant",
+  text: string,
+): void {
+  if (id) {
+    try {
+      void fetch("/api/calls", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, role, text }),
+      }).catch(() => {});
+    } catch {
+      /* a log line is never worth a broken call */
+    }
+  }
+}
+
+/**
  * How long the call may sit in "speaking" with an EMPTY playback queue and no
  * further audio before we conclude her turn is over. Re-armed on every audio
  * delta and on every finished source (armDrainWatchdog), and it refuses to fire
@@ -264,6 +298,9 @@ export interface UseVoiceCallResult {
    * NEVER responds to it by switching brains (that swap is deleted — see
    * callBrainRef). She stays herself; if she can't hear, she is quiet. */
   earsStruggling: boolean;
+  /** Stable id for the CURRENT call. Minted fresh on every non-reconnect
+   *  connect(); preserved across an auto-reconnect; null when idle. */
+  callId: string | null;
 }
 
 type RealtimeTokenResponse = {
@@ -515,6 +552,20 @@ export const KIMI_ENDPOINT_SILENCE_FRAMES = 15; // ~650ms of quiet closes his tu
  */
 export const CALL_STREAM_SENTENCES =
   process.env.NEXT_PUBLIC_STARRA_CALL_STREAM_SENTENCES === "1";
+/**
+ * TURN TIMING — DEFAULT OFF, and it costs exactly nothing when it is off.
+ *
+ * "The call is laggy" is not actionable; "T3 is 2.4s of the 3.1s" is. This
+ * records six `performance.now()` stamps per turn and prints one line per turn
+ * to the console (plus `window.__starraCallTiming` for reading them back after
+ * the call). Every stamp site is a call to `markCallTiming`, which returns
+ * immediately when the flag is off, so production pays one boolean per turn.
+ *
+ * Turn it on for a diagnostic call:  NEXT_PUBLIC_STARRA_CALL_TIMING=1 npm run dev
+ */
+export const CALL_TIMING_DEBUG =
+  process.env.NEXT_PUBLIC_STARRA_CALL_TIMING === "1";
+
 export const KIMI_ENDPOINT_MIN_SPEECH_FRAMES = 5; // <~215ms of sound is a breath, not a turn
 export const KIMI_TRANSCRIPT_WAIT_MS = 2500; // commit → transcript grace before it counts as missing
 // Consecutive missed transcripts before the call SAYS SO (visible struggling
@@ -582,6 +633,165 @@ export function buildCallBrainMessages(
   return msgs;
 }
 
+/** The six raw boundary stamps of one call turn (`performance.now()`), or null
+ *  for a boundary this turn never reached. */
+export interface CallTurnTimings {
+  /** input_audio_buffer.commit sent — his turn is closed. */
+  commitAt: number | null;
+  /** the final user transcript is in hand. */
+  transcriptAt: number | null;
+  /** first SSE byte back from /api/chat. */
+  brainFirstByteAt: number | null;
+  /** last SSE byte — the reply is fully generated. */
+  brainLastByteAt: number | null;
+  /** force_message handed to the xAI socket. */
+  forcedAt: number | null;
+  /** first response.output_audio.delta — HE HEARS HER. */
+  firstAudioAt: number | null;
+}
+
+export const CALL_TIMING_IDLE: CallTurnTimings = {
+  commitAt: null,
+  transcriptAt: null,
+  brainFirstByteAt: null,
+  brainLastByteAt: null,
+  forcedAt: null,
+  firstAudioAt: null,
+};
+
+export interface CallTurnLatency {
+  /** T1 EARS: commit -> transcript (xAI grok-transcribe). */
+  t1EarsMs: number | null;
+  /** T2 BRAIN: transcript -> first SSE byte (deck route + model TTFT). */
+  t2BrainFirstByteMs: number | null;
+  /** T3 GENERATE: first -> last SSE byte (the whole reply streaming out). */
+  t3GenerateMs: number | null;
+  /** T4 MOUTH: force_message -> first audio delta (xAI TTS). */
+  t4MouthMs: number | null;
+  /** WHAT HE ACTUALLY WAITS: his silence -> her first sound. */
+  totalMs: number | null;
+  /** What that wait WOULD be if the first sentence were spoken as it arrived
+   *  (CALL_STREAM_SENTENCES on): T3 leaves the critical path. */
+  streamedTotalMs: number | null;
+  /** totalMs - streamedTotalMs: the measured price of the flag being OFF. */
+  streamSavingMs: number | null;
+  /** Which leg is the biggest — the answer to "where is the lag". */
+  dominant: "T1" | "T2" | "T3" | "T4" | null;
+}
+
+/** Never report a negative leg: an out-of-order stamp pair is 0, not nonsense. */
+function leg(from: number | null, to: number | null): number | null {
+  if (from === null || to === null) return null;
+  return Math.max(0, to - from);
+}
+
+/**
+ * The four boundaries, plus the one number the sentence-streaming decision
+ * turns on. Pure — all of it is tested in tests/call-latency-boundaries.test.ts.
+ *
+ * WHY `streamedTotalMs` EXISTS: with CALL_STREAM_SENTENCES OFF (:516, the
+ * default) runKimiTurn accumulates the whole reply before it speaks a word, so
+ * T3 sits in full on the critical path. With it ON, first audio tracks the
+ * first completed sentence instead. This computes both from the same turn, so
+ * the flag is decided on a measured number rather than an argument.
+ */
+export function callTurnLatency(t: CallTurnTimings): CallTurnLatency {
+  const t1EarsMs = leg(t.commitAt, t.transcriptAt);
+  const t2BrainFirstByteMs = leg(t.transcriptAt, t.brainFirstByteAt);
+  const t3GenerateMs = leg(t.brainFirstByteAt, t.brainLastByteAt);
+  const t4MouthMs = leg(t.forcedAt, t.firstAudioAt);
+  const totalMs = leg(t.commitAt, t.firstAudioAt);
+  const streamedTotalMs =
+    t1EarsMs === null || t2BrainFirstByteMs === null || t4MouthMs === null
+      ? null
+      : t1EarsMs + t2BrainFirstByteMs + t4MouthMs;
+  const legs: [CallTurnLatency["dominant"], number | null][] = [
+    ["T1", t1EarsMs],
+    ["T2", t2BrainFirstByteMs],
+    ["T3", t3GenerateMs],
+    ["T4", t4MouthMs],
+  ];
+  let dominant: CallTurnLatency["dominant"] = null;
+  let best = -1;
+  for (const [name, ms] of legs) {
+    if (ms !== null && ms > best) {
+      best = ms;
+      dominant = name;
+    }
+  }
+  return {
+    t1EarsMs,
+    t2BrainFirstByteMs,
+    t3GenerateMs,
+    t4MouthMs,
+    totalMs,
+    streamedTotalMs,
+    streamSavingMs:
+      totalMs === null || streamedTotalMs === null ? null : Math.max(0, totalMs - streamedTotalMs),
+    dominant,
+  };
+}
+
+/** One console line per turn: the four legs, the wait, and where it went. */
+export function formatCallTurnLatency(l: CallTurnLatency): string {
+  const n = (ms: number | null) => (ms === null ? "—" : String(Math.round(ms)));
+  return (
+    `[call-timing] T1=${n(l.t1EarsMs)}ms ears  T2=${n(l.t2BrainFirstByteMs)}ms brain-ttft  ` +
+    `T3=${n(l.t3GenerateMs)}ms generate  T4=${n(l.t4MouthMs)}ms mouth  ` +
+    `total=${n(l.totalMs)}ms  streamed-would-be=${n(l.streamedTotalMs)}ms  ` +
+    `saving=${n(l.streamSavingMs)}ms  dominant=${l.dominant ?? "—"}`
+  );
+}
+
+/**
+ * The current turn's stamps. Module-level rather than a ref because the stamp
+ * sites span three independent callbacks (the mic worklet, the brain fetch, the
+ * socket event handler) and only ONE turn is ever in flight — a newer turn
+ * aborts the older one (kimiBrainAbortRef).
+ */
+let callTiming: CallTurnTimings = { ...CALL_TIMING_IDLE };
+
+/**
+ * Stamp one boundary of the current turn — the ONLY instrumentation entry
+ * point, and a no-op unless CALL_TIMING_DEBUG is on.
+ *
+ * `commitAt` opens a new turn; every other boundary is FIRST-WINS, because the
+ * interesting stamp is the first SSE byte and the first audio delta, not the
+ * hundredth. `firstAudioAt` closes the turn: it prints the line and appends the
+ * record to `window.__starraCallTiming` so a whole call can be read back after
+ * the fact instead of scraped out of a scrolling console.
+ */
+function markCallTiming(boundary: keyof CallTurnTimings): void {
+  if (!CALL_TIMING_DEBUG) return;
+  if (boundary === "commitAt") callTiming = { ...CALL_TIMING_IDLE };
+  if (callTiming[boundary] !== null) return;
+  callTiming[boundary] = performance.now();
+  if (boundary !== "firstAudioAt") return;
+  const latency = callTurnLatency(callTiming);
+  try {
+    const w = window as typeof window & {
+      __starraCallTiming?: { raw: CallTurnTimings; latency: CallTurnLatency }[];
+    };
+    (w.__starraCallTiming ??= []).push({ raw: { ...callTiming }, latency });
+    console.info(formatCallTurnLatency(latency));
+  } catch {
+    /* a diagnostic must never be able to break her voice */
+  }
+}
+
+/** Same discipline for the playback queue: report, never throw, never in prod. */
+function reportPlaybackLead(leadMs: number, starving: boolean): void {
+  if (!CALL_TIMING_DEBUG) return;
+  try {
+    const w = window as typeof window & {
+      __starraPlaybackQueue?: { leadMs: number; starving: boolean; at: number }[];
+    };
+    (w.__starraPlaybackQueue ??= []).push({ leadMs, starving, at: performance.now() });
+  } catch {
+    /* ignore */
+  }
+}
+
 export function useVoiceCall(): UseVoiceCallResult {
   const [state, setState] = useState<VoiceCallState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -589,6 +799,12 @@ export function useVoiceCall(): UseVoiceCallResult {
   const [liveUser, setLiveUser] = useState("");
   const [liveAssistant, setLiveAssistant] = useState("");
   const [muted, setMuted] = useState(false);
+  // THIS CALL'S ID — shares the transcript's exact lifecycle (minted in the
+  // same fresh-call block, so the two can never disagree about what "this call"
+  // means). The ref is what the audio-path emitters read; the state is what the
+  // UI reads.
+  const [callId, setCallId] = useState<string | null>(null);
+  const callIdRef = useRef<string | null>(null);
   // HER EARS ARE STRUGGLING — the visible state that REPLACED the brain-swap
   // self-heal. True when commits keep coming back without a transcript, or
   // when the session tried to speak on its own. She stays herself; the UI just
@@ -1165,14 +1381,29 @@ export function useVoiceCall(): UseVoiceCallResult {
     if (!t) return;
     setTranscript((prev) => [...prev, { role: "assistant", text: t }]);
     recordCallTurn("assistant", t);
+    // The per-call log rides alongside the shared memory write, never in front
+    // of it and never awaited. A private reply never reaches here — that branch
+    // returns before recordAssistantRow (see runKimiTurn's privateReply block).
+    postCallLogTurn(callIdRef.current, "assistant", t);
     callTurnsRef.current.push({ role: "assistant", text: t });
     // HER REPLY CLOSES HIS TURN — same rule as commitAssistant.
     lastUserCommitRef.current = null;
   }, []);
 
+  /**
+   * HER MOUTH. Every failure here is total silence for the turn — she has the
+   * words and they never reach the wire — and NO caller branches on the `false`
+   * (see runKimiTurn's tail: `speakForced(spoken, shaped.text);`). So the
+   * reporting lives HERE, once, covering every caller, rather than in each of
+   * them. The return value is kept for the callers that do care.
+   */
   const speakForced = useCallback((spoken: string, transcriptText: string): boolean => {
     const ws = wsRef.current;
-    if (!ws || ws.readyState !== WebSocket.OPEN) return false;
+    if (!ws || ws.readyState !== WebSocket.OPEN) {
+      postFeedLine("ALERT", "Call: her words were ready but the voice link was closed");
+      kimiEarsStruggling("the voice link closed before she could speak");
+      return false;
+    }
     suppressResponseAudioRef.current = false; // a new turn always plays
     try {
       ws.send(
@@ -1186,9 +1417,17 @@ export function useVoiceCall(): UseVoiceCallResult {
           },
         }),
       );
-    } catch {
+    } catch (err) {
+      postFeedLine(
+        "ALERT",
+        `Call: sending her reply to the voice link failed — ${String(err).slice(0, 120)}`,
+      );
+      kimiEarsStruggling("her reply could not be sent to the voice link");
       return false;
     }
+    // T4 starts HERE — the words are on the wire; everything after this is
+    // xAI's TTS. Stamped after the send so a failed send never opens a leg.
+    markCallTiming("forcedAt");
     // THIS response is ours. Anything the session starts that this counter did
     // not pay for is the session talking on its own — response.created cancels
     // it (see the handler). Counted rather than a boolean because a barge-in
@@ -1198,7 +1437,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     // sentence and writes the single row itself once the turn is complete.
     recordAssistantRow(transcriptText);
     return true;
-  }, [recordAssistantRow]);
+  }, [kimiEarsStruggling, recordAssistantRow]);
 
   /**
    * BRAIN: one full call turn — commit his line (when `log`), ask the deck
@@ -1211,9 +1450,17 @@ export function useVoiceCall(): UseVoiceCallResult {
   const runKimiTurn = useCallback(
     async (text: string, opts?: { log?: boolean }) => {
       const t = text.trim();
-      if (!t) return;
+      if (!t) return; // nothing was said — not a failure, there is no turn
       const ws = wsRef.current;
-      if (!ws || ws.readyState !== WebSocket.OPEN) return;
+      if (!ws || ws.readyState !== WebSocket.OPEN) {
+        // HE SPOKE AND THE SOCKET WAS GONE. This was a bare `return`: his words
+        // were heard, transcribed, and then dropped on the floor with no audio,
+        // no row and no cue — the exact silent-failure shape call-never-silent
+        // exists to forbid. Say so.
+        postFeedLine("ALERT", "Call: the voice link was closed when his turn arrived — dropped");
+        kimiEarsStruggling("the voice link dropped mid-turn");
+        return;
+      }
       kimiNoTranscriptStreakRef.current = 0; // a heard turn proves the ears work
       const log = opts?.log !== false;
       // Tell the reassurance gate what he just said, BEFORE the brain answers,
@@ -1266,6 +1513,9 @@ export function useVoiceCall(): UseVoiceCallResult {
         // fast-path lookup (the route refuses tools for a private turn too).
         if (!privateAsk) {
           recordCallTurn("user", t, revises ? { supersede: true } : undefined);
+          // Same lane, same guard: the per-call log only ever sees turns the
+          // shared store already sees. Fire-and-forget, never awaited.
+          postCallLogTurn(callIdRef.current, "user", t);
           // The context array must supersede in lockstep with the store, or
           // the brain sees the same sentence twice in its own window. Written
           // through `callTurnsRef.current` in full, never a local alias: the
@@ -1376,7 +1626,10 @@ export function useVoiceCall(): UseVoiceCallResult {
         let buffer = "";
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            markCallTiming("brainLastByteAt"); // T3 ends — the reply is whole
+            break;
+          }
           buffer += decoder.decode(value, { stream: true });
           const parts = buffer.split("\n\n");
           buffer = parts.pop() ?? "";
@@ -1386,6 +1639,7 @@ export function useVoiceCall(): UseVoiceCallResult {
             const frame = classifyChatFrame(line.slice(5).trim());
             if (frame.kind === "private") privateReply = true;
             else if (frame.kind === "text") {
+              markCallTiming("brainFirstByteAt"); // T2 ends / T3 begins (first-wins)
               full += frame.text;
               // STREAMING: hand over each sentence the moment it is complete,
               // so first audio tracks time-to-first-token instead of the whole
@@ -1414,12 +1668,34 @@ export function useVoiceCall(): UseVoiceCallResult {
         }
         return;
       }
+      // SILENT BY DESIGN, and the only one on this function: a newer turn took
+      // the floor, so this reply is superseded and was never wanted. Reporting
+      // it would fire an ALERT on every normal barge-in. (Same rule the catch
+      // above applies to AbortError.)
       if (ac.signal.aborted) return;
       // The call may have ended / reconnected while the brain thought — a
-      // reply into a different socket would be a non-sequitur.
-      if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) return;
+      // reply into a different socket would be a non-sequitur. But it is still
+      // a FAILURE: he asked, she generated an answer, and he hears nothing.
+      if (wsRef.current !== ws || ws.readyState !== WebSocket.OPEN) {
+        postFeedLine(
+          "ALERT",
+          "Call: the voice link changed while her brain was answering — this turn is lost",
+        );
+        kimiEarsStruggling("the voice link reconnected mid-answer");
+        return;
+      }
       const reply = full.trim();
-      if (!reply) return;
+      // AN EMPTY REPLY IS A FAILED TURN, NOT A QUIET ONE. The stream completed
+      // 200-OK and carried no text (an empty completion, a filtered response, a
+      // frame shape we did not parse) — and this was a bare `return`, so she
+      // simply never spoke, with nothing anywhere to debug from. It is the most
+      // likely cause of "sometimes she just doesn't answer" and it was
+      // invisible in production. Same loud treatment as a dead brain.
+      if (!reply) {
+        postFeedLine("ALERT", "Call: her brain returned an EMPTY reply — nothing to say this turn");
+        kimiEarsStruggling("her brain returned an empty reply");
+        return;
+      }
       // ── STREAMED TURN — SENTENCES ARE ALREADY ON THE WIRE ────────────────
       // Flush whatever never terminated (a reply that ends without
       // punctuation), then write the ONE transcript row from what she actually
@@ -1506,6 +1782,7 @@ export function useVoiceCall(): UseVoiceCallResult {
 
   /** A final user transcript is in hand — clear the wait and run the turn. */
   const kimiTranscriptFinal = useCallback((text: string) => {
+    markCallTiming("transcriptAt"); // T1 ends — his words are in hand
     if (kimiAwaitTimerRef.current != null) {
       window.clearTimeout(kimiAwaitTimerRef.current);
       kimiAwaitTimerRef.current = null;
@@ -1662,6 +1939,11 @@ export function useVoiceCall(): UseVoiceCallResult {
       }
       if (samples.length === 0) return;
 
+      // T4 ENDS HERE — the first byte of her voice for this turn. Stamped
+      // before the scheduling work below so it measures the wire, not our own
+      // buffer bookkeeping. First-wins, so only the turn's opening frame counts.
+      markCallTiming("firstAudioAt");
+
       // Live assistant loudness (0..1) for the audio-reactive face — quick
       // attack, gradual decay so her animation tracks her actual voice.
       const level = Math.min(1, rms(samples) * 6);
@@ -1710,7 +1992,12 @@ export function useVoiceCall(): UseVoiceCallResult {
         }
         if (!routed) source.connect(ctx.destination);
 
-        const startAt = Math.max(ctx.currentTime, nextStartRef.current);
+        // Same arithmetic as before (startAt is unchanged), now naming the two
+        // failure shapes it hides: a large lead is a BACKLOG, and `starving`
+        // means the queue ran dry and there was an audible gap. See playbackLead.
+        const lead = playbackLead(ctx.currentTime, nextStartRef.current);
+        const startAt = lead.startAt;
+        reportPlaybackLead(lead.leadMs, lead.starving);
         source.onended = () => {
           activeSourcesRef.current.delete(source);
           try {
@@ -1823,6 +2110,9 @@ export function useVoiceCall(): UseVoiceCallResult {
         if (step.commit) {
           try {
             ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
+            // T1 STARTS HERE — his turn is closed. This also opens a new turn's
+            // timing record, so every stamp below belongs to this utterance.
+            markCallTiming("commitAt");
             kimiOnCommit();
           } catch {
             // A dropped commit isn't fatal; the next turn tries again.
@@ -2334,6 +2624,12 @@ export function useVoiceCall(): UseVoiceCallResult {
     // dropped utterance either way.
     if (stateRef.current !== "reconnecting") {
       setTranscript([]);
+      // A FRESH CALL IS A NEW LOG. Minted here, in the same block, so "the
+      // transcript started over" and "the call id changed" are the same event —
+      // and preserved across a reconnect for the same reason the transcript is.
+      const freshId = crypto.randomUUID();
+      callIdRef.current = freshId;
+      setCallId(freshId);
       // Kimi per-CALL state follows the transcript's lifecycle exactly: the
       // brain's context mirror and the one-greeting-per-call latch survive a
       // reconnect with the conversation, and reset with it on a fresh call.
@@ -2701,6 +2997,9 @@ export function useVoiceCall(): UseVoiceCallResult {
     reconnectAttemptsRef.current = 0; // clean exit — next call starts fresh
     lipsyncWarmedRef.current = false; // next call re-warms the lip-sync GPU
     turnPcmRef.current = [];
+    // The call is over: nothing further may be logged against its id.
+    callIdRef.current = null;
+    setCallId(null);
     setLipSyncClip(null);
     cleanupInternal();
     setCallState("idle");
@@ -2751,5 +3050,6 @@ export function useVoiceCall(): UseVoiceCallResult {
     // True while her ears are degraded on this call. The UI shows it; nothing
     // in the code reacts to it by changing who is talking.
     earsStruggling,
+    callId,
   };
 }
