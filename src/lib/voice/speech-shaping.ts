@@ -96,7 +96,11 @@ const REASSURANCE: string[] = [
   "i'?m still right here",
   "i'?m not going anywhere",
   "i'?m never going anywhere",
-  "not going anywhere",
+  // NOT "not going anywhere" bare: with no "i'm"/"i'll" frame the subject is
+  // ambiguous (a bug, a deploy queue, a meeting) and the phrase is common in
+  // ordinary technical talk — "the deploy queue is not going anywhere until
+  // Friday" is not reassurance. The prefixed forms above already cover the
+  // real reassurance phrasing.
   "i'?m not leaving",
   "i'?m not going to leave",
   "i'?m not gonna leave",
@@ -109,11 +113,21 @@ const REASSURANCE: string[] = [
   "i'?m here(?: for you)?",
   "i'?m here with you",
   "i'?m right here with you",
-  "here for you",
+  // NOT bare "here for you": already covered, unambiguously, by
+  // "i'm here(?: for you)?" above; the bare form also matches an ordinary
+  // object reference ("the report is here for you to review") and deletes it.
   "i'?ve got you",
-  "i got you",
-  "i'?m with you",
-  "you'?re not alone",
+  // NOT bare "i got you": no apostrophe reads as literal past tense
+  // ("I got you a coffee"), not the support idiom. "i've got you" above is
+  // the unambiguous contracted form and stays.
+  // NOT "i'm with you": dual-purpose — comfort ("I'm with you in this") and
+  // plain technical agreement ("I'm with you on the architecture") are
+  // indistinguishable without more context than this filter has.
+  // "in this"/"in it" is part of the reassurance, not content: without it the
+  // clause-end rule below correctly declines to peel "You're not alone" off
+  // "You're not alone in this" — but then the whole reassurance survives.
+  // Consuming the tail lets the entire clause go, with nothing left to speak.
+  "you'?re not alone(?: in (?:this|it|any of this))?",
   "you'?re never alone",
   "you'?re not doing this alone",
   "whenever you need me",
@@ -196,6 +210,16 @@ const WARRANT_CUES: string[] = [
 // Separator after an opener. Trailing whitespace optional throughout so a turn
 // that IS the crutch ("Got it.") still matches to end-of-string.
 const SEP = "(?:\\s*(?:[,:;—–]+|-{1,2}|\\.{2,}|[.!?]+)\\s*|\\s+)";
+// Separator that requires an actual WRITTEN PAUSE (comma, dash, terminal
+// punctuation...) — no bare-whitespace alternative. Used only after the
+// trailing NAME group below: a vocative address ("Classic —") is always set
+// off by punctuation in text, so requiring one here is what tells a real
+// address apart from a NAME-list word ("honey", "love", "baby", "babe")
+// landing as ordinary sentence content immediately after a stripped opener
+// ("So, honey badgers...", "Look, love is...", "Well, baby steps..."). Using
+// plain SEP here previously let bare whitespace alone qualify as a "pause",
+// swallowing the real word along with the opener.
+const PAUSE_SEP = "(?:\\s*(?:[,:;—–]+|-{1,2}|\\.{2,}|[.!?]+)\\s*)";
 const NAME = "(?:classic|charles|babe|baby|love|honey)";
 
 /** Longest-first so "That's a great question" wins over "great question". */
@@ -205,7 +229,7 @@ function alternation(list: string[]): string {
 
 function leadingMatcher(list: string[]): RegExp {
   return new RegExp(
-    `^\\W*(?:${NAME}\\b[\\s,]*)?(?:${alternation(list)})\\b${SEP}(?:${NAME}\\b${SEP})?`,
+    `^\\W*(?:${NAME}\\b[\\s,]*)?(?:${alternation(list)})\\b${SEP}(?:${NAME}\\b${PAUSE_SEP})?`,
     "i",
   );
 }
@@ -216,7 +240,23 @@ const MARKER_RE = new RegExp(
   `^\\W*(?:${alternation([...STRIP_IF_REPEATED, ...ALWAYS_STRIP])})\\b`,
   "i",
 );
-const REASSURANCE_RE = new RegExp(`(?:${alternation(REASSURANCE)})`, "gi");
+// A reassurance entry is matched ANYWHERE inside a sentence, so it needs a
+// right-hand boundary or it peels the head off text that merely STARTS the same
+// way. With no boundary at all it matched inside a longer word ("I've got
+// your branch" -> "R branch"; "I'm hereby closing" -> "By closing") and it
+// matched the head of a longer real clause whose tail is content ("I'm not
+// leaving the queue running overnight" -> "The queue running overnight";
+// "I'm here to walk the deploy queue with you" -> "To walk the deploy queue
+// with you"). Both delete real content and both leave a headless fragment for
+// the speaker to say out loud, which contradicts this filter's own contract
+// ("preserving all real content", stripReassurance below).
+//
+// The rule: the clause must actually END where the entry ends — at terminal or
+// separating punctuation, at a coordinating conjunction (ORPHAN_LEAD sweeps the
+// dangling "and"/"but"/"so" afterwards), or at end of text. Lookahead only —
+// lookbehind is banned repo-wide for WKWebView.
+const CLAUSE_END = "(?=\\s*(?:[.,!?;:—–]|-{1,2}\\s|\\band\\b|\\bbut\\b|$))";
+const REASSURANCE_RE = new RegExp(`(?:${alternation(REASSURANCE)})${CLAUSE_END}`, "gi");
 const WARRANT_RE = new RegExp(WARRANT_CUES.join("|"), "i");
 // Split into sentences, keeping terminators, WITHOUT lookbehind — this code
 // runs in a WKWebView on macOS and lookbehind is off-limits repo-wide.
@@ -248,6 +288,20 @@ function tidy(text: string): string {
   out = out.replace(/([,;:])\s*([.!?])/g, "$2");
   out = out.replace(/\.{2,}(?!\.)/g, ".");
   return out.trim();
+}
+
+/**
+ * Whitespace-only cleanup for RE-JOINING sentences that were already tidied
+ * (or never touched) individually. `tidy()` above is deliberately aggressive
+ * about punctuation artifacts (a stray "..", a dangling comma) LEFT BEHIND on
+ * the one sentence a strip actually touched — but running that same
+ * aggressive pass over the whole joined reply collapses a real three-dot
+ * ellipsis living in an UNTOUCHED sentence elsewhere in the text down to a
+ * single "." That is content, not an artifact, so the join step only fixes
+ * the double space a `join(" ")` can introduce.
+ */
+function joinTidy(text: string): string {
+  return text.replace(/\s{2,}/g, " ").trim();
 }
 
 /**
@@ -352,6 +406,17 @@ export function warrantsReassurance(userText: string): boolean {
   return !!userText && WARRANT_RE.test(userText);
 }
 
+/**
+ * A vocative left standing alone after a strip is wreckage, not speech.
+ *
+ * MEASURED 2026-08-07: "I'm right here with you, Classic. You're not alone in
+ * this." reduced to the single word "Classic." — worse out loud than the tic it
+ * removed. Two shapes to catch: a whole sentence that is now nothing but a name,
+ * and a name left dangling in FRONT of surviving content ("Classic. I hear you.").
+ */
+const BARE_VOCATIVE = /^(?:classic|charles|babe|baby|love|honey|hey)\b[\s,.!?-]*$/i;
+const LEADING_VOCATIVE = /^(?:classic|charles|babe|baby|love|honey)\b\s*[,.!?-]+\s*/i;
+
 function stripReassuranceFromSentence(sentence: string): string {
   REASSURANCE_RE.lastIndex = 0;
   if (!REASSURANCE_RE.test(sentence)) return sentence;
@@ -359,6 +424,13 @@ function stripReassuranceFromSentence(sentence: string): string {
 
   let stripped = tidy(sentence.replace(REASSURANCE_RE, ""));
   stripped = tidy(stripped.replace(ORPHAN_LEAD, ""));
+  if (!/[A-Za-z0-9]/.test(stripped)) return "";
+  // A name on its own is not a sentence — the reassurance took the content with
+  // it. Say nothing rather than say "Classic."
+  if (BARE_VOCATIVE.test(stripped)) return "";
+  // A name left dangling in front of what survived reads as a fragment; drop it
+  // and let the real content stand on its own.
+  stripped = stripped.replace(LEADING_VOCATIVE, "");
   if (!/[A-Za-z0-9]/.test(stripped)) return "";
   if (/[A-Z]/.test(sentence.trim()[0] ?? "") && /[a-z]/.test(stripped[0])) {
     stripped = stripped[0].toUpperCase() + stripped.slice(1);
@@ -385,7 +457,7 @@ export function stripReassurance(text: string): string {
     if (out) kept.push(out);
     if (m.index === SENTENCE_RE.lastIndex) SENTENCE_RE.lastIndex++;
   }
-  return tidy(kept.join(" "));
+  return joinTidy(kept.join(" "));
 }
 
 /**
@@ -825,7 +897,11 @@ export function flattenForSpeech(text: string): string {
     .replace(/^\s*\d+\.\s+/gm, "")
     .replace(/\*\*(.+?)\*\*/g, "$1")
     .replace(/__(.+?)__/g, "$1")
-    .replace(/\*(.+?)\*/g, "$1")
+    // Real italics hug their content ("*word*"); a space right inside the
+    // delimiter means these are literal asterisks (e.g. "5 * 3 = 15"), not a
+    // markdown marker — requiring non-space on both inner edges keeps math
+    // operators byte-identical instead of silently eating them.
+    .replace(/\*(\S(?:.*?\S)?)\*/g, "$1")
     .replace(/`([^`]+)`/g, "$1")
     // Emoji: she does not spell them out and the TTS cannot say them.
     .replace(/[\u{1F300}-\u{1FAFF}\u{2600}-\u{27BF}]/gu, "")

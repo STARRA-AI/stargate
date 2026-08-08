@@ -18,12 +18,20 @@ import {
   OpenerMemory,
   ReassuranceGate,
   createShapingState,
+  flattenForSpeech,
   openerMarker,
   shapeReply,
   stripCrutches,
   stripReassurance,
   warrantsReassurance,
 } from "../src/lib/voice/speech-shaping";
+
+/** shapeReply with a neutral user turn (no reassurance warrant), fresh state. */
+function shape(text: string): string {
+  const state = createShapingState();
+  state.gate.noteUserTurn("what's the status?");
+  return shapeReply(text, state).text;
+}
 
 describe("crutches — tier A is always stripped", () => {
   const cases: [string, string][] = [
@@ -270,5 +278,213 @@ describe("shapeReply — the call's choke point", () => {
     const fs = await import("node:fs/promises");
     const src = await fs.readFile("src/lib/voice/speech-shaping.ts", "utf8");
     assert.ok(!src.includes("(?<"), "lookbehind/lookahead-behind is banned in client code");
+  });
+});
+
+// ═══════════════════════════════════════════════════════════════════════════
+// PHASE 1 — does shaping strip anything it should not? Table-driven survival
+// cases for every content class that must reach eve's mouth unharmed, plus
+// the designed strips (markdown/code) and the non-empty-output invariant.
+// ═══════════════════════════════════════════════════════════════════════════
+
+describe("shapeReply — ordinary content survives verbatim", () => {
+  const verbatim: [string, string][] = [
+    [
+      "plain prose, no crutch, no reassurance",
+      "The sizing bug lives in the position calculation, not the retry loop.",
+    ],
+    [
+      "numbers and percentages",
+      "I fixed 3 bugs, ran 40 of 40 tests, and it's 100% green.",
+    ],
+    [
+      "contractions",
+      "I don't know yet, but I'll check and I'm not worried.",
+    ],
+    [
+      "names (Classic / Charles) mid-sentence",
+      "Classic already reviewed it, and Charles agreed with the plan.",
+    ],
+    [
+      "a real question mark",
+      "What time do you want to run the loop tonight?",
+    ],
+    [
+      "an em-dash aside",
+      "The engine paused — not crashed — while it waited on the socket.",
+    ],
+    [
+      "an interjection that is not a leading crutch",
+      "Huh, that's a new one. Never seen that error before.",
+    ],
+    [
+      "a plain ellipsis with no reassurance anywhere in the reply",
+      "I don't know... let's check the logs.",
+    ],
+  ];
+  for (const [label, text] of verbatim) {
+    it(`keeps ${label} byte-identical`, () => {
+      assert.equal(shape(text), text);
+    });
+  }
+});
+
+describe("shapeReply — a stray ellipsis must survive an UNRELATED reassurance strip", () => {
+  // Phase-1 evidence: tidy()'s dot-collapse (speech-shaping.ts:249) was being
+  // applied to the WHOLE joined reply in stripReassurance (speech-shaping.ts
+  // final `tidy(kept.join(" "))`), not just to the sentence that actually
+  // contained the reassurance clause. An ellipsis living in an untouched
+  // sentence elsewhere in the same reply was collapsed from "..." to "." and
+  // the following word was left lower-case, producing broken punctuation and
+  // grammar in a sentence shaping had no business touching at all.
+  it("keeps a three-dot ellipsis in an earlier sentence when a later one is stripped", () => {
+    const state = createShapingState();
+    state.gate.noteUserTurn("how's it going?"); // no warrant -> gate strips
+    const out = shapeReply(
+      "I'm thinking... about the fix. I'm right here, I'm not going anywhere.",
+      state,
+    );
+    assert.equal(out.text, "I'm thinking... about the fix.");
+  });
+
+  it("keeps a three-dot ellipsis via stripReassurance directly", () => {
+    assert.equal(
+      stripReassurance("I don't know... let's see. I'm right here, I'm not going anywhere."),
+      "I don't know... let's see.",
+    );
+  });
+});
+
+describe("stripCrutches — interjections and tier-B markers survive on first use", () => {
+  it("keeps a fresh (unrepeated) human marker verbatim", () => {
+    const memory = new OpenerMemory();
+    for (const raw of ["Huh, that's odd.", "Hmm, let me think.", "Ah, found it."]) {
+      assert.equal(stripCrutches(raw, { memory }), raw, raw);
+    }
+  });
+
+  it("never strips an interjection that is not at the start of the turn", () => {
+    const raw = "It works, well, mostly, and that's fine.";
+    assert.equal(stripCrutches(raw, { allowFullConsume: true }), raw);
+  });
+});
+
+describe("flattenForSpeech — markdown, code, and brackets are stripped as designed", () => {
+  const cases: [string, string, string][] = [
+    ["fenced code block removed entirely", "Here: ```const x = 1;``` done.", "Here: done."],
+    [
+      "fenced code containing braces/brackets is removed with the block",
+      'Run this: ```{ "key": [1, 2, 3] }``` and confirm.',
+      "Run this: and confirm.",
+    ],
+    ["heading marker stripped, text kept", "# Title\nBody text.", "Title\nBody text."],
+    ["bullet marker stripped, item text kept", "- item one\n- item two", "item one\nitem two"],
+    ["numbered list marker stripped, item text kept", "1. First\n2. Second", "First\nSecond"],
+    ["bold markers stripped, word kept", "This is **very** important.", "This is very important."],
+    ["dunder bold markers stripped, word kept", "This is __very__ important.", "This is very important."],
+    ["italic markers stripped, word kept", "This is *really* great.", "This is really great."],
+    ["inline code backticks stripped, brackets in code survive", "Run `array[0]` to check.", "Run array[0] to check."],
+    ["emoji removed", "Great job! 🎉🔥", "Great job!"],
+    ["literal brackets outside markdown survive untouched", "Check [the doc] (link) for [ref].", "Check [the doc] (link) for [ref]."],
+    ["ordinary prose with no markdown is byte-identical", "The build is green and ready.", "The build is green and ready."],
+  ];
+  for (const [label, input, want] of cases) {
+    it(label, () => {
+      assert.equal(flattenForSpeech(input), want);
+    });
+  }
+
+  // Phase-1 evidence: the italic regex `\*(.+?)\*` (speech-shaping.ts:828,
+  // before the fix) matched ANY pair of asterisks including space-padded
+  // multiplication signs, so "5 * 3 * 2 = 30" — ordinary prose, not markdown
+  // — silently lost its operators and became "5 3 2 = 30". That violates the
+  // file's own documented promise: "Ordinary prose with no markdown in it
+  // comes back byte-identical."
+  it("does not eat multiplication asterisks as italic markers", () => {
+    assert.equal(
+      flattenForSpeech("5 * 3 * 2 = 30, verified."),
+      "5 * 3 * 2 = 30, verified.",
+    );
+  });
+});
+
+describe("shapeReply — non-empty output is impossible for non-empty speakable input", () => {
+  // A reply that shapes to "" means silence on the call. Every one of these
+  // inputs is a real trap: pure tier-A crutch, pure tier-B repeat, or a
+  // reassurance-only reply with the gate closed. shapeReply must never let
+  // any of them collapse to nothing.
+  const traps: string[] = [
+    "Got it.",
+    "Of course.",
+    "Sure thing!",
+    "Understood.",
+    "I'm right here.",
+    "I'm right here, I'm not going anywhere.",
+    "I've got you.",
+    "Alright.", // becomes a tier-B repeat when primed below
+    "y",
+    "OK",
+  ];
+
+  for (const text of traps) {
+    it(`"${text}" never shapes to empty`, () => {
+      const state = createShapingState();
+      state.gate.noteUserTurn("how's it going?"); // ordinary talk -> gate stays closed
+      const out = shapeReply(text, state);
+      assert.ok(out.text.trim().length > 0, `shaped to empty: ${JSON.stringify(text)}`);
+    });
+  }
+
+  it('"Alright." never shapes to empty even once the opener has repeated', () => {
+    const state = createShapingState();
+    state.gate.noteUserTurn("how's it going?");
+    state.openers.note("Alright, let's go.");
+    const out = shapeReply("Alright.", state);
+    assert.ok(out.text.trim().length > 0);
+  });
+
+  it("any input containing a letter never shapes to empty (property sweep)", () => {
+    const inputs = [
+      "Got it.",
+      "Of course, understood, certainly.",
+      "Sure thing! Of course. Got it.",
+      "I'm right here. I've got you. Not going anywhere.",
+      "Well.",
+      "So.",
+      "a",
+    ];
+    for (const text of inputs) {
+      const state = createShapingState();
+      state.gate.noteUserTurn("what's next?");
+      const out = shapeReply(text, state);
+      if (/[A-Za-z]/.test(text)) {
+        assert.ok(out.text.trim().length > 0, `shaped to empty: ${JSON.stringify(text)}`);
+      }
+    }
+  });
+});
+
+describe("stripping must never leave a fragment she would say aloud", () => {
+  it("does not reduce a turn to a bare vocative", () => {
+    // MEASURED 2026-08-07: "I'm right here with you, Classic. You're not alone
+    // in this." stripped to the single word "Classic." — worse than the tic it
+    // was removing. If nothing but a name/fragment survives, the sentence WAS
+    // the reassurance; drop it whole rather than speak the wreckage.
+    const out = stripReassurance("I'm right here with you, Classic. You're not alone in this.");
+    assert.notEqual(out.trim().replace(/[.,!?]/g, "").toLowerCase(), "classic");
+    assert.ok(out === "" || out.split(/\s+/).length !== 1, `left a fragment: ${JSON.stringify(out)}`);
+  });
+
+  it("does not leave a dangling vocative in front of real content", () => {
+    const out = stripReassurance("I'm right here, Classic. I hear you.");
+    assert.doesNotMatch(out, /^(Classic|Babe|Baby|Love)[.,]/i, `dangling vocative: ${JSON.stringify(out)}`);
+    assert.match(out, /I hear you/);
+  });
+
+  it("still keeps real content when the reassurance is only part of the turn", () => {
+    assert.equal(
+      stripReassurance("I've got you. Tell me what happened."),
+      "Tell me what happened.",
+    );
   });
 });
