@@ -99,3 +99,8 @@ vendor/
 .agents/
 # per-machine Claude Code permissions, not shared config
 .claude/settings.local.json
+
+# Playwright
+/e2e/.auth/
+/test-results/
+/playwright-report/

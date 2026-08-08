@@ -30,7 +30,9 @@
     "typecheck": "tsc --noEmit",
     "face:download": "bash scripts/download-face-model.sh",
     "backlog": "bash scripts/backlog",
-    "data:sync": "python3 scripts/data-to-sqlite.py"
+    "data:sync": "python3 scripts/data-to-sqlite.py",
+    "e2e": "playwright test",
+    "e2e:snap": "playwright test --update-snapshots"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
