@@ -27,17 +27,31 @@ The engine API starts with `starra up`. Verify it linked:
 curl -s http://127.0.0.1:47401/health
 ```
 
-## THE OPEN HARDWARE PROBLEM — unresolved, not software
+## THE POWER PROBLEM — CORRECTED 2026-08-08 05:10. It was us.
 
-The Mac flips **AC ↔ battery every 1-4 seconds** with `PowerChime` firing (110+ connect
-events logged). Measured at load 3.5 AND at load 10 — **identical behavior, so load is not
-the variable.** The cable was already replaced. Battery reads `Condition: Normal`, 471 cycles.
-**Remaining suspects: the power adapter brick, or the charging port.** Try a different brick;
-inspect the port for lint (machine off, wooden toothpick, never metal); then service.
+**The paragraph that used to sit here said "load is not the variable." That was wrong.**
+Measured, not assumed:
 
-Separately and truthfully: **claude was measured at 99.3% CPU holding 1.1 GB.** Classic was
-right to call that out. macOS blames "Terminal" because claude runs beneath it. Keep ONE heavy
-thing running at a time on this machine.
+- The adapter is **not** Apple's 96W brick. `ioreg -rn AppleSmartBattery` → `AdapterDetails`:
+  `"Description"="pd charger"`, `"AdapterID"=0`, `"Watts"=100`. A generic 100W USB-C PD source.
+- **86W of that 100W is already spent at idle.** `"SystemPowerIn"=85958` mW at load 2.42 —
+  ~65W charging the battery (`ChargingCurrent` 5152mA @ 12628mV) + ~21W system. **~14W spare.**
+- An i7-9750H under parallel agents swings 20W → 45-90W. Demand crosses 100W → the PD source
+  over-currents → drops → macOS flips to Batt → chime → renegotiate → repeat.
+- **Flips/hr track our work exactly:** 4-24/hr in light hours → **118 @ 02:00, 165 @ 03:00,
+  379 @ 04:00** — the 9-agent workflow (663k subagent tokens, 261 tool uses, 31.5 min).
+  Work stopped 04:53; **zero flips 04:53 → 05:10**, charging steadily the whole time.
+- A residual 4-24/hr baseline may still be a marginal brick or port — **unproven**, and it
+  cannot be proven from `pmset -g log` (transition-only lines, no idle denominator).
+
+**Fixed already:** `~/.claude` was never Spotlight-excluded — 44MB of transcripts including a
+17MB `.jsonl` that Claude Code appends to **every turn**, so `mds_stores` re-indexed it
+continuously (caught at **98.2% CPU**). That is the "Terminal is using significant energy"
+warning. `.metadata_never_index` added to `~/.claude` and `/private/tmp/claude-501`.
+
+**STANDING, this machine: no multi-agent fan-out.** Inline, sequential, one heavy thing at a
+time. `~/.zshrc:43` runs `claude --effort ultracode`, which is what auto-plans a workflow per
+task — **Classic's call whether that flag stays**, not something to change for him.
 
 ## What shipped this session
 
@@ -62,11 +76,15 @@ thing running at a time on this machine.
 
 ## NEXT, in priority order
 
-1. **Fix the charger.** Everything else waits on the machine staying alive.
-2. **Engine Tasks 6 and 7 remain** — plan at `~/STARGATE/engine/docs/plans/2026-08-08-engine-live-readiness.md`.
-   Task 6 is the honest gate: `paper_loop.py:206` still defines `clean = refusals == 0 and
-   errors == 0`, so **rejecting every trade still scores "clean"** and 10/10 is reachable with
-   zero trades. Real progress toward his gate is **0 of 10**.
+1. ~~**Fix the charger.**~~ **DONE 2026-08-08** — root cause was our own fan-out against a
+   generic 100W brick with ~14W headroom. Power gate shipped in `~/.claude/workflows/starra-loop.js`
+   (3 agents max, org otherwise untouched), `~/.claude` excluded from Spotlight. See the section above.
+2. ~~**Engine Task 6**~~ **DONE 2026-08-08, commit `060cb86`, 69 passed.** The gate is honest now:
+   `clean = filled > 0 and refusals == 0 and errors == 0`, with fills re-read from Alpaca after
+   submit and an unreadable order counting as unfilled. The two 2026-08-04 sessions that scored
+   `clean:true` on `submitted:0, rejected:3` were regraded — **the real streak is `(0, False)`,
+   not 2/10.** **Engine Task 7 is next** (stocks + crypto, separate clocks); plan at
+   `~/STARGATE/engine/docs/plans/2026-08-08-engine-live-readiness.md:1602`.
 3. **NOTHING IS LIVE.** Task 9's live gate is untouched and out of scope until paper orders
    actually fill.
 4. **Two things need Classic's own eyes, and no test can replace them:** look at the deck
