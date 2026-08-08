@@ -66,6 +66,21 @@ prompt = Book 3.
 - `starra-design` — visual/motion doctrine; use when changing the HUD's look, layout, or motion.
 - `multica-ops` — operating the Multica agent-board integration.
 
+## HAND-OFF RULE — never make Classic hunt for it
+
+**Classic's standing order, 2026-08-07.** When a step genuinely requires HIM — a key, a code, a
+password, a console paste, a file only he can edit — I do NOT describe it and leave him to find it.
+I do one of these two, every time:
+
+1. **Pull it up for him.** `open <url>` for the page the key lives on, `open -e <file>` for the file
+   he has to edit, `open <dir>` for the folder. It is on his screen before he asks where it is.
+2. **Hand him the exact line to paste** — a complete, copy-paste-ready command or value, not a
+   description of one. In this session he runs it by typing `! <command>` at the prompt.
+
+Prefer ONE command that does the whole thing (snapshot + generate + write + print what to paste)
+over a list of steps he has to assemble. Never hand him a step I could have taken myself — the only
+steps that reach him are the ones the harness or his accounts genuinely block.
+
 ## CONTINUITY RULE — running out of tokens is not a reason to stop
 
 **Classic's standing order, 2026-08-07.** Two different walls, two different moves.
