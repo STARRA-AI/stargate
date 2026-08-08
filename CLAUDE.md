@@ -81,6 +81,28 @@ Prefer ONE command that does the whole thing (snapshot + generate + write + prin
 over a list of steps he has to assemble. Never hand him a step I could have taken myself — the only
 steps that reach him are the ones the harness or his accounts genuinely block.
 
+### COPY-PASTE RULE — the block IS the command, nothing else
+
+**Classic, 2026-08-08:** *"if you give me code to copy and paste you will show exactly what i need
+to copy and paste and make it easy for me to copy and fucking paste."*
+
+Anything he has to run goes in its own fenced block containing **only the literal characters he
+pastes.** Getting this wrong costs him a round trip — it already did: he was handed `! cd …` and
+zsh ate the `!`, so the command silently never ran.
+
+- **NO `!` prefix.** That is Claude Code's prompt syntax and it BREAKS in Terminal.app. If he
+  should run it in the Claude Code prompt, say so in the sentence above the block — never bake the
+  `!` into the block.
+- **NO `$` or `%` prompt characters**, no `sudo` he did not ask for, no leading spaces.
+- **NO comments, no `# explanation`, no `<placeholders>`, no `…`.** Every character is real and
+  final. If a value has to be filled in, generate it first and put the actual value in the block.
+- **NO output mixed in.** What he pastes and what he sees back are two different things — never
+  put them in the same block.
+- **ONE block per action**, and it starts with `cd` to the right directory so it works from a
+  fresh shell.
+- Say in one plain line what it does and what he should see, ABOVE the block. Explanation never
+  goes inside the thing he copies.
+
 ## CONTINUITY RULE — running out of tokens is not a reason to stop
 
 **Classic's standing order, 2026-08-07.** Two different walls, two different moves.
