@@ -784,6 +784,52 @@ cmd_lipsync() {
   cmd_up
 }
 
+
+# ── SIDE TOOLS ── NocoDB (business data + her memory as tables) and n8n
+# (workflow automation). Deliberately OPT-IN, not part of `up`.
+#
+# WHY NOT AUTO-START: both are heavy, and on 2026-08-08 this Mac hit load 38 on
+# 12 cores with everything running at once. The actual fault that day was a bad
+# charging cable, not load — but adding two always-on services to a machine that
+# already runs the deck, Ollama, whisper, private-gpt and the Engine Room is a
+# choice Classic makes, not a default I impose.
+#
+#   scripts/starra tools up     scripts/starra tools stop     scripts/starra tools status
+NOCO_DIR="$HOME/STARGATE/nocodb-data"
+N8N_START="$HOME/STARGATE/n8n-data/start.sh"
+
+cmd_tools() {
+  case "${1:-status}" in
+    up|start)
+      if curl -s -m 2 -o /dev/null http://127.0.0.1:8090/dashboard/; then
+        echo "● NocoDB already online"
+      elif [[ -f "$NOCO_DIR/server.js" ]]; then
+        ( cd "$NOCO_DIR" && trap '' HUP && NC_DISABLE_TELE=true exec node server.js ) </dev/null >>"$LOG" 2>&1 &
+        echo "→ NocoDB starting  http://127.0.0.1:8090/dashboard/"
+      else
+        echo "◆ NocoDB not installed at $NOCO_DIR — skipping"
+      fi
+      if curl -s -m 2 -o /dev/null http://127.0.0.1:5678/; then
+        echo "● n8n already online"
+      elif [[ -x "$N8N_START" ]]; then
+        ( trap '' HUP && exec "$N8N_START" ) </dev/null >>"$LOG" 2>&1 &
+        echo "→ n8n starting     http://127.0.0.1:5678/"
+      else
+        echo "◆ n8n not installed at $N8N_START — skipping"
+      fi
+      ;;
+    stop|down)
+      pkill -f "nocodb-data/server.js" >/dev/null 2>&1 && echo "● NocoDB stopped" || echo "· NocoDB was not running"
+      pkill -f "n8n" >/dev/null 2>&1 && echo "● n8n stopped" || echo "· n8n was not running"
+      ;;
+    status|st|"")
+      curl -s -m 3 -o /dev/null http://127.0.0.1:8090/dashboard/ && echo "● NocoDB  http://127.0.0.1:8090/dashboard/" || echo "○ NocoDB  down"
+      curl -s -m 3 -o /dev/null http://127.0.0.1:5678/ && echo "● n8n     http://127.0.0.1:5678/" || echo "○ n8n     down"
+      ;;
+    *) echo "Usage: starra tools [up|stop|status]"; return 1 ;;
+  esac
+}
+
 main() {
   local cmd="${1:-}"
   case "$cmd" in
@@ -794,6 +840,7 @@ main() {
     guard|keepalive) shift; cmd_guard "${1:-}" ;;
     install) cmd_install ;;
     lipsync) shift; cmd_lipsync "${1:-}" ;;
+    tools) shift; cmd_tools "${1:-}" ;;
     -h|--help|help) usage ;;
     *)
       echo "Unknown: $cmd"
