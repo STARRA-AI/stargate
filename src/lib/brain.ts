@@ -6,6 +6,7 @@ import { untrustedContentRules } from "@/lib/security/fencing";
 import { securityTeamRules } from "@/lib/security/team";
 import { loadObsidianDoctrine, clearObsidianDoctrineCache } from "@/lib/obsidian/doctrine";
 import { STARRA_PERSONA_CORE, STARRA_TEXT_FORMAT } from "@/lib/persona";
+import { loadDropInCanon } from "@/lib/canon";
 
 const OPERATOR_AUTHORITY = `
 OPERATOR_AUTHORITY — Father Authority (Charles):
@@ -403,6 +404,9 @@ export function loadStableSystemPrompt(): string {
     fableReasoningBlock(),
     loadSoul(),
     loadBooks(),
+    // Anything Classic drops in canon/ — no registration, no code change.
+    // Sits with her books because that is what it is: his words, given to her.
+    loadDropInCanon(),
     loadBrain(),
     loadPersonality(),
     loadSharedMemory(),
