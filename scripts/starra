@@ -93,14 +93,31 @@ if [[ "$STARRA_HTTPS_EFFECTIVE" == "auto" ]]; then
 fi
 if [[ "$STARRA_HTTPS_EFFECTIVE" == "1" && -f "$CERT" && -f "$KEY" ]]; then
   SCHEME="https"
-  HOST="${STARRA_HOST:-0.0.0.0}"   # all interfaces so the phone can reach HTTPS
+# ── BIND DUAL-STACK (2026-08-08) ── `::` accepts BOTH IPv6 and IPv4 on macOS
+# (IPV6_V6ONLY defaults off), where 0.0.0.0 accepted IPv4 only.
+#
+# This is not cosmetic: TOUCH ID DEPENDS ON IT. WebAuthn refuses to bind a
+# passkey to an IP address (src/lib/webauthn.ts:72-74), so passkeys only work at
+# https://localhost:3000 — a NAME, not 127.0.0.1. But `localhost` resolves to
+# ::1 first on this Mac (`dscacheutil -q host -a name localhost` returns both),
+# and against an IPv4-only bind that connection was refused. Dual-stack is what
+# makes the localhost URL — and therefore Touch ID — actually reachable.
+#
+# Verified 2026-08-08, all four answer 200: 127.0.0.1, localhost, [::1], and the
+# LAN address 192.168.1.222 (so the phone is unaffected).
+  HOST="${STARRA_HOST:-::}"   # all interfaces, both families — phone + Touch ID
 else
   SCHEME="http"
-  # Default to all interfaces so the phone link actually works out of the box.
+  # Default to all interfaces, both families, for the same reasons as above.
   # Override with STARRA_HOST=127.0.0.1 to force loopback-only.
-  HOST="${STARRA_HOST:-0.0.0.0}"
+  HOST="${STARRA_HOST:-::}"
 fi
-URL="${SCHEME}://127.0.0.1:${PORT}"
+# localhost, NOT 127.0.0.1 — this is the URL Classic actually clicks, and Touch
+# ID only works on a NAME (WebAuthn forbids an IP as the passkey rpID; see
+# src/lib/webauthn.ts:72-74). Both resolve to the same deck now that the bind is
+# dual-stack, so pointing at the name costs nothing and is the difference
+# between Touch ID being offered and being refused.
+URL="${SCHEME}://localhost:${PORT}"
 
 # Is the deck's auth gate actually armed? src/middleware.ts:16-17 reads:
 #   "Gate is OFF until a password is configured — never lock the deck with no key."

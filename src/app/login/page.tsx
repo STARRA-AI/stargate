@@ -14,10 +14,10 @@ function redirectTarget(): string {
  */
 function passkeyUnavailable(): string | null {
   if (!window.PublicKeyCredential) {
-    return "This window can't do Touch ID — open the deck in Safari or Chrome at http://localhost:3000.";
+    return "This window can't do Touch ID — open the deck in Safari or Chrome at https://localhost:3000.";
   }
   if (/^\d{1,3}(\.\d{1,3}){3}$|:/.test(window.location.hostname)) {
-    return "Touch ID needs http://localhost:3000 — open the deck there (same login) and set it up.";
+    return "Touch ID needs https://localhost:3000 — open the deck there (same login) and set it up.";
   }
   return null;
 }
