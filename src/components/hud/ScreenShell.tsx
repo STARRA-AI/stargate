@@ -4,13 +4,23 @@ import Image from "next/image";
 import Link from "next/link";
 import { useEffect, useRef, type ReactNode } from "react";
 import { Starfield } from "@/components/bridge/Starfield";
+import { Skeleton } from "@/components/hud/Skeleton";
 import { revealAll } from "@/lib/ui/motion";
+
+/** Rows of structure to hold the screen open while its first fetch is in the
+ *  air. Four reads as "a panel is coming" without pretending to know the
+ *  shape of a payload nobody has seen yet. */
+const SKELETON_ROWS = 4;
 
 export function ScreenShell({
   title,
+  loading = false,
   children,
 }: {
   title: string;
+  /** True while the screen's FIRST fetch is outstanding. Omitted = never
+   *  loading, so every existing caller behaves exactly as before. */
+  loading?: boolean;
   children: ReactNode;
 }) {
   const mainRef = useRef<HTMLElement | null>(null);
@@ -19,13 +29,20 @@ export function ScreenShell({
   // wraps in this shell, so animating panels here reaches all of them without
   // eight near-identical edits — and without any screen inventing its own
   // cadence. `revealAll` is a no-op under prefers-reduced-motion, and it only
-  // ever runs on mount: nothing here loops, so the reactor stays the deck's
-  // single animated focal point (design doctrine).
+  // ever runs on mount or the moment loading clears: nothing here loops, so the
+  // reactor stays the deck's single animated focal point (design doctrine).
+  //
+  // `loading` MUST stay in the deps. Real panels do not exist during the
+  // skeleton pass, so a mount-only effect would find zero of them, bail, and
+  // never fire again — the content would arrive with no reveal at all. For a
+  // caller that never passes `loading` the value never changes, so this is
+  // byte-for-byte the old mount-only behaviour.
   useEffect(() => {
+    if (loading) return;
     const panels = mainRef.current?.querySelectorAll(".deck-panel");
     if (!panels || panels.length === 0) return; // a screen with no panels yet
     revealAll(panels);
-  }, []);
+  }, [loading]);
 
   return (
     <div className="relative min-h-dvh bg-[var(--void)] text-[var(--chrome)]">
@@ -57,7 +74,7 @@ export function ScreenShell({
           </Link>
         </header>
         <main ref={mainRef} className="flex flex-1 flex-col gap-4">
-          {children}
+          {loading ? <Skeleton rows={SKELETON_ROWS} /> : children}
         </main>
       </div>
     </div>

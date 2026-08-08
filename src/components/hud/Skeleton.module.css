@@ -1,0 +1,50 @@
+.wrap {
+  display: flex;
+  flex-direction: column;
+  gap: 0.6em;
+}
+
+.bar {
+  position: relative;
+  overflow: hidden;
+  height: 1em;
+  border-radius: 0.25em;
+  background: color-mix(in srgb, var(--chrome) 8%, transparent);
+}
+
+/* The sweep rides a pseudo-element on `transform` alone — composited, no
+   repaint per frame. Motion doctrine forbids animating paint properties; the
+   first cut animated the gradient's position instead, repainting every bar on
+   every frame. Transient by construction: it unmounts with the skeleton, so it
+   never becomes a standing loop competing with the reactor. */
+.bar::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background-image: linear-gradient(
+    90deg,
+    transparent 0%,
+    color-mix(in srgb, var(--chrome) 16%, transparent) 50%,
+    transparent 100%
+  );
+  /* outQuad, matching EASE.out in src/lib/ui/motion.ts:47. */
+  animation: sweep 1.4s cubic-bezier(0.25, 0.46, 0.45, 0.94) infinite;
+  will-change: transform;
+}
+
+@keyframes sweep {
+  from {
+    transform: translateX(-100%);
+  }
+  to {
+    transform: translateX(100%);
+  }
+}
+
+/* Correct resting state, not a blank one: the plate keeps its structure, the
+   sweep simply never moves. */
+@media (prefers-reduced-motion: reduce) {
+  .bar::after {
+    animation: none;
+  }
+}
