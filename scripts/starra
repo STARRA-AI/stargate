@@ -30,7 +30,17 @@ unset _src _hops
 STORAGE="/Volumes/Storage"
 MODELS="$STORAGE/STARRA/ollama/models"
 LOG_DIR="${STORAGE}/STARRA/logs"
-[[ -d "$STORAGE/STARRA" ]] || LOG_DIR="$PROJ/data/logs"
+# MOUNTED IS NOT WRITABLE. Under launchd, macOS TCC denies removable volumes,
+# so `-d` passed on a mounted Storage and every write still died with
+# "Operation not permitted" — which silently killed EVERY watchdog revival
+# (found 2026-08-08: the deck stayed down 100s while the guard retried twice).
+# A real shell has the permission and a LaunchAgent does not, so existence can
+# never stand in for access. Probe with an actual write; fall back into the
+# repo, which the keepalive installer already proves launchd can read.
+if ! { mkdir -p "$LOG_DIR" 2>/dev/null && touch "$LOG_DIR/.starra-write-test" 2>/dev/null; }; then
+  LOG_DIR="$PROJ/data/logs"
+fi
+rm -f "${LOG_DIR}/.starra-write-test" 2>/dev/null || true
 mkdir -p "$LOG_DIR" "$PROJ/data" 2>/dev/null || true
 
 PID_FILE="$PROJ/data/starra-dev.pid"
@@ -223,6 +233,28 @@ phone_link_line() {
     fi
   else
     echo "  Phone (same Wi‑Fi): ${url}"
+  fi
+  public_link "${1:-}"
+}
+
+# The public link is a cloudflared QUICK tunnel, so its hostname is random and
+# CHANGES on every cloudflared restart — reboot, crash, KeepAlive respawn. That
+# is by design and no amount of uptime fixes it: a link saved yesterday can be
+# dead today while the deck is perfectly healthy. So never print it from memory
+# — read the one the RUNNING tunnel actually registered, newest last.
+public_link() {
+  local log="$PROJ/data/tunnel.log" u
+  [[ -f "$log" ]] || return 0
+  u="$(grep -ohE 'https://[a-z0-9-]+\.trycloudflare\.com' "$log" 2>/dev/null | tail -1)"
+  [[ -n "$u" ]] || return 0
+  if [[ "${1:-}" == "probe" ]]; then
+    if curl -sf --max-time 12 -o /dev/null "${u}/login" 2>/dev/null; then
+      echo "● Public link: ${u} (answering)"
+    else
+      echo "○ Public link: ${u} (not answering — tunnel may have rotated it)"
+    fi
+  else
+    echo "  Public link: ${u}"
   fi
 }
 

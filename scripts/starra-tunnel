@@ -19,15 +19,28 @@ URL_FILE="$REPO/data/tunnel-url.txt"
 LOG="$REPO/data/tunnel.log"
 PORT="${STARRA_PORT:-3000}"
 
-current_pid() { pgrep -f "cloudflared tunnel --url http://localhost:$PORT" | head -1; }
+# Scheme-agnostic on purpose: the deck serves HTTPS, and the launchd agent
+# (~/Library/LaunchAgents/com.starra.tunnel.plist) runs the tunnel with
+# `--url https://… --no-tls-verify`. A pattern hardcoded to http:// did not
+# match that process, so this script reported "not running" while a tunnel was
+# very much running — and would have started a SECOND one.
+current_pid() { pgrep -f "cloudflared tunnel --url .*localhost:$PORT" | head -1; }
 
 start() {
   if [ -n "$(current_pid)" ]; then echo "already running: $(cat "$URL_FILE" 2>/dev/null)"; return 0; fi
   mkdir -p "$(dirname "$LOG")"
   : > "$LOG"
-  nohup cloudflared tunnel --url "http://localhost:$PORT" >> "$LOG" 2>&1 &
+  # HTTPS + --no-tls-verify: the deck serves TLS on :$PORT with a self-signed
+  # local CA. Plain http:// here made cloudflared fail the handshake and return
+  # 502 on every request ("Unable to reach the origin service … EOF") while the
+  # deck was perfectly healthy — the exact "link is down" symptom, 2026-08-08.
+  # The machine→Cloudflare leg stays encrypted; only this loopback hop skips
+  # certificate validation.
+  nohup cloudflared tunnel --url "https://localhost:$PORT" --no-tls-verify >> "$LOG" 2>&1 &
   for _ in $(seq 1 40); do
-    url=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG" | head -1)
+    # tail, never head: the log may already hold hostnames from earlier runs,
+    # and the FIRST one is the stale dead link. Newest wins.
+    url=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG" | tail -1)
     [ -n "$url" ] && { echo "$url" > "$URL_FILE"; echo "$url"; return 0; }
     sleep 1
   done
@@ -35,13 +48,30 @@ start() {
   return 1
 }
 
+# THE LIVE URL IS THE ONE IN THE LOG, not the one in a file.
+# $URL_FILE is written only by this script's own start(). The tunnel is normally
+# started by launchd (com.starra.tunnel), which never writes it — so the file
+# goes stale and `url` handed back a DEAD hostname while a healthy tunnel was
+# running under a different name (observed 2026-08-08). The running process
+# reports its hostname into $LOG; trust that, and keep $URL_FILE only as the
+# fallback for when the log has been rotated away.
+live_url() {
+  local u
+  u="$(grep -ohE 'https://[a-z0-9-]+\.trycloudflare\.com' "$LOG" 2>/dev/null | tail -1)"
+  [ -z "$u" ] && u="$(cat "$URL_FILE" 2>/dev/null)"
+  [ -n "$u" ] || return 1
+  # Keep the file honest for anything else that reads it.
+  [ "$u" = "$(cat "$URL_FILE" 2>/dev/null)" ] || echo "$u" > "$URL_FILE" 2>/dev/null
+  echo "$u"
+}
+
 case "${1:-status}" in
   start)  start ;;
   stop)   pid=$(current_pid); [ -n "$pid" ] && kill "$pid" && echo "stopped" || echo "not running" ;;
-  url)    cat "$URL_FILE" 2>/dev/null || { echo "no URL recorded — run: scripts/starra-tunnel start" >&2; exit 1; } ;;
+  url)    live_url || { echo "no URL recorded — run: scripts/starra-tunnel start" >&2; exit 1; } ;;
   status)
     pid=$(current_pid)
-    if [ -n "$pid" ]; then echo "running (pid $pid)"; echo "url: $(cat "$URL_FILE" 2>/dev/null)"
+    if [ -n "$pid" ]; then echo "running (pid $pid)"; echo "url: $(live_url)"
     else echo "not running"; fi ;;
   *) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
 esac
