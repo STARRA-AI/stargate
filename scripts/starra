@@ -248,7 +248,18 @@ start_ollama() {
     return 1
   fi
   echo "→ Starting Ollama…"
-  nohup "$bin" serve >>"$LOG" 2>&1 &
+  # Not nohup: macOS nohup aborts with "can't detach from console" when there is
+  # no controlling terminal — exactly the launchd context the watchdog revives
+  # from (it burned 47 revivals on 2026-08-02). Ignoring HUP + exec is the same
+  # detachment and works with or without a terminal.
+  # cd "$HOME" before exec: Ollama inherits this shell's cwd (the repo, under
+  # TCC-shielded ~/Desktop) and passes it to every llama-server runner it
+  # spawns; in a launchd-context revival the runner's getcwd() then returns
+  # EPERM and the runner dies at birth — every model load 500s (measured
+  # 2026-08-05, "call to getcwd failed: Operation not permitted" during the
+  # call feature outage). $HOME is never TCC-shielded; models path is already
+  # absolute via OLLAMA_MODELS, so nothing else reads the cwd.
+  ( trap '' HUP; cd "$HOME"; exec "$bin" serve ) </dev/null >>"$LOG" 2>&1 &
   for _ in $(seq 1 20); do
     ollama_up && { echo "● Ollama online"; return 0; }
     sleep 0.5
@@ -259,7 +270,7 @@ start_ollama() {
 
 # Make npm/node reachable even when launched from STARRA.app or Spotlight, where
 # the GUI PATH is minimal and nvm (which owns npm) is never sourced — otherwise
-# `nohup npm run dev` dies with "nohup: npm: No such file or directory". Mirrors
+# `npm run dev` dies with "npm: No such file or directory". Mirrors
 # start_ollama: resolve the toolchain instead of trusting the inherited PATH.
 # Prepends the node bin dir so npm AND its child node/next processes resolve.
 ensure_node_on_path() {
@@ -316,12 +327,13 @@ start_deck() {
   echo "→ Starting STARGATE (${SCHEME}) on ${HOST}:${PORT}…"
   cd "$PROJ"
   # --hostname $HOST (0.0.0.0 under HTTPS) so the iPhone on the same Wi‑Fi can reach the Mac.
+  # Same trap-HUP form as start_ollama (macOS nohup dies under launchd — see there).
   if [[ "$SCHEME" == "https" ]]; then
     # Next 15 dev TLS using our mkcert cert (trusted → no "Not secure" warning).
-    nohup npm run dev -- --experimental-https --experimental-https-key "$KEY" \
-      --experimental-https-cert "$CERT" --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
+    ( trap '' HUP; exec npm run dev -- --experimental-https --experimental-https-key "$KEY" \
+      --experimental-https-cert "$CERT" --hostname "$HOST" --port "$PORT" ) </dev/null >>"$LOG" 2>&1 &
   else
-    nohup npm run dev -- --hostname "$HOST" --port "$PORT" >>"$LOG" 2>&1 &
+    ( trap '' HUP; exec npm run dev -- --hostname "$HOST" --port "$PORT" ) </dev/null >>"$LOG" 2>&1 &
   fi
   echo $! >"$PID_FILE"
   for _ in $(seq 1 60); do
@@ -507,8 +519,9 @@ start_guard() {
   if [[ "$(keepalive_state)" == "running" ]]; then return 0; fi
   if [[ ! -f "$WATCHDOG" ]]; then return 1; fi
   mkdir -p "$LOG_DIR" 2>/dev/null || true
-  # nohup so closing the Terminal window does not take her guard with it.
-  nohup bash "$WATCHDOG" >>"$LOG_DIR/starra-keepalive.log" 2>&1 &
+  # HUP ignored so closing the Terminal window does not take her guard with it
+  # (trap form, not nohup — macOS nohup dies under launchd, see start_ollama).
+  ( trap '' HUP; exec bash "$WATCHDOG" ) </dev/null >>"$LOG_DIR/starra-keepalive.log" 2>&1 &
   disown "$!" 2>/dev/null || true
   local i
   for i in $(seq 1 12); do
@@ -612,8 +625,8 @@ cmd_status() {
     else
       echo "● Crash guard: ON (watchdog pid $gpid) — she restarts herself within ~20s if the deck dies."
     fi
-    echo "               Covers crashes while you stay logged in. NOT a reboot: macOS blocks"
-    echo "               launchd from reading ~/Desktop, so after logging back in run \`starra\` once."
+    echo "               Covers crashes while you stay logged in, but NOT a reboot —"
+    echo "               after logging back in run \`starra\` once."
     keepalive_howto "               "
     # A shell guard being up must never HIDE a launchd agent that is loaded and
     # dying: that job respawns every 30s forever, burning CPU and filling the log

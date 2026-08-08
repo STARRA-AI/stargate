@@ -139,10 +139,20 @@ describe("private call — SOURCE-PATTERN: no hosted leg exists in this engine",
 
 describe("private call — SOURCE-PATTERN: the transcribe route's one host", () => {
   it("guards the base with the private lane's own loopback predicate", () => {
+    // From the LEAF module, not from the chat route. Same single definition —
+    // src/lib/private/loopback.ts is where it lives now, and both consumers
+    // import it there, so importing a security predicate no longer drags the
+    // whole chat route (every hosted provider, the tool fast-paths, the memory
+    // store) into this route's module graph.
     assert.match(
       ROUTE_SRC,
-      /import\s*\{\s*isLoopbackBase\s*\}\s*from\s*"@\/app\/api\/chat\/route"/,
+      /import\s*\{\s*isLoopbackBase\s*\}\s*from\s*"@\/lib\/private\/loopback"/,
       "the loopback rule must be the private lane's, imported — never a second copy",
+    );
+    assert.doesNotMatch(
+      ROUTE_SRC,
+      /import\s*\{[^}]*isLoopbackBase[^}]*\}\s*from\s*"@\/app\/api\/chat\/route"/,
+      "importing it from the chat route pulls that route's whole graph in here",
     );
     assert.match(ROUTE_SRC, /if\s*\(!isLoopbackBase\(base\)\)/);
   });

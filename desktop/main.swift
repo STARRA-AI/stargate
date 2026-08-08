@@ -5,7 +5,7 @@
 import Cocoa
 import WebKit
 
-let DECK_URL = URL(string: "http://127.0.0.1:3000/")!
+let DECK_URL = URL(string: "https://127.0.0.1:3000/")!
 
 final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNavigationDelegate, WKScriptMessageHandler {
     var window: NSWindow!
@@ -23,8 +23,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, WKUIDelegate, WKNaviga
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/bash")
         p.arguments = ["-lc",
-            "curl -sf --max-time 2 http://127.0.0.1:3000/ >/dev/null 2>&1 || " +
-            "\"$HOME/Projects/stargate/scripts/starra\" up >/dev/null 2>&1 &"]
+            "curl -skf --max-time 2 https://127.0.0.1:3000/ >/dev/null 2>&1 || " +
+            "\"$HOME/STARGATE/stargate/scripts/starra\" up >/dev/null 2>&1 &"]
         try? p.run()
     }
 

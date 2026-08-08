@@ -87,7 +87,7 @@ Never add an await, throw, or early-return to her audio path without a fallback.
 
 ## HANDOFF — VERIFIED STATE as of 2026-07-30
 
-**Repo:** `~/Desktop/STARGATE/stargate` (Next.js 15.5.20, React 19, TS, Tailwind v4)
+**Repo:** `~/STARGATE/stargate` (Next.js 15.5.20, React 19, TS, Tailwind v4)
 **Launch:** `bash scripts/starra up` → `http://127.0.0.1:3000`. Status: `scripts/starra status`.
 **Baseline when this was written:** `npx tsc --noEmit` = **0 errors**; `npm run test:v2` = **515 pass,
 0 fail**; eslint = 2 known pre-existing warnings (`no-img-element`, `no-unused-vars` in a script).

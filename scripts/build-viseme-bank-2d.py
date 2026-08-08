@@ -3,7 +3,7 @@
 build-viseme-bank-2d.py — builds the 2-D viseme bank (bank2.json + w*.png).
 
   RUN IT WITH:  python3 scripts/build-viseme-bank-2d.py
-  (from the repo root: /Users/work/Desktop/STARGATE/stargate)
+  (from the repo root: ~/STARGATE/stargate)
 
   Optional flags:
     --dry-run     measure and report coverage, write NOTHING

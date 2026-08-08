@@ -13,9 +13,12 @@ PID_FILE="$ROOT/data/whisper.pid"
 mkdir -p "$LOG_DIR" "$ROOT/data"
 
 BIN="$ROOT/vendor/whisper.cpp/build/bin/whisper-server"
-# Default model: base.en, quantized (q5_1) — per Task 2 brief. Override with
-# WHISPER_MODEL for ad-hoc comparisons (e.g. tiny.en-q5_1, also fetched by
-# bootstrap-whisper.sh); Task 4 picks the shipped default from measured RTF.
+# Default model: base.en, quantized (q5_1) — per Task 2 brief, and the shipped
+# default (measured RTF 0.246 vs tiny.en's 0.127; base.en's accuracy wins for
+# the ~1.6s it costs on a real turn). Override with WHISPER_MODEL — and note it
+# is substituted as a FULL PATH, not a short name:
+#   WHISPER_MODEL="$PWD/data/models/whisper/ggml-tiny.en-q5_1.bin" scripts/whisper-up.sh
+# (tiny.en-q5_1 is also fetched by bootstrap-whisper.sh.)
 MODEL="${WHISPER_MODEL:-$ROOT/data/models/whisper/ggml-base.en-q5_1.bin}"
 
 # Loopback + fixed port, no env override — this is the privacy boundary, not
@@ -59,7 +62,10 @@ fi
 echo "→ Starting whisper-server on ${HOST}:${PORT} (model: $(basename "$MODEL"))…"
 # Same trap-HUP detached form as scripts/starra / private-gpt-up.sh (macOS
 # nohup dies under launchd).
-( trap '' HUP; exec "$BIN" --host "$HOST" --port "$PORT" -m "$MODEL" ) </dev/null >>"$LOG" 2>&1 &
+# cd /private/var/empty: never leave the server's cwd inside TCC-shielded
+# ~/Desktop — launchd-context revivals get EPERM on getcwd/reads there (the
+# 2026-08-05 outage class; see private-gpt-up.sh). $MODEL is absolute.
+( trap '' HUP; cd /private/var/empty; exec "$BIN" --host "$HOST" --port "$PORT" -m "$MODEL" ) </dev/null >>"$LOG" 2>&1 &
 echo $! >"$PID_FILE"
 
 for _ in $(seq 1 60); do

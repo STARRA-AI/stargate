@@ -849,7 +849,7 @@ Wholesale POD (Magnific > Tapstitch branded POD > Brandboom line sheets; wholesa
 Expansion: 1) tiered memory (Letta) 2) mcp-chrome 3) self-refine 4) crewAI only if ceiling hit.
 
 ## ENVIRONMENT FACTS
-macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Users/work/Desktop/STARRA (legacy) / STARGATE PWA at /Users/work/Projects/stargate. Pipeline ~/Desktop/STARGATE/Silent Shadow Launch (quote spaces). Gumroad CLI: `gumroad products page publish [product_id] ./file.html` / `gumroad user page publish ./file.html`. Video: OpenMontage only — Higgsfield retired. YouTube research: glasp.co/youtube/[id]. Canva scratched for PDFs. Thinkific PDFs: export via download icon — screenshots capture covers only. Launchd watcher com.starra.shortswatcher.plist / 1800s.
+macOS 12, Python 3.9.6, user `work`, pip --break-system-packages. STARRA at /Users/work/Desktop/STARRA (legacy) / STARGATE PWA at /Users/work/Projects/stargate. Pipeline ~/STARGATE/silent shadow launch (quote spaces). Gumroad CLI: `gumroad products page publish [product_id] ./file.html` / `gumroad user page publish ./file.html`. Video: OpenMontage only — Higgsfield retired. YouTube research: glasp.co/youtube/[id]. Canva scratched for PDFs. Thinkific PDFs: export via download icon — screenshots capture covers only. Launchd watcher com.starra.shortswatcher.plist / 1800s.
 
 ## PRIORITY QUEUE (walk Classic through, in order)
 1. Hand STARRA_CLAUDE_CODE_HANDOFF.py to Claude Code (12 tasks, ~30min, ends "all compile clean").

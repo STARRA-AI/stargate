@@ -23,6 +23,7 @@
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
 import { existsSync, readFileSync } from "node:fs";
+import { homedir } from "node:os";
 import { join, resolve } from "node:path";
 
 const REPO = resolve(import.meta.dirname, "..");
@@ -174,9 +175,11 @@ describe("xhigh review findings — each confirmed defect stays dead", () => {
   });
 
   it("a reconnect never wipes the visible transcript", () => {
+    // Guard + clear as a block since the kimi-call work (callTurnsRef resets
+    // with the transcript, inside the same fresh-call-only branch).
     assert.match(
       read("src/lib/voice/useVoiceCall.ts"),
-      /if \(stateRef\.current !== "reconnecting"\) setTranscript\(\[\]\);/,
+      /if \(stateRef\.current !== "reconnecting"\) \{\s*setTranscript\(\[\]\);/,
     );
   });
 
@@ -229,7 +232,7 @@ describe("the locked rules actually load", () => {
   it("the avatar app's prompt stays in sync on the locked rules", () => {
     // The avatar app lives outside this repo on this machine; when present it
     // must carry the same locked markers (persona.ts's own sync rule).
-    const p = "/Users/work/Desktop/STARGATE/starra-avatar/personality/system_prompt.txt";
+    const p = join(homedir(), "STARGATE/starra-avatar/personality/system_prompt.txt");
     if (!existsSync(p)) return; // absent on other machines — nothing to check
     const txt = readFileSync(p, "utf8");
     for (const marker of [

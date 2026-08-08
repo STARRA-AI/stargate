@@ -3,7 +3,7 @@
  * build-viseme-bank.mjs — OFFLINE, one-time, ffmpeg-only, $0, no network, no GPU.
  *
  *   RUN IT WITH:   node scripts/build-viseme-bank.mjs
- *   (from the repo root: /Users/work/Desktop/STARGATE/stargate)
+ *   (from the repo root: ~/STARGATE/stargate)
  *
  * ── SUPERSEDED FOR THE LIVE PATH — READ THIS FIRST ──────────────────────────
  * This script builds the 1-D bank (bank.json + v00..v07.png) and the anchor

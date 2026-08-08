@@ -4,7 +4,8 @@ set -euo pipefail
 
 PROJ="$(cd "$(dirname "$0")/.." && pwd)"
 VOICE_DIR="$PROJ/public/brand/voice"
-CORI="$VOICE_DIR/en_GB-cori-high.onnx"
+# = PIPER_VOICE_ID (src/lib/voice/piper-speak.ts) — the tier the code picks.
+CORI="$VOICE_DIR/en_GB-cori-medium.onnx"
 JENNY="$VOICE_DIR/en_GB-jenny_dioco-medium.onnx"
 
 echo "STARGATE setup (Mac)"

@@ -18,8 +18,8 @@ format, so Claude Code can point at it.
 
 ```sh
 # no curl|bash — clone and run explicitly (Node 24 already on this machine)
-git clone https://github.com/tashfeenahmed/freellmapi ~/Desktop/STARGATE/freellmapi
-cd ~/Desktop/STARGATE/freellmapi && npm install && npm run start
+git clone https://github.com/tashfeenahmed/freellmapi ~/STARGATE/freellmapi
+cd ~/STARGATE/freellmapi && npm install && npm run start
 # dashboard comes up on http://localhost:3001
 ```
 

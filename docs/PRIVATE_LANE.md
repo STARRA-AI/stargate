@@ -24,8 +24,10 @@ short-circuits when already done. Full citations and landmines (macOS-12
 ## Up / down
 
 ```sh
-scripts/private-gpt-up.sh      # starts, binds 127.0.0.1:8080 only
+scripts/private-gpt-up.sh      # brain — starts, binds 127.0.0.1:8080 only
 scripts/private-gpt-down.sh    # stops by pid file
+scripts/whisper-up.sh          # ears — 127.0.0.1:8178, only a PRIVATE CALL needs it
+scripts/whisper-down.sh        # stops by pid file
 ```
 
 `private-gpt-up.sh` forces `--host 127.0.0.1` (the vendor's own default is
@@ -36,10 +38,14 @@ autostart. `.env.local` carries:
 
 ```
 PRIVATE_GPT_BASE=http://127.0.0.1:8080/v1
+WHISPER_BASE=http://127.0.0.1:8178
 ```
 
-read by the route at request time — no restart needed beyond Next's own env
-reload.
+both read by their routes at request time — no restart needed beyond Next's own
+env reload. Both are **server-side only** (no `NEXT_PUBLIC_` twin): they name
+the privacy boundary, so they never get baked into a client bundle. Each must
+be a numeric loopback literal or its route refuses to start — see SECURITY
+POSTURE.
 
 **The port lives in two places — keep them equal.** The script binds
 `PRIVATE_GPT_PORT` (default `8080`, `scripts/private-gpt-up.sh`), and the route
@@ -66,6 +72,164 @@ The prefix must be followed by whitespace or a colon — `privateer stories`,
 route normally. `private docs about taxes` is a chat ask, not a listing;
 only a bare `private docs` (optionally with a colon) lists.
 
+## PRIVATE CALL — her ears, her brain and her voice, all on this Mac
+
+The deck's call overlay has a two-button engine selector: **NORMAL** and
+**PRIVATE**.
+
+- **NORMAL is byte-identical to the call he has always had** — xAI realtime
+  socket, Eve's voice, Kimi brain (`CLAUDE.md`, Stack). Nothing in this project
+  changed it.
+- **PRIVATE runs the whole loop locally**: mic → whisper.cpp on
+  `127.0.0.1:8178` (ears) → the private lane above on `127.0.0.1:8080` (brain)
+  → Piper in the tab, model files served from `/brand/voice` (mouth). No xAI
+  socket is opened at all on a private call.
+
+**How to use it**
+
+1. `scripts/private-gpt-up.sh` and `scripts/whisper-up.sh` (both idempotent;
+   neither autostarts).
+2. `bash scripts/bootstrap-piper-assets.sh` once, if `public/brand/voice/` is
+   empty — her local mouth is **opt-in by asset**, and with the files absent a
+   private call refuses to open rather than opening mute.
+3. Open the call, press **PRIVATE**, then dial. The engine is **captured at
+   connect**: pressing the other button mid-call sets the *next* call's engine
+   and the note under the selector says so.
+
+**Every turn is a `private …` turn.** Whatever he says is prefixed before it
+reaches `/api/chat`, so the local-only branch is the only branch a private call
+can take. **His VOICE can only ever ASK**: a spoken line is handed to the real
+`parsePrivateCommand`, and anything that would parse as a *subcommand* is
+quoted first — so saying "ingest the quarterly report" asks about it, it does
+not read a file off the disk (`src/lib/voice/usePrivateCall.ts`,
+`privateAskBody`). Typed `private ingest <path>` on the deck still works and is
+still deck-local only.
+
+### Measured latency — TWO REGIMES, and the difference is retrieval
+
+All numbers on this Mac (2-core Intel, 8 GB), warm, model resident.
+
+| | brain, measured | when |
+|---|---|---|
+| **fast path** (no documents indexed) | **2.8 – 2.9 s** | empty collection |
+| **RAG path** (documents indexed) | **19 – 30 s** | anything ingested |
+
+Same ask, same service, same model, 2026-08-05, direct to
+`127.0.0.1:8080/v1/messages`: no-tools 2.92 s / 2.77 s warm (14.4 s first
+request); the forced-`semantic_search` body 30.18 s then 19.18 s. The
+dev-server log names the cost exactly — `prompt eval time = 9994.13 ms /
+169 tokens` against `eval time = 1034.83 ms / 7 tokens`: **~90 % of her think
+time is evaluating a retrieval-stuffed prompt, not writing the answer.**
+
+So the route only pays for retrieval when there is something to retrieve. It
+probes the artifacts list (one loopback GET, **30 ms measured**, memoized for
+60 s, so it is not per-turn overhead), and with an **empty** collection sends a
+plain completion — no `tools`, no `tool_choice`, no `tool_context`. With
+**anything ingested**, behaviour is exactly what it was. A `private ingest`
+drops the memo immediately, so a fresh ingest is never ignored. If the probe
+cannot answer (service down, non-200, unparseable body) it assumes documents
+exist and runs RAG — the fast path is an optimisation, never a guess.
+
+End-to-end per call turn, with the default `en_GB-cori-medium` voice:
+
+```
+  ears (whisper, deck route)     1.6 s
+  brain — no documents           2.8 – 4.5 s      <- fast path
+  brain — documents indexed      17 – 24 s        <- RAG, prompt-eval bound
+  first sentence (Piper medium)  ~1.8 s           <- RTF 0.39, faster than speech
+  ──────────────────────────────────────────
+  TOTAL, empty collection       ~6 – 8 s
+  TOTAL, with documents        ~20 – 27 s
+```
+
+The status line still says **"PRIVATE — local brain, slower"** whenever a turn
+is over the 5 000 ms slow budget, and treats an unmeasured turn as slow.
+
+### Her local voice: Cori, medium tier
+
+`PIPER_VOICE_ID` (`src/lib/voice/piper-speak.ts`) is **`en_GB-cori-medium`**.
+Same speaker as `high` — Book 1 §7's one consistent voice is intact — at a
+faster tier, because `high` is not usable live on this machine: measured in the
+real browser, `high` synthesises at **RTF 3.14 / 2.78** (three seconds of CPU
+per second of speech) against `medium`'s **0.39 / 0.36**, with
+`TtsSession.create` 7 783 ms → 3 753 ms and the OPFS seed 2 369 ms → 1 387 ms.
+That is ~13 s off every spoken turn.
+
+`high` is not gone. Fetch it and select it:
+
+```sh
+bash scripts/bootstrap-piper-assets.sh en_GB-cori-high
+# then, in the deck's browser console (takes effect next page load):
+#   localStorage.setItem("stargate.localVoice", "en_GB-cori-high")
+# or permanently, in .env.local:
+#   NEXT_PUBLIC_STARRA_LOCAL_VOICE=en_GB-cori-high
+```
+
+## SECURITY POSTURE — what is actually enforced
+
+Each line verified against the source named, on 2026-08-05.
+
+- **The deck is password-gated, and `/api/*` is inside the gate.**
+  `src/middleware.ts` matches everything except static assets, returns a clean
+  `401` for any unauthenticated `/api/` path (`middleware.ts:72-73`) and
+  redirects pages to `/login`. It **fails CLOSED**: with no `STARRA_PASSWORD`
+  configured, a non-local request is refused with `503 deck sealed`
+  (`middleware.ts:53-60`) rather than waved through. `STARRA_PASSWORD` **is
+  set** in `.env.local` on this machine (line 31, value not read here). Only
+  `/login`, `/api/auth`, and `/starra-ca.crt` are public (`middleware.ts:8`).
+  Every authed response also carries `X-Content-Type-Options: nosniff`,
+  `X-Frame-Options: SAMEORIGIN`, `Referrer-Policy: no-referrer`, and a
+  `Permissions-Policy` with `camera=()`.
+- **Both local services bind loopback only, overriding a vendor default that
+  does not.** `scripts/private-gpt-up.sh:66-70` pins `HOST="127.0.0.1"` and
+  serves with `--host "$HOST"` (line 90) — the vendor's own default is
+  `0.0.0.0` **with auth disabled**, which on Wi-Fi would publish an
+  unauthenticated document/RAG API to the whole LAN. `scripts/whisper-up.sh:26-27`
+  hardcodes `127.0.0.1:8178` with **no env override at all** ("this is the
+  privacy boundary, not a tunable"). Verified live with
+  `lsof -nP -iTCP -sTCP:LISTEN`: `127.0.0.1:8080` (private-gpt),
+  `127.0.0.1:8178` (whisper), `127.0.0.1:11434` (Ollama) — no `0.0.0.0`, no `*`.
+- **The egress gate is numeric-only and shared by both consumers.**
+  `isLoopbackBase` lives in `src/lib/private/loopback.ts` — ONE definition,
+  imported by the chat route's private branch and by
+  `/api/private-call/transcribe`. It accepts dotted `127.x` and `::1` and
+  refuses everything else, **`localhost` included**, because a name is only
+  what a resolver says it is and a prefix test on a name waves through
+  `127.0.0.1.evil.example.com`. A base that fails it does not fall back — the
+  lane refuses to start and says so. Pinned against a table of hostile inputs
+  in `tests/private-lane.test.ts`.
+- **`private ingest` is deck-local only.** It reads any absolute path on this
+  Mac server-side, so a request that arrived over the LAN/phone is refused
+  before the read, through the same shared `isLocalRequest` helper the shell
+  primitive uses (`src/app/api/chat/route.ts`, the ingest arm). Ask and `docs`
+  stay usable from the phone: they expose answers, not new file reads.
+- **The transcribe route is bounded and typed before it costs anything.** It
+  refuses a body under 46 bytes, over `30 s × 16 kHz × 2 B` (`MAX_WAV_BYTES`),
+  or that does not start with `RIFF….WAVE` — the magic check runs before any
+  work, because a `no-cors` cross-origin POST is a request the browser will
+  still send even though it cannot read the reply. It makes exactly ONE
+  outbound request, to the loopback-guarded base, with no fallback, and records
+  nothing.
+- **No CDN in her local mouth.** `@mintplex-labs/piper-tts-web` defaults its
+  WASM to cdnjs/jsdelivr and its models to huggingface; `LOCAL_WASM_PATHS`
+  (`src/lib/voice/local-voice.ts:396-398`) overrides both with same-origin
+  paths under `/brand/voice`, and the normal-lane Piper session is created with
+  the same local paths so the library's process-wide singleton can never be
+  armed with CDN defaults for a private turn to inherit. Pinned by
+  `tests/local-voice.test.ts`.
+- **Speech cannot become a command.** On a private call the spoken line is run
+  through the real `parsePrivateCommand`; anything that is not `kind:"chat"` is
+  quoted, so no utterance can reach the filesystem-reading `ingest` arm
+  (`src/lib/voice/usePrivateCall.ts`, `privateAskBody`).
+
+**The limits this posture does NOT cover** — all documented in full under
+*Honest limits* below: a private ask **spoken on a NORMAL call** was already
+heard by xAI; a private ask **spoken at the deck** (wake word / open mic) was
+already heard by Google's server-side recognizer; and with
+`STARRA_CALL_BRAIN=grok` set, typed private asks on a call are not protected at
+all. A **spoken ask on a PRIVATE call is safe** — those ears are whisper.cpp on
+this machine.
+
 ## Privacy guarantees
 
 - **No external network call anywhere in the branch.** The private branch is
@@ -84,8 +248,9 @@ only a bare `private docs` (optionally with a colon) lists.
   `127.attacker.example.com` are ordinary DNS-resolvable hosts that such a test
   would wave through. Use the literal IP, which is what the default,
   `.env.local`, and `private-gpt-up.sh` all use anyway.
-- **Replies never reach a hosted voice. The deck speaks them with her LOCAL
-  mouth; the live call is still silent text.** Both clients read the SSE
+- **Replies never reach a hosted voice. Both the deck and a PRIVATE call speak
+  them with her LOCAL mouth; a private turn typed into a NORMAL call stays
+  silent text.** Both clients read the SSE
   stream's first frame, `data: {"private": true}`, before any text arrives, and
   neither hands that turn to xAI: the deck never loads `@/lib/voice/speak` (so
   `/api/tts`, which posts text to xAI for synthesis, is never called), and the
@@ -97,10 +262,12 @@ only a bare `private docs` (optionally with a colon) lists.
   defaults for its WASM and its models are overridden there, and
   `tests/local-voice.test.ts` pins that). Local voice is OPT-IN BY ASSET: with
   those files absent — the state of a fresh checkout — she stays silent text
-  exactly as before, never a fallback that phones out. Set
+  exactly as before, never a fallback that phones out (a PRIVATE call refuses
+  to open at all in that state, with the command that fixes it). Set
   `stargate.localVoice` in localStorage (or `NEXT_PUBLIC_STARRA_LOCAL_VOICE`)
-  to pick a different Piper voice; it takes effect on the next page load. The
-  reply always renders as text in both UIs.
+  to pick a different Piper voice — the default is `en_GB-cori-medium`; it
+  takes effect on the next page load. The reply always renders as text in both
+  UIs.
 - **Private turns never enter the shared memory store, later hosted
   prompts, or the call's context.** No `recordExchange`, no
   `extractFactsFromExchange`, for any private kind — on either client, on
@@ -128,13 +295,16 @@ only a bare `private docs` (optionally with a colon) lists.
 
 ## Honest limits
 
-- **A spoken private ask on a live call has already been heard by xAI's
-  transcription.** That's inherent to being on an xAI-powered call, not a
-  bug in this lane — xAI hears everything you say to start any turn, private
-  or not, in order to transcribe it. The gate stops the *reply* and every
-  stored copy of the exchange, but it cannot un-hear a sentence xAI's ears
-  already transcribed. **Type `private …` on a call instead of speaking it**
-  if the ask itself must never reach xAI.
+- **A spoken ask on a PRIVATE call is SAFE — this limit is about the NORMAL
+  call.** On a **private** call the ears are whisper.cpp on `127.0.0.1:8178`
+  and the audio never leaves the Mac, so speaking is as private as typing.
+  On a **NORMAL** call it is not: **a spoken private ask has already been heard
+  by xAI's transcription.** That's inherent to being on an xAI-powered call,
+  not a bug in this lane — xAI hears everything you say to start any turn,
+  private or not, in order to transcribe it. The gate stops the *reply* and
+  every stored copy of the exchange, but it cannot un-hear a sentence xAI's
+  ears already transcribed. On a normal call, **type `private …` instead of
+  speaking it** — or press PRIVATE and speak freely.
 - **A private ask SPOKEN at the deck has already been heard by Google.** Not
   just on a call — the deck's own wake-word and open-mic paths run through
   Chrome's `SpeechRecognition` (`src/lib/voice/useVoiceLoop.ts`, `getSR()`),
@@ -151,14 +321,21 @@ only a bare `private docs` (optionally with a colon) lists.
   reasoning on the realtime socket, ungated by this lane by design — there is
   no local turn to intercept because xAI generates the reply itself. Do not
   rely on the private lane while that rollback is active.
-- **RAG is forced, not optional, on every `private <ask>`.** `qwen2.5:3b`
-  will not reliably self-select the `semantic_search` tool on its own (it
-  asks a clarifying question instead), so the route always sends
-  `tool_choice: {"type":"tool","name":"semantic_search"}` alongside a
-  matching `tools` entry (the vendor server rejects `tool_context` without
-  one). This is load-bearing, not an optimization — removing it silently
-  turns every private chat into an un-grounded guess. See
-  `src/app/api/chat/route.ts`, `streamPrivateChat`.
+- **RAG is forced whenever it runs — but it only runs when documents exist.**
+  `qwen2.5:3b` will not reliably self-select the `semantic_search` tool on its
+  own (it asks a clarifying question instead), so when retrieval is on the
+  route always sends `tool_choice: {"type":"tool","name":"semantic_search"}`
+  alongside a matching `tools` entry (the vendor server rejects `tool_context`
+  without one). That forcing is load-bearing, not an optimization — removing
+  it would silently turn a grounded private chat into an un-grounded guess.
+  What IS conditional is whether retrieval happens at all: against an **empty**
+  collection the route sends a plain completion (all three tool keys absent
+  together) and the system prompt drops the "answer from the retrieved
+  documents" paragraph, because instructing a model to cite documents that do
+  not exist invites exactly the invented citation the paragraph exists to
+  prevent. See `src/app/api/chat/route.ts` — `privateDocsPresent`,
+  `privateChatRequestBody`, `streamPrivateChat` — and the two-regime latency
+  table above. Both regimes are pinned in `tests/private-lane.test.ts`.
 - **Ingest replies report documents indexed, not chunks.** The vendor's
   ingest response (`IngestResponse.data`) carries one entry per *document*,
   with no chunk/node count anywhere in the payload — a doc that indexes as 5

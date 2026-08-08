@@ -6,6 +6,9 @@
  * useVoiceCall and is exercised live; these pin the logic it stands on.
  */
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { describe, it } from "node:test";
 import {
   buildCallBrainMessages,
@@ -16,6 +19,16 @@ import {
   kimiEndpointStep,
   type KimiEndpointerState,
 } from "../src/lib/voice/useVoiceCall";
+
+const REPO = join(dirname(fileURLToPath(import.meta.url)), "..");
+const realtimeRoute = readFileSync(
+  join(REPO, "src/app/api/realtime/route.ts"),
+  "utf8",
+);
+const voiceCallSrc = readFileSync(
+  join(REPO, "src/lib/voice/useVoiceCall.ts"),
+  "utf8",
+);
 
 function run(
   s: KimiEndpointerState,
@@ -116,5 +129,40 @@ describe("call brain messages — the context window", () => {
   it("ignores a blank latest — an empty prompt is not a turn", () => {
     const msgs = buildCallBrainMessages([turn(1)], "   ");
     assert.equal(msgs.length, 1);
+  });
+});
+
+/**
+ * PIN-DOWN — /api/realtime's `callBrain` field, live-probed 2026-08-07 against
+ * the running deck (scripts/debug/call-probe.mjs, probe 1): with
+ * STARRA_CALL_BRAIN unset in .env.local, the route answered
+ * `callBrain: "kimi"`. These assertions pin the exact source logic behind
+ * that observed value and its one-line rollback so a future edit to
+ * src/app/api/realtime/route.ts (owned by the executive, not this file)
+ * cannot silently flip the default without failing a test here.
+ */
+describe("realtime route — callBrain default and rollback (source-pinned)", () => {
+  it("defaults callBrain to kimi when STARRA_CALL_BRAIN is unset — matches the live probe", () => {
+    assert.match(
+      realtimeRoute,
+      /callBrain:\s*\n\s*\(process\.env\.STARRA_CALL_BRAIN \|\| "kimi"\)\.toLowerCase\(\) === "grok"\s*\n\s*\? "grok"\s*\n\s*: "kimi",/,
+      "callBrain must fall back to \"kimi\" — the literal value the live deck returned",
+    );
+  });
+
+  it("STARRA_CALL_BRAIN=grok is the only documented rollback to the bundled xAI brain", () => {
+    // Any other value (including case variants) must still resolve to "kimi" —
+    // the ternary compares against the lowercased env var, not a truthy check.
+    assert.match(realtimeRoute, /\.toLowerCase\(\) === "grok"/);
+  });
+
+  it("client seeds callBrainRef from the realtime response, defaulting to grok only until that response lands", () => {
+    // useVoiceCall.ts:2408 — the moment the field the probe observed actually
+    // takes effect on the call client. A non-"grok" value (e.g. the probed
+    // "kimi") must resolve to "kimi", never pass the string through raw.
+    assert.match(
+      voiceCallSrc,
+      /callBrainRef\.current = data\.callBrain === "grok" \? "grok" : "kimi";/,
+    );
   });
 });

@@ -30,6 +30,7 @@ import {
   takeSentences,
   toSpeakableSentences,
 } from "../src/lib/voice/local-voice";
+import { PIPER_VOICE_ID } from "../src/lib/voice/piper-speak";
 
 describe("splitSentences — the plain cases", () => {
   it("returns nothing for empty or blank text", () => {
@@ -592,5 +593,57 @@ describe("stopAllSpeech — barge-in reaches the local queue", () => {
       "stopAllSpeech now includes stopLocalStream — using it here kills the call's own utterance",
     );
     assert.match(block, /return "none";/);
+  });
+});
+
+/* ───────────────── TASK 6 — the default tier is the one she can speak in ─────
+ * Same speaker either way — `medium` and `high` are both Cori, so Book 1 §7's
+ * "one consistent voice" is untouched. What changed is the TIER, and it changed
+ * on a measurement, not a preference (.superpowers/sdd/p2-task-4-report.md §7,
+ * real browser, same page, same code path):
+ *
+ *   RTF (wall / audio produced)   high 3.14 / 2.78    medium 0.39 / 0.36
+ *   TtsSession.create             high 7 783 ms       medium 3 753 ms
+ *   OPFS seed                     high 2 369 ms       medium 1 387 ms
+ *
+ * RTF > 1 means she takes longer to say a sentence than the sentence lasts. On
+ * a live private call that is not a voice, it is a wait — so the default is the
+ * tier that runs faster than speech, and `high` stays one override away.
+ * ──────────────────────────────────────────────────────────────────────────── */
+describe("local voice — the default Piper voice", () => {
+  it("is Cori at the medium tier", () => {
+    assert.equal(PIPER_VOICE_ID, "en_GB-cori-medium");
+  });
+
+  it("is still CORI — the tier moved, the voice did not", () => {
+    assert.match(PIPER_VOICE_ID, /^en_GB-cori-/);
+  });
+
+  it("is a shape getLocalVoiceId would itself accept", () => {
+    // The override validator (local-voice.ts) refuses ids it cannot resolve, so
+    // a default it would reject is a default that could not be re-selected.
+    assert.match(
+      PIPER_VOICE_ID,
+      /^[a-z]{2}_[A-Z]{2}-[a-z0-9_]+-(x_low|low|medium|high)$/,
+    );
+  });
+
+  it("keeps the fetch script and the code pointed at the same file", async () => {
+    // A default the bootstrap script does not fetch is a silent mouth on a
+    // fresh checkout: localAssetsAvailable() HEAD-checks THIS id's files.
+    const { readFile } = await import("node:fs/promises");
+    const sh = await readFile(
+      new URL("../scripts/bootstrap-piper-assets.sh", import.meta.url),
+      "utf8",
+    );
+    assert.match(sh, new RegExp(`VOICE_ID="\\$\\{1:-${PIPER_VOICE_ID}\\}"`));
+    const py = await readFile(
+      new URL("../scripts/download_voice.py", import.meta.url),
+      "utf8",
+    );
+    assert.ok(
+      py.includes(`"${PIPER_VOICE_ID}.onnx"`),
+      "scripts/download_voice.py must fetch the voice the code actually loads",
+    );
   });
 });

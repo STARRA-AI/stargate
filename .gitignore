@@ -93,3 +93,9 @@ certs/
 
 # Starra call service: cached copy of her canon (source of truth is src/lib/persona.ts)
 .env.local.bak.*
+vendor/
+
+# starra-loop division reports — run scratch, not source
+.agents/
+# per-machine Claude Code permissions, not shared config
+.claude/settings.local.json

@@ -130,6 +130,7 @@ describe("hosted.ts — supportsPenalties()", () => {
     for (const slug of [
       "moonshotai/kimi-k2-instruct-0905",
       "openai/gpt-oss-120b",
+      "llama-3.3-70b-versatile", // pinned on the kimi lane since 2026-08-06
       "anything-at-all",
     ]) {
       assert.equal(supportsPenalties("kimi", slug), false, slug);

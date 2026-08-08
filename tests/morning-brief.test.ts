@@ -62,7 +62,12 @@ describe("the call carries the brief, on the source", () => {
   });
 
   it("the brief rides session.update instructions alongside the digest", () => {
-    assert.match(src, /sessionUpdate\(memoryDigestRef\.current, briefRef\.current\)/);
+    // Third arg since the kimi-call work: the same update also selects the
+    // call's turn-detection mode (see CallBrain in useVoiceCall.ts).
+    assert.match(
+      src,
+      /sessionUpdate\(memoryDigestRef\.current, briefRef\.current, callBrainRef\.current\)/,
+    );
   });
 
   it("brief fetch is fail-open — a missing brief still makes a normal call", () => {

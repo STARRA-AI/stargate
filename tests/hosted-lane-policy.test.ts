@@ -89,3 +89,45 @@ describe("the meter is fed from real counts", () => {
     assert.match(src, /recordZdrHeader\(opts\.provider, res\.headers\.get\("x-zero-data-retention"\)\)/);
   });
 });
+
+/**
+ * PIN-DOWN — the callVoice branch, live-probed 2026-08-07
+ * (scripts/debug/call-probe.mjs, probes 2 and 3): POST /api/chat with
+ * callVoice:true returned 200 with a spoken-style reply in ~2.2-2.5s, and
+ * data/memory.json was byte-for-byte unchanged across those turns. These
+ * assertions pin the exact source facts behind both observations.
+ */
+describe("callVoice branch — reaches the same grok-4.5 lane, never writes memory", () => {
+  it("the grok lane is gated on tier.provider, not on callVoice — a call turn takes the same brain as a normal turn", () => {
+    assert.match(
+      route,
+      /const grokLane =\s*\n\s*tier\.provider === "grok" &&/,
+      "INTERFACE INVARIANT #2: callVoice:true must reach grok-4.5 via the same grokLane branch a normal turn uses",
+    );
+  });
+
+  it("the grokLane branch calls streamHosted with provider: \"grok\" — this is what answered the probed calls", () => {
+    const grokBlock = route.slice(
+      route.indexOf("} else if (grokLane)"),
+      route.indexOf("} else if (grokLane)") + 800,
+    );
+    assert.match(grokBlock, /provider: "grok"/);
+    assert.match(grokBlock, /await streamHosted\(/);
+  });
+
+  it("CALL_DELIVERY_NOTE (spoken-reply style) is appended only when callVoice is true", () => {
+    assert.match(route, /callVoice \? CALL_DELIVERY_NOTE : "",/);
+  });
+
+  it("a callVoice turn skips recordExchange — matches the probed memory.json being unchanged", () => {
+    assert.match(
+      route,
+      /if \(!callVoice\) \{\s*\n\s*await recordExchange\("user", lastUser\);/,
+      "the live probe found data/memory.json byte-identical across callVoice:true turns; this is why",
+    );
+    assert.match(
+      route,
+      /if \(!callVoice\) \{\s*\n\s*await recordExchange\("assistant", stripThinkTags\(full\)\);/,
+    );
+  });
+});

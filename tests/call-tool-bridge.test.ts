@@ -101,11 +101,32 @@ describe("useVoiceCall <-> tool fast-path bridge", () => {
       "injectLiveTurn must gate transcript+memory writes on the log option",
     );
     // setTranscript/recordCallTurn for the injected user line exist in exactly
-    // one place — inside that gate.
+    // two places — the grok injector (injectLiveTurn) and the kimi brain turn
+    // (runKimiTurn) — and BOTH sit inside the same `log` gate contract, so a
+    // tool payload (log: false) can never be recorded as an operator turn on
+    // either brain.
+    // `t[,)]` — runKimiTurn now passes a third `supersede` argument (the
+    // one-row-per-utterance guard, 2026-08-06), injectLiveTurn still passes
+    // two. Both are still the same two sites, both still inside the log gate.
     assert.equal(
-      (source.match(/recordCallTurn\("user",\s*t\)/g) ?? []).length,
-      1,
-      "only the gated injector may record an injected line as a user turn",
+      (source.match(/recordCallTurn\("user",\s*t\s*[,)]/g) ?? []).length,
+      2,
+      "only the two log-gated paths may record an injected line as a user turn",
+    );
+    // Scoped rather than character-budgeted: the log gate's body grew when the
+    // one-row-per-utterance supersede landed (2026-08-06), and a {0,400} window
+    // would need re-tuning on every change. The invariant is positional — the
+    // record must live INSIDE runKimiTurn's log gate, wherever the gate ends.
+    const kimi = source.slice(
+      source.indexOf("const runKimiTurn = useCallback"),
+      source.indexOf("runKimiTurnRef.current = runKimiTurn"),
+    );
+    const logGate = kimi.indexOf("if (log) {");
+    const record = kimi.indexOf('recordCallTurn("user", t');
+    assert.ok(logGate >= 0, "runKimiTurn must have a log gate");
+    assert.ok(
+      record > logGate,
+      "runKimiTurn's user record must sit inside its own log gate",
     );
   });
 

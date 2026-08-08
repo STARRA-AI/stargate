@@ -87,6 +87,24 @@ describe("xAI realtime model pin", () => {
       "grok-voice-think-fast-1.0 is $0.05/min; if the pin moves to 2.0 this must become 0.08",
     );
   });
+
+  /**
+   * route.ts:78 — `process.env.XAI_REALTIME_MODEL || XAI_REALTIME_DEFAULT_MODEL`.
+   * The default constant above is only what ships when the env override is
+   * unset; this pins the precedence itself so a future edit can't silently
+   * drop the override or (worse) invert it to prefer the constant.
+   */
+  it("XAI_REALTIME_MODEL, when set, outranks the pinned default — pins the override precedence, not just the fallback", () => {
+    const route = readFileSync(
+      path.join(SRC, "app/api/realtime/route.ts"),
+      "utf8",
+    );
+    assert.match(
+      route,
+      /const model = process\.env\.XAI_REALTIME_MODEL \|\| XAI_REALTIME_DEFAULT_MODEL;/,
+      "model selection must read the env override first, falling back to the pinned default",
+    );
+  });
 });
 
 /**

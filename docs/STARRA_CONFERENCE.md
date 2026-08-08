@@ -10,7 +10,7 @@
 - Commit to `main` when a slice is proven. No force-push. Do not push without operator go.
 - Read this board before starting; claim locks for shared surfaces; append a STATUS block when you finish or block.
 - Do NOT restart Ollama or the Next dev server unless you hold the RUNTIME seat — the stack is fragile under 8GB RAM (see Risks).
-- Do not modify `~/Desktop/STARGATE/web/*` — port patterns into this PWA only.
+- Do not modify `~/STARGATE/web/*` — port patterns into this PWA only.
 
 ## File lock (claim / release)
 | Resource | Holder | Since |

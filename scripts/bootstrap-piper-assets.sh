@@ -24,17 +24,19 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$ROOT"
 
-# The voice to fetch. Defaults to the locked one (PIPER_VOICE_ID,
-# src/lib/voice/piper-speak.ts:6). An ARGUMENT fetches an ADDITIONAL voice
-# alongside it rather than replacing it — local-voice.ts already ships the
-# operator override this feeds (LOCAL_VOICE_KEY / NEXT_PUBLIC_STARRA_LOCAL_VOICE,
-# local-voice.ts:337-371), and the reason it matters is measured, not
-# theoretical: `high` synthesises at roughly 3x SLOWER than real time on this
-# Intel Mac (see .superpowers/sdd/p2-task-4-report.md). `en_GB-cori-medium` is
-# the SAME voice at a lower quality tier — the one lever that shortens her
-# time-to-first-word without changing who she sounds like.
-#   bash scripts/bootstrap-piper-assets.sh en_GB-cori-medium
-VOICE_ID="${1:-en_GB-cori-high}"
+# The voice to fetch. Defaults to the one the code picks (PIPER_VOICE_ID,
+# src/lib/voice/piper-speak.ts). That default is `en_GB-cori-medium`, and the
+# reason is measured, not theoretical: `high` synthesises at RTF 3.14/2.78 on
+# this Intel Mac — three seconds of CPU per second of speech, which is a wait,
+# not a voice — while `medium` runs 0.39/0.36, faster than real time, from the
+# SAME speaker (.superpowers/sdd/p2-task-4-report.md §7).
+#
+# An ARGUMENT fetches an ADDITIONAL voice alongside the default rather than
+# replacing it — local-voice.ts already ships the operator override this feeds
+# (LOCAL_VOICE_KEY / NEXT_PUBLIC_STARRA_LOCAL_VOICE, local-voice.ts:337-371),
+# so `high` stays one setting away:
+#   bash scripts/bootstrap-piper-assets.sh en_GB-cori-high
+VOICE_ID="${1:-en_GB-cori-medium}"
 # The paths below are a CONTRACT with the code, not preferences: VOICE_DIR is
 # PIPER_VOICE_BASE (src/lib/voice/piper-speak.ts:7) and the two wasm paths are
 # LOCAL_WASM_PATHS (src/lib/voice/local-voice.ts:394-398). Move one and her

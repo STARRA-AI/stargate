@@ -87,7 +87,20 @@ fi
 
 echo "→ Starting private-gpt on ${HOST}:${PORT} (Ollama-only: ${OPENAI_API_BASE})…"
 # Same trap-HUP detached form as scripts/starra (macOS nohup dies under launchd).
-( trap '' HUP; exec private-gpt serve --host "$HOST" --port "$PORT" ) </dev/null >>"$LOG" 2>&1 &
+# cd "$HOME" before exec: this script cd's into the repo (under TCC-shielded
+# ~/Desktop) and the server inherits that cwd; in a launchd-context lifetime
+# getcwd() then returns EPERM and nltk's import hook (Path.cwd) kills every
+# request with "Permission Error" (measured 2026-08-05, private lane outage).
+# All PGPT_* paths above are absolute, so nothing else reads the cwd.
+# PYTHONSAFEPATH: keep the cwd OFF sys.path entirely — belt to the hook's
+# suspenders (nltk inisec.py, verified byte-identical to the 3.10.1 wheel).
+# The cwd must ALSO not be an ANCESTOR of any python tree: the hook blocks
+# any nltk-ancestored import whose file lives INSIDE the cwd (subdirs too),
+# and uv's python+stdlib live under ~/.local — so $HOME poisons the stdlib
+# ("Blocked import of optparse", measured 2026-08-05). /private/var/empty is
+# empty, unshielded, and ancestor to nothing.
+export PYTHONSAFEPATH=1
+( trap '' HUP; cd /private/var/empty; exec private-gpt serve --host "$HOST" --port "$PORT" ) </dev/null >>"$LOG" 2>&1 &
 echo $! >"$PID_FILE"
 
 for _ in $(seq 1 60); do
