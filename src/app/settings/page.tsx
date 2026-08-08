@@ -70,12 +70,12 @@ function LlmStatus() {
         ? "is-warn"
         : "is-ok";
   const label = status.startsWith("◆")
-    ? "◆ Link degraded"
+    ? "Link degraded"
     : status === "CHECKING LINK"
-      ? "○ Checking link"
+      ? "Checking link"
       : status.includes("NO KEY")
-        ? "◆ Lane needs a key"
-        : "● Brain online";
+        ? "Lane needs a key"
+        : "Brain online";
 
   return (
     <div className="deck-stack">

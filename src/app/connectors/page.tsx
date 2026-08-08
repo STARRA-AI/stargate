@@ -29,10 +29,10 @@ export default function ConnectorsPage() {
                   }`}
                 >
                   {c.status === "connected"
-                    ? "● connected"
+                    ? "connected"
                     : c.status === "error"
-                      ? "◆ error — reauth"
-                      : "○ available"}
+                      ? "error — reauth"
+                      : "available"}
                 </span>
               </div>
               <button
