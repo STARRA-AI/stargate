@@ -10,9 +10,13 @@
   --danger: #ff3d81;
   --ok: #8b5cf6;
   --warn: #ffd166;
-  --border: color-mix(in oklab, var(--purple) 35%, transparent);
-  --border-soft: color-mix(in oklab, var(--purple) 18%, transparent);
-  --panel: color-mix(in oklab, var(--void-2) 88%, transparent);
+  /* Shared surface tokens — this :root is their SINGLE SOURCE OF TRUTH.
+     deck.css must not redeclare them: it loads only on `/`, so a second copy
+     there silently splits the deck from the seven ScreenShell screens.
+     Guarded by tests/deck-design-system.test.ts. */
+  --border: color-mix(in oklab, var(--purple) 34%, transparent);
+  --border-soft: color-mix(in oklab, var(--purple) 16%, transparent);
+  --panel: color-mix(in oklab, var(--void-2) 82%, transparent);
   --font-display: var(--font-orbitron), sans-serif;
   --font-body: var(--font-rajdhani), sans-serif;
   --font-mono: var(--font-jetbrains), monospace;

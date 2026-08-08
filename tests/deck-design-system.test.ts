@@ -99,6 +99,35 @@ describe("deck primitives — .panel-etch is untouched", () => {
   });
 });
 
+describe("shared tokens have exactly one home", () => {
+  /** Declarations inside the `:root`-ish block at the top of a stylesheet. */
+  const rootTokens = (css: string) =>
+    new Map(
+      [...(/[^{}]*:root[^{}]*\{([^}]*)\}/.exec(css)?.[1] ?? "").matchAll(/(--[\w-]+):\s*([^;]+);/g)]
+        .map((m) => [m[1], m[2].trim()] as const),
+    );
+
+  it("no shared token is declared in both stylesheets", () => {
+    const g = rootTokens(globals);
+    const d = rootTokens(deck);
+    const clashes = [...g.keys()].filter((t) => d.has(t));
+    assert.deepEqual(
+      clashes,
+      [],
+      clashes.map((t) => `${t} is declared twice: globals.css "${g.get(t)}" vs deck.css "${d.get(t)}"`).join("; "),
+    );
+  });
+
+  it("the deck's locked surface values live in globals.css", () => {
+    // 82/34/16, not 88/35/18: these are what Classic's home screen already
+    // renders, and home is his daily screen — so the seven back screens move to
+    // match it, never the other way round.
+    assert.ok(globals.includes("--panel: color-mix(in oklab, var(--void-2) 82%, transparent)"));
+    assert.ok(globals.includes("--border: color-mix(in oklab, var(--purple) 34%, transparent)"));
+    assert.ok(globals.includes("--border-soft: color-mix(in oklab, var(--purple) 16%, transparent)"));
+  });
+});
+
 describe("deck.css scope is load-bearing", () => {
   it("still opens with `#stage-wrap, :root` — re-scoping it repaints the Bridge", () => {
     assert.ok(

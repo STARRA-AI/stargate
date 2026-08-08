@@ -1,9 +1,6 @@
 #stage-wrap, :root {
   --bg: var(--void);
-  --panel: color-mix(in oklab, var(--void-2) 82%, transparent);
   --panel-inner: color-mix(in oklab, var(--void-2) 68%, transparent);
-  --border: color-mix(in oklab, var(--purple) 34%, transparent);
-  --border-soft: color-mix(in oklab, var(--purple) 16%, transparent);
   --accent: var(--purple);
   --accent-glow: var(--magenta);
   --text: var(--chrome);
@@ -11,7 +8,6 @@
   --text-faint: color-mix(in oklab, var(--star) 55%, transparent);
   --good: var(--ok);
   --bad: var(--danger);
-  --warn: #ffd166;
   --mono: var(--font-mono), 'JetBrains Mono', monospace;
   --display: var(--font-display), 'Orbitron', sans-serif;
   --body: var(--font-body), 'Rajdhani', sans-serif;
