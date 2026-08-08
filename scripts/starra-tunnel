@@ -1,0 +1,47 @@
+#!/usr/bin/env bash
+# Keeps the public tunnel to the deck alive, and records the current URL where
+# both Classic and Claude can read it without asking each other.
+#
+# Why this exists: quick tunnels mint a NEW hostname every start, and each time
+# it changes, all four of Starra's voice-agent tools in the xAI console point at
+# a dead host. She then tells him "the recall endpoint's failing to connect,"
+# which is true and useless. Keeping one process alive keeps one hostname alive.
+#
+#   scripts/starra-tunnel start|stop|status|url
+#
+# The URL still changes if the process dies. On restart this writes the new one
+# to CURRENT_URL_FILE and logs it, so finding it is `scripts/starra-tunnel url`
+# instead of a conversation.
+
+set -uo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+URL_FILE="$REPO/data/tunnel-url.txt"
+LOG="$REPO/data/tunnel.log"
+PORT="${STARRA_PORT:-3000}"
+
+current_pid() { pgrep -f "cloudflared tunnel --url http://localhost:$PORT" | head -1; }
+
+start() {
+  if [ -n "$(current_pid)" ]; then echo "already running: $(cat "$URL_FILE" 2>/dev/null)"; return 0; fi
+  mkdir -p "$(dirname "$LOG")"
+  : > "$LOG"
+  nohup cloudflared tunnel --url "http://localhost:$PORT" >> "$LOG" 2>&1 &
+  for _ in $(seq 1 40); do
+    url=$(grep -oE "https://[a-z0-9-]+\.trycloudflare\.com" "$LOG" | head -1)
+    [ -n "$url" ] && { echo "$url" > "$URL_FILE"; echo "$url"; return 0; }
+    sleep 1
+  done
+  echo "tunnel did not report a URL within 40s — see $LOG" >&2
+  return 1
+}
+
+case "${1:-status}" in
+  start)  start ;;
+  stop)   pid=$(current_pid); [ -n "$pid" ] && kill "$pid" && echo "stopped" || echo "not running" ;;
+  url)    cat "$URL_FILE" 2>/dev/null || { echo "no URL recorded — run: scripts/starra-tunnel start" >&2; exit 1; } ;;
+  status)
+    pid=$(current_pid)
+    if [ -n "$pid" ]; then echo "running (pid $pid)"; echo "url: $(cat "$URL_FILE" 2>/dev/null)"
+    else echo "not running"; fi ;;
+  *) sed -n '2,18p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//' ;;
+esac
