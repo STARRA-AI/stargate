@@ -12,6 +12,7 @@ import {
   recordFailure,
   recordSuccess,
   isLocalRequest,
+  isLocalCaller,
   clientKey,
   lockoutSize,
   __resetLockout,
@@ -112,28 +113,104 @@ test("a correct password clears the record", () => {
   assert.equal(recordFailure(lan).locked, false);
 });
 
-test("clientKey prefers a forwarded IP, then x-real-ip, then one shared bucket", () => {
+/**
+ * 2026-08-07 — this pair USED to assert that X-Forwarded-For picks the budget
+ * and that "distinct forwarded IPs get independent budgets". That was the hole,
+ * written down as a feature: nothing sets XFF authoritatively before this code
+ * (Cloudflare APPENDS, leaving the client's value FIRST — the element that was
+ * read), so a stranger could mint a fresh budget per request and guess the
+ * password forever. The contract is inverted below.
+ */
+test("clientKey ignores client-writable headers by default — one shared budget", () => {
   assert.equal(
     clientKey(h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.9, 10.0.0.1" })),
-    "ip:203.0.113.9",
+    "lan",
   );
-  assert.equal(clientKey(h("192.168.1.65:3000", { "x-real-ip": "203.0.113.7" })), "ip:203.0.113.7");
+  assert.equal(clientKey(h("192.168.1.65:3000", { "x-real-ip": "203.0.113.7" })), "lan");
+  assert.equal(clientKey(h("192.168.1.65:3000", { "cf-connecting-ip": "203.0.113.5" })), "lan");
   assert.equal(clientKey(h("192.168.1.65:3000")), "lan");
 });
 
-test("distinct forwarded IPs get independent budgets", () => {
+test("ROTATING X-Forwarded-For CANNOT buy a fresh budget — the lock still trips", () => {
   __resetLockout();
-  const a = h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.1" });
-  const b = h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.2" });
-  for (let i = 0; i < MAX_FAILS; i++) recordFailure(a);
-  assert.equal(checkLockout(a).locked, true, "attacker A locked");
-  assert.equal(checkLockout(b).locked, false, "unrelated B must not be collateral");
+  // The attack: a new spoofed IP on every single guess.
+  for (let i = 0; i < MAX_FAILS; i++) {
+    recordFailure(h("192.168.1.65:3000", { "x-forwarded-for": `203.0.113.${i}` }));
+  }
+  assert.equal(
+    checkLockout(h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.99" })).locked,
+    true,
+    "a rotated header must not escape the lock",
+  );
+  assert.equal(lockoutSize(), 1, "every spoofed identity must land in ONE bucket");
+});
+
+test("STARRA_TRUST_PROXY=1 restores per-IP budgets for a proxy you control", () => {
+  const prev = process.env.STARRA_TRUST_PROXY;
+  process.env.STARRA_TRUST_PROXY = "1";
+  try {
+    __resetLockout();
+    assert.equal(
+      clientKey(h("192.168.1.65:3000", { "cf-connecting-ip": "203.0.113.5" })),
+      "ip:203.0.113.5",
+      "cf-connecting-ip wins — the edge overwrites it, the client cannot",
+    );
+    assert.equal(
+      clientKey(h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.9, 10.0.0.1" })),
+      "ip:203.0.113.9",
+    );
+    const a = h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.1" });
+    const b = h("192.168.1.65:3000", { "x-forwarded-for": "203.0.113.2" });
+    for (let i = 0; i < MAX_FAILS; i++) recordFailure(a);
+    assert.equal(checkLockout(a).locked, true, "attacker A locked");
+    assert.equal(checkLockout(b).locked, false, "unrelated B must not be collateral");
+  } finally {
+    if (prev === undefined) delete process.env.STARRA_TRUST_PROXY;
+    else process.env.STARRA_TRUST_PROXY = prev;
+  }
+});
+
+test("a loopback Host carrying proxy headers is NOT treated as local", () => {
+  __resetLockout();
+  assert.equal(isLocalCaller(h("127.0.0.1:3000")), true, "a real local request stays exempt");
+  const forwardedCases: Record<string, string>[] = [
+    { "x-forwarded-for": "203.0.113.9" },
+    { "cf-connecting-ip": "203.0.113.9" },
+    { "cf-ray": "abc123-DFW" },
+    { "x-real-ip": "203.0.113.9" },
+    { forwarded: "for=203.0.113.9" },
+    { "x-forwarded-host": "starra.example" },
+    { "true-client-ip": "203.0.113.9" },
+  ];
+  for (const forwarded of forwardedCases) {
+    assert.equal(
+      isLocalCaller(h("127.0.0.1:3000", forwarded)),
+      false,
+      `a forwarded request claiming loopback must not be exempt: ${JSON.stringify(forwarded)}`,
+    );
+  }
+  // And it is actually LOCKABLE, not just non-exempt.
+  const spoofed = h("127.0.0.1:3000", { "cf-connecting-ip": "203.0.113.9" });
+  for (let i = 0; i < MAX_FAILS; i++) recordFailure(spoofed);
+  assert.equal(checkLockout(spoofed).locked, true, "the spoofed-loopback path must lock");
+  // GUARANTEE 1 SURVIVES: the real Mac is still not locked.
+  assert.equal(checkLockout(h("127.0.0.1:3000")).locked, false, "loopback must never be locked");
 });
 
 test("tracked identities stay bounded under a flood", () => {
-  __resetLockout();
-  for (let i = 0; i < 2000; i++) {
-    recordFailure(h("192.168.1.65:3000", { "x-forwarded-for": `198.51.100.${i % 255}.${i}` }));
+  const prev = process.env.STARRA_TRUST_PROXY;
+  // Trust the headers ON PURPOSE here: this test exists to prove the map cannot
+  // grow without bound in the one configuration where a flood can create many
+  // identities at all. With the default (untrusted) there is only ever one.
+  process.env.STARRA_TRUST_PROXY = "1";
+  try {
+    __resetLockout();
+    for (let i = 0; i < 2000; i++) {
+      recordFailure(h("192.168.1.65:3000", { "x-forwarded-for": `198.51.100.${i % 255}.${i}` }));
+    }
+    assert.ok(lockoutSize() <= 512, `map grew unbounded: ${lockoutSize()}`);
+  } finally {
+    if (prev === undefined) delete process.env.STARRA_TRUST_PROXY;
+    else process.env.STARRA_TRUST_PROXY = prev;
   }
-  assert.ok(lockoutSize() <= 512, `map grew unbounded: ${lockoutSize()}`);
 });

@@ -21,6 +21,11 @@
  * internet, because xAI's servers must reach it. So:
  *   - it requires a bearer token (`STARRA_MCP_TOKEN`) on every request,
  *   - it refuses to run at all if that token is unset or weak,
+ *   - REMEMBER NEEDS A SECOND KEY. Reading her and rewriting her are no longer
+ *     the same permission: `remember` requires `STARRA_MCP_WRITE_TOKEN`, which
+ *     must differ from the read token, and is denied outright when unset. See
+ *     src/lib/api/public-auth.ts — the read token can look her up, it cannot
+ *     edit what she believes about Classic.
  *   - it exposes exactly two verbs — recall and remember — and no way to
  *     enumerate, delete, or overwrite,
  *   - it never returns her vault-private material in bulk: recall REQUIRES a
@@ -30,12 +35,17 @@
  */
 
 import { getMemory, recordExchange } from "@/lib/memory/store";
+import { authorizePublic, notePublicDenial } from "@/lib/api/public-auth";
+import { safePublicError } from "@/lib/api/public-errors";
+import { captureError } from "@/lib/errlog";
 
 export const runtime = "nodejs";
 
 /** The MCP revision we implement. Echoed back to whatever the client asks for. */
 const DEFAULT_PROTOCOL_VERSION = "2025-06-18";
-const MIN_TOKEN_LENGTH = 24;
+
+/** The verbs that MUTATE her memory. Everything else is a read. */
+const MCP_WRITE_TOOLS = new Set(["remember"]);
 
 type JsonRpcId = string | number | null;
 
@@ -45,17 +55,6 @@ function result(id: JsonRpcId, value: unknown) {
 
 function rpcError(id: JsonRpcId, code: number, message: string, status = 200) {
   return Response.json({ jsonrpc: "2.0", id, error: { code, message } }, { status });
-}
-
-/**
- * Constant-time-ish compare. Not a hardened primitive, but it removes the
- * trivial length/prefix timing signal on a token that guards her memory.
- */
-function tokenMatches(given: string, expected: string): boolean {
-  if (given.length !== expected.length) return false;
-  let diff = 0;
-  for (let i = 0; i < given.length; i++) diff |= given.charCodeAt(i) ^ expected.charCodeAt(i);
-  return diff === 0;
 }
 
 const TOOLS = [
@@ -142,23 +141,22 @@ async function callTool(name: string, args: Record<string, unknown>): Promise<st
 }
 
 export async function POST(req: Request) {
-  // ── AUTH — this is the public-facing door to her memory ──────────────────
-  const expected = process.env.STARRA_MCP_TOKEN ?? "";
-  if (expected.length < MIN_TOKEN_LENGTH) {
-    // Refuse to run rather than serve her memory behind a weak or absent token.
-    // Failing closed here is the whole point: an unset token must never mean
-    // "open to everyone".
+  // ── AUTH, LAYER 1 — nothing anonymous gets past the door at all ──────────
+  // Every method needs at least READ. That includes `initialize`, `tools/list`
+  // and `ping`: an unauthenticated stranger should not even learn the shape of
+  // her memory bridge. Fails closed on a weak or absent token — an unset token
+  // must never mean "open to everyone".
+  const readGate = authorizePublic(req, "read");
+  if (!readGate.ok) {
+    notePublicDenial("mcp", "read", readGate);
     return rpcError(
       null,
-      -32000,
-      "MCP bridge disabled: set STARRA_MCP_TOKEN to a long random value",
-      503,
+      readGate.status === 503 ? -32000 : -32001,
+      readGate.status === 503
+        ? "MCP bridge disabled: set STARRA_MCP_TOKEN to a long random value"
+        : readGate.message,
+      readGate.status,
     );
-  }
-  const auth = req.headers.get("authorization") ?? "";
-  const given = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (!tokenMatches(given, expected)) {
-    return rpcError(null, -32001, "unauthorized", 401);
   }
 
   let body: unknown;
@@ -192,14 +190,24 @@ export async function POST(req: Request) {
     case "tools/call": {
       const name = typeof params.name === "string" ? params.name : "";
       const args = (params.arguments ?? {}) as Record<string, unknown>;
+      // ── AUTH, LAYER 2 — rewriting her needs a second, different key ──────
+      if (MCP_WRITE_TOOLS.has(name)) {
+        const writeGate = authorizePublic(req, "write");
+        if (!writeGate.ok) {
+          notePublicDenial("mcp", "write", writeGate);
+          return rpcError(id, -32001, writeGate.message, writeGate.status);
+        }
+      }
       try {
         const text = await callTool(name, args);
         return result(id, { content: [{ type: "text", text }] });
       } catch (err) {
         // Reported as a tool-level error, not a transport error: she should be
         // able to say "I couldn't reach my memory" rather than the call dying.
+        // Redacted: this body goes to the public internet.
+        captureError(`mcp.${name || "unknown"}`, err);
         return result(id, {
-          content: [{ type: "text", text: `Memory tool failed: ${String(err).slice(0, 200)}` }],
+          content: [{ type: "text", text: `Memory tool failed: ${safePublicError(err)}` }],
           isError: true,
         });
       }

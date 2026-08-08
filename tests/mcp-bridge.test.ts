@@ -59,7 +59,7 @@ describe("bridge discipline, on the source", () => {
     const publicLine = /const PUBLIC_PREFIXES = \[([\s\S]*?)\]/.exec(mw)?.[1] ?? "";
     const mcpEntries = [...publicLine.matchAll(/"([^"]*mcp[^"]*)"/g)].map((m) => m[1]);
     assert.deepEqual(mcpEntries, ["/api/mcp"], "only the inbound memory bridge may be public");
-    // /api/voice-tools is the other token-gated public door (same STARRA_MCP_TOKEN,
+    // /api/voice-tools is the other token-gated public door (same gate module,
     // same fail-closed rule). Asserted here so a third one cannot appear unnoticed.
     const publics = [...publicLine.matchAll(/"([^"]+)"/g)].map((m) => m[1]).sort();
     assert.deepEqual(publics, ["/api/auth", "/api/mcp", "/api/voice-tools", "/login", "/starra-ca.crt"],
@@ -67,8 +67,16 @@ describe("bridge discipline, on the source", () => {
 
     const inbound = read("src/app/api/mcp/route.ts");
     assert.match(inbound, /STARRA_MCP_TOKEN/, "the public bridge must carry its own token");
-    assert.match(inbound, /MIN_TOKEN_LENGTH/, "and reject a weak one");
+    assert.match(inbound, /authorizePublic\(req, "read"\)/, "and gate EVERY method on it");
     assert.match(inbound, /503/, "and FAIL CLOSED when the token is unset");
+    // 2026-08-07: the token check moved OUT of this route into one shared gate
+    // so /api/mcp and /api/voice-tools cannot drift apart. The guarantees this
+    // block used to read off the route source now live there — assert them at
+    // their new home rather than deleting them.
+    const gate = read("src/lib/api/public-auth.ts");
+    assert.match(gate, /MIN_TOKEN_LENGTH = 24/, "a weak token is still rejected");
+    assert.match(gate, /STARRA_MCP_WRITE_TOKEN/, "writes need their own key");
+    assert.match(gate, /status: 503/, "an unset read token still fails closed");
     assert.ok(
       !/src\/lib\/mcp|parseMcpCommand|composio|playwright/i.test(inbound),
       "the public bridge must never reach her outbound hands",

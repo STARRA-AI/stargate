@@ -1,0 +1,56 @@
+#!/usr/bin/env bash
+# Audit the internet-facing surface the way an attacker reaches it: over the
+# public tunnel, not localhost. Unit tests prove the LOGIC; this proves the
+# DEPLOYMENT — that the code with the scopes in it is the code actually
+# answering on the public hostname.
+#
+# The line that matters is "READ TOKEN CANNOT WRITE" returning 403. Until that
+# passes over the real tunnel, the split has shipped in the repo and not in the
+# world.
+#
+#   scripts/audit-public-surface
+#
+# Requires: the tunnel up (scripts/starra-tunnel start) and the deck running.
+# Reads tokens from .env.local; never prints them.
+set -uo pipefail
+cd "$(dirname "${BASH_SOURCE[0]}")/.."
+
+URL=$(cat data/tunnel-url.txt 2>/dev/null) || {
+  echo "no tunnel URL — run scripts/starra-tunnel start"; exit 1; }
+[ -n "$URL" ] || { echo "data/tunnel-url.txt is empty — run scripts/starra-tunnel start"; exit 1; }
+HOST=${URL#https://}
+HOST=${HOST%%/*}
+
+IP=$(dig +short @1.1.1.1 "$HOST" | grep -E '^[0-9]' | head -1)
+[ -n "$IP" ] || { echo "cannot resolve $HOST"; exit 1; }
+
+READ=$(grep -E '^STARRA_MCP_TOKEN=' .env.local | cut -d= -f2-)
+WRITE=$(grep -E '^STARRA_MCP_WRITE_TOKEN=' .env.local | cut -d= -f2-)
+[ -n "$READ" ] || { echo "STARRA_MCP_TOKEN is not set in .env.local — the surface is dark"; exit 1; }
+
+fail=0
+probe() { # name expected path token
+  local code
+  code=$(curl -s -o /dev/null -w "%{http_code}" --max-time 20 --resolve "$HOST:443:$IP" \
+    ${4:+-H "Authorization: Bearer $4"} "https://$HOST$3")
+  if [ "$code" = "$2" ]; then printf "  PASS  %-46s %s\n" "$1" "$code"
+  else printf "  FAIL  %-46s got %s want %s\n" "$1" "$code" "$2"; fail=1; fi
+}
+
+echo "auditing $URL"
+probe "private route stays private"        401 "/api/memory"                      ""
+probe "keys route stays private"           401 "/api/keys"                        ""
+probe "errors route stays private"         401 "/api/errors"                      ""
+probe "chat stays private"                 401 "/api/chat"                        ""
+probe "near-miss prefix is NOT public"     401 "/api/authorize"                   ""
+probe "recall needs a token"               401 "/api/voice-tools/recall?query=x"  ""
+probe "recall works with read token"       200 "/api/voice-tools/recall?query=x"  "$READ"
+probe "READ TOKEN CANNOT WRITE"            403 "/api/voice-tools/remember?text=x" "$READ"
+if [ -n "$WRITE" ]; then
+  probe "write token can write"            200 "/api/voice-tools/remember?text=audit" "$WRITE"
+else
+  printf "  NOTE  %-46s %s\n" "STARRA_MCP_WRITE_TOKEN unset" "writes denied (reads still live)"
+fi
+
+if [ "$fail" -ne 0 ]; then echo "AUDIT FAILED"; else echo "audit clean"; fi
+exit $fail

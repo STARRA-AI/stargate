@@ -4,7 +4,7 @@ import path from "path";
 // (asserted by tests/keys-unify-client-safety.test.ts). It is therefore the one
 // engine module this file may reach statically, since /app/settings pulls
 // @/lib/keys into a client component.
-import { maskKey } from "./engine/redact";
+import { maskKey, redactSecrets } from "./engine/redact";
 
 /**
  * Operator API key vault — stored server-side in data/keys.json (gitignored).
@@ -375,4 +375,50 @@ export async function setKeys(patch: Record<string, string>): Promise<void> {
  */
 export function mask(value: string): string {
   return maskKey(value) ?? "";
+}
+
+// ── live provider secrets — VALUE-based redaction coverage ────────────────
+/**
+ * The five externally-billed provider credentials Division B's audit was
+ * scoped to (xAI, Groq, HuggingFace, Replicate, Jina). Only xai/groq are
+ * KEY_SLOTS in this vault (see envKeyValue above) — HF_TOKEN,
+ * REPLICATE_API_TOKEN and JINA_API_KEY are resolved directly from
+ * process.env at their own call sites (src/lib/engine/providers.ts,
+ * src/app/api/lipsync/route.ts, src/lib/tools/reach.ts) and never touch
+ * getKey()/getKeys(). Named here anyway so ONE list is authoritative for
+ * "what counts as a live provider secret" wherever this module is imported.
+ *
+ * SHAPE-RULE GAP (audit finding, cited for the executive): engine/redact.ts's
+ * SHAPE_RULES cover xai-, gsk_, hf_ and r8_ prefixes but have NO pattern for
+ * Jina's `jina_` prefix (verified: jina.ai / ai-sdk.dev community-provider
+ * docs; JINA_API_KEY is also absent from src/lib/security/redact.ts's
+ * ENV_SECRET_NAMES). That means a Jina key can only be scrubbed by VALUE, not
+ * by shape — this list + redactLiveProviderSecrets() is what makes value-based
+ * coverage available to a caller for all five, not just the two vaulted ones.
+ */
+export const LIVE_PROVIDER_ENV_NAMES = [
+  "XAI_API_KEY",
+  "GROQ_API_KEY",
+  "HF_TOKEN",
+  "REPLICATE_API_TOKEN",
+  "JINA_API_KEY",
+] as const;
+
+/** Current values of the five live provider secrets, whichever are set. */
+export function liveProviderSecretValues(): string[] {
+  return LIVE_PROVIDER_ENV_NAMES.map((n) => process.env[n]).filter(
+    (v): v is string => Boolean(v && v.trim()),
+  );
+}
+
+/**
+ * Scrub any of the five live provider secrets — by their CURRENT env value —
+ * out of arbitrary text before it reaches a log line, an ops-feed event, or
+ * an HTTP response. Delegates to the engine's redactSecrets so there is still
+ * ONE scrubbing implementation; this only supplies the value list a caller
+ * would otherwise have to assemble by hand (and, per the gap above, must
+ * supply for Jina specifically — shape rules alone will not catch it).
+ */
+export function redactLiveProviderSecrets(input: unknown): string {
+  return redactSecrets(input, liveProviderSecretValues());
 }

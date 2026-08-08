@@ -29,6 +29,35 @@
  * mkcert CA is trusted) HTTPS are. The tradeoff is deliberate: a lockout that
  * could strand Classic would be worse than one that a determined attacker can
  * sidestep, and Host-spoofing does not by itself reveal the password.
+ *
+ * 2026-08-07 — TWO HOLES CLOSED, both on the PUBLIC TUNNEL path:
+ *
+ *   A. IDENTITY WAS CLIENT-CONTROLLED. `clientKey` trusted `X-Forwarded-For`
+ *      unconditionally and keyed the budget on it. Nothing between the attacker
+ *      and this function sets that header authoritatively — Cloudflare APPENDS
+ *      to XFF and the client-supplied value stays FIRST, which is exactly the
+ *      element that was read. So a stranger could send a new `X-Forwarded-For`
+ *      per request, land in a fresh bucket every time, and never be locked out:
+ *      unlimited password guesses from the open internet, with the lockout
+ *      code running and reporting "not locked" the whole way. Default is now
+ *      ONE SHARED BUDGET for every non-local caller — no header a client can
+ *      write may mint a new one. Set `STARRA_TRUST_PROXY=1` only when a proxy
+ *      you control is the ONLY way in, and per-IP budgets come back.
+ *   B. THE LOOPBACK EXEMPTION IGNORED THE REST OF THE REQUEST. A request that
+ *      claims `Host: 127.0.0.1` while ALSO carrying proxy/CDN headers did not
+ *      arrive on the loopback interface — something forwarded it. Such a
+ *      request is no longer exempt (`isLocalCaller`).
+ *
+ * `isLocalRequest(host)` keeps its exact old signature and meaning, because
+ * src/app/api/chat/route.ts:761 and the private lane import it for a different
+ * decision (tests/private-lane.test.ts:797 pins that import). The stricter,
+ * header-aware check is a NEW function used only by this lockout.
+ *
+ * REMAINING RESIDUAL, not papered over: an attacker with DIRECT access to the
+ * deck's port who sends `Host: 127.0.0.1` and no other headers is still exempt.
+ * That path is the LAN, not the internet, and closing it would require an
+ * unforgeable identity Next.js does not expose to a route handler
+ * (`NextRequest.ip` was removed in Next 15).
  */
 
 /** Failures allowed from one identity inside WINDOW_MS before the lock trips. */
@@ -63,16 +92,59 @@ export function isLocalRequest(host: string | null | undefined): boolean {
 }
 
 /**
- * Best-effort identity for a non-local caller.
+ * Headers that only appear when something FORWARDED the request. Any of them
+ * means the request did not arrive on the loopback interface, whatever the Host
+ * header claims. (Cloudflare's tunnel sets cf-connecting-ip / cf-ray; ordinary
+ * reverse proxies set the x-forwarded-* family.)
+ */
+const FORWARDING_HEADERS = [
+  "x-forwarded-for",
+  "x-forwarded-host",
+  "x-real-ip",
+  "forwarded",
+  "cf-connecting-ip",
+  "cf-ray",
+  "true-client-ip",
+] as const;
+
+/**
+ * Is this caller REALLY the Mac itself? Loopback Host and nothing that betrays
+ * a hop in front of it. Stricter than `isLocalRequest` on purpose — see hole B
+ * in the file header. Can only ever REMOVE an exemption, never grant one, so
+ * the "loopback is never locked" guarantee is untouched for a genuine local
+ * request (a browser on this machine sends none of these headers).
+ */
+export function isLocalCaller(headers: Headers): boolean {
+  if (!isLocalRequest(headers.get("host"))) return false;
+  for (const name of FORWARDING_HEADERS) {
+    if ((headers.get(name) ?? "").trim()) return false;
+  }
+  return true;
+}
+
+/** Is a proxy we control the only way in? Off unless explicitly turned on. */
+function trustProxyHeaders(): boolean {
+  return (process.env.STARRA_TRUST_PROXY ?? "") === "1";
+}
+
+/**
+ * Budget identity for a non-local caller.
  *
  * Next.js self-hosted does not expose the socket address to a route handler
- * (`NextRequest.ip` was removed in Next 15), and a direct LAN connection sets no
- * forwarding header. So: prefer a real forwarded IP when one exists, otherwise
- * fall back to ONE shared "lan" bucket. The shared bucket is the conservative
- * choice — it means many attackers share one budget, which is stricter, not
- * looser. Only loopback escapes it, and loopback is exempt anyway.
+ * (`NextRequest.ip` was removed in Next 15), so the only candidate identities
+ * are headers — and a header the CLIENT can write is not an identity, it is a
+ * request for a fresh budget. By default every non-local caller therefore
+ * shares ONE "lan" bucket: strictly stricter, and impossible to escape by
+ * rotating a header. Loopback never reaches here (it is exempt), so the shared
+ * bucket can never strand Classic on his own machine.
+ *
+ * `STARRA_TRUST_PROXY=1` restores per-IP budgets, and is correct ONLY when a
+ * proxy you control terminates every connection and overwrites these headers.
  */
 export function clientKey(headers: Headers): string {
+  if (!trustProxyHeaders()) return "lan";
+  const cf = headers.get("cf-connecting-ip");
+  if (cf && cf.trim()) return `ip:${cf.trim()}`;
   const fwd = headers.get("x-forwarded-for");
   if (fwd) {
     const first = fwd.split(",")[0]?.trim();
@@ -114,7 +186,7 @@ export function checkLockout(
   headers: Headers,
   now: number = Date.now(),
 ): LockState {
-  if (isLocalRequest(headers.get("host"))) return { locked: false, retryAfterSec: 0 };
+  if (isLocalCaller(headers)) return { locked: false, retryAfterSec: 0 };
   sweep(now);
   const b = buckets.get(clientKey(headers));
   if (!b || b.lockedUntil <= now) return { locked: false, retryAfterSec: 0 };
@@ -132,7 +204,7 @@ export function recordFailure(
   headers: Headers,
   now: number = Date.now(),
 ): LockState {
-  if (isLocalRequest(headers.get("host"))) return { locked: false, retryAfterSec: 0 };
+  if (isLocalCaller(headers)) return { locked: false, retryAfterSec: 0 };
   sweep(now);
   const key = clientKey(headers);
   const b = buckets.get(key);

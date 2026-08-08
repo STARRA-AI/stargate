@@ -14,9 +14,11 @@
  *    running as of 2026-08-06) she gets "the engine's not up right now", not a
  *    500. On a call an error must still be something she can say.
  *
- * AUTH. xAI's servers call this from the public internet, so it carries the
- * same bearer token as the MCP bridge (STARRA_MCP_TOKEN) and FAILS CLOSED when
- * that token is unset. One token, two doors, same lock.
+ * AUTH. xAI's servers call this from the public internet, so it carries a
+ * bearer token and FAILS CLOSED when that token is unset. It is no longer ONE
+ * token: reads (`recall`) take STARRA_MCP_TOKEN, and anything that MUTATES
+ * takes STARRA_MCP_WRITE_TOKEN. A holder of the read key can look her up; only
+ * the write key can change what she believes. See src/lib/api/public-auth.ts.
  *
  * WRITES ARE DELIBERATELY LIMITED. remember + note + funding-status. Nothing
  * here can delete anything, and nothing can read the store wholesale.
@@ -25,10 +27,14 @@
 import { getMemory, recordExchange } from "@/lib/memory/store";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { authorizePublic, notePublicDenial, type PublicScope } from "@/lib/api/public-auth";
+import { safePublicError } from "@/lib/api/public-errors";
+import { captureError } from "@/lib/errlog";
 
 export const runtime = "nodejs";
 
-const MIN_TOKEN_LENGTH = 24;
+/** Which actions MUTATE. Anything not listed here is read-only. */
+const WRITE_ACTIONS = new Set(["remember", "note", "funding_status"]);
 
 /** Plain text — this is speech, not an API payload. */
 function say(text: string, status = 200) {
@@ -36,20 +42,6 @@ function say(text: string, status = 200) {
     status,
     headers: { "content-type": "text/plain; charset=utf-8" },
   });
-}
-
-function authorized(req: Request): { ok: true } | { ok: false; res: Response } {
-  const expected = process.env.STARRA_MCP_TOKEN ?? "";
-  if (expected.length < MIN_TOKEN_LENGTH) {
-    return { ok: false, res: say("Voice tools are disabled — no token configured.", 503) };
-  }
-  const auth = req.headers.get("authorization") ?? "";
-  const given = auth.startsWith("Bearer ") ? auth.slice(7).trim() : "";
-  if (given.length !== expected.length) return { ok: false, res: say("unauthorized", 401) };
-  let diff = 0;
-  for (let i = 0; i < given.length; i++) diff |= given.charCodeAt(i) ^ expected.charCodeAt(i);
-  if (diff !== 0) return { ok: false, res: say("unauthorized", 401) };
-  return { ok: true };
 }
 
 /** A few lines she can actually speak — never the store. */
@@ -119,10 +111,18 @@ export async function GET(
   req: Request,
   ctx: { params: Promise<{ action: string }> },
 ) {
-  const gate = authorized(req);
-  if (!gate.ok) return gate.res;
   const url = new URL(req.url);
   const { action } = await ctx.params;
+
+  // The SCOPE is decided by the verb in the path, before anything is read or
+  // written. An unknown action falls to "read" — the weaker demand — and still
+  // needs a valid token to hear the "I don't know that one" sentence.
+  const scope: PublicScope = WRITE_ACTIONS.has(action) ? "write" : "read";
+  const gate = authorizePublic(req, scope);
+  if (!gate.ok) {
+    notePublicDenial("voice-tools", scope, gate);
+    return say(gate.message, gate.status);
+  }
 
   try {
     switch (action) {
@@ -156,7 +156,10 @@ export async function GET(
         );
     }
   } catch (err) {
-    // Never a stack trace on a phone call.
-    return say(`Something went wrong on my end — ${String(err).slice(0, 80)}`);
+    // Never a stack trace on a phone call, and never a path on the internet —
+    // but never a silent failure either. Reaching here needs a VALID token, so
+    // this is not anonymous-floodable and is captured unthrottled.
+    captureError(`voice-tools.${action}`, err);
+    return say(`Something went wrong on my end — ${safePublicError(err, { maxLen: 80 })}`);
   }
 }

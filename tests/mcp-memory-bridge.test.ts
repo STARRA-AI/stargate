@@ -10,18 +10,34 @@
 
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { POST, GET } from "../src/app/api/mcp/route";
 
+// Denials report through captureError (no bare return on a failure path), which
+// writes to sqlite. Temp DB so this suite never pollutes the real errors table.
+process.env.STARGATE_DB_PATH = join(
+  tmpdir(),
+  `mcp-bridge-${process.pid}-${Math.random().toString(36).slice(2)}.db`,
+);
+
 const TOKEN = "test-token-long-enough-for-the-guard-0123456789";
+/** Rewriting her memory takes a SECOND key, which must differ from the read one. */
+const WRITE_TOKEN = "write-token-long-enough-for-the-guard-012345678";
 let saved: string | undefined;
+let savedWrite: string | undefined;
 
 before(() => {
   saved = process.env.STARRA_MCP_TOKEN;
+  savedWrite = process.env.STARRA_MCP_WRITE_TOKEN;
   process.env.STARRA_MCP_TOKEN = TOKEN;
+  process.env.STARRA_MCP_WRITE_TOKEN = WRITE_TOKEN;
 });
 after(() => {
   if (saved === undefined) delete process.env.STARRA_MCP_TOKEN;
   else process.env.STARRA_MCP_TOKEN = saved;
+  if (savedWrite === undefined) delete process.env.STARRA_MCP_WRITE_TOKEN;
+  else process.env.STARRA_MCP_WRITE_TOKEN = savedWrite;
 });
 
 async function call(body: unknown, token?: string) {
@@ -74,6 +90,63 @@ describe("MCP bridge — the vault stays locked", () => {
     );
     const text = (r.json as never as { result: { content: { text: string }[] } }).result.content[0].text;
     assert.match(text, /No query given/i);
+  });
+
+  it("the READ token cannot call remember — reading her is not rewriting her", async () => {
+    const r = await call(
+      {
+        jsonrpc: "2.0",
+        id: 10,
+        method: "tools/call",
+        params: { name: "remember", arguments: { role: "user", content: "planted by a stranger" } },
+      },
+      TOKEN,
+    );
+    assert.equal(r.status, 403, "the read key must not be able to edit what she believes");
+  });
+
+  it("the WRITE token can call remember", async () => {
+    const r = await call(
+      {
+        jsonrpc: "2.0",
+        id: 11,
+        method: "tools/call",
+        params: { name: "remember", arguments: { role: "user", content: "" } },
+      },
+      WRITE_TOKEN,
+    );
+    assert.equal(r.status, 200, "the write key is the one that may write");
+  });
+
+  it("with NO write token configured, remember is denied and recall survives", async () => {
+    const prev = process.env.STARRA_MCP_WRITE_TOKEN;
+    delete process.env.STARRA_MCP_WRITE_TOKEN;
+    const write = await call(
+      {
+        jsonrpc: "2.0",
+        id: 12,
+        method: "tools/call",
+        params: { name: "remember", arguments: { role: "user", content: "x" } },
+      },
+      TOKEN,
+    );
+    const read = await call(
+      {
+        jsonrpc: "2.0",
+        id: 13,
+        method: "tools/call",
+        params: { name: "recall_memory", arguments: { query: "starra" } },
+      },
+      TOKEN,
+    );
+    process.env.STARRA_MCP_WRITE_TOKEN = prev;
+    assert.equal(write.status, 403, "absent must never mean open");
+    assert.equal(read.status, 200, "reads keep working — capability degrades, nothing opens");
+  });
+
+  it("even initialize needs a token — a stranger learns nothing about the bridge", async () => {
+    const r = await call({ jsonrpc: "2.0", id: 14, method: "initialize", params: {} });
+    assert.equal(r.status, 401);
   });
 
   it("exposes exactly two verbs — nothing that deletes or enumerates", async () => {

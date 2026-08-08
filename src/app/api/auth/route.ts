@@ -7,9 +7,11 @@ import {
 } from "@/lib/auth";
 import {
   checkLockout,
+  clientKey,
   recordFailure,
   recordSuccess,
 } from "@/lib/auth-lockout";
+import { captureError } from "@/lib/errlog";
 
 // @/lib/auth uses cookies + crypto (HMAC token signing) — force the Node.js
 // runtime so this never gets bundled for the Edge runtime (no node:crypto there).
@@ -24,6 +26,7 @@ export async function GET() {
 /** Login — verify the password, set the signed session cookie. */
 export async function POST(req: Request) {
   if (!authPassword()) {
+    captureError("auth.login", new Error("no password configured (STARRA_PASSWORD unset)"));
     return NextResponse.json(
       { ok: false, error: "No password is set on the server (STARRA_PASSWORD)." },
       { status: 400 },
@@ -35,6 +38,10 @@ export async function POST(req: Request) {
   // this Mac always gets in; see src/lib/auth-lockout.ts for the three guarantees.
   const locked = checkLockout(req.headers);
   if (locked.locked) {
+    captureError(
+      "auth.login",
+      new Error(`rejected: locked out, no password compared (${clientKey(req.headers)})`),
+    );
     return NextResponse.json(
       {
         ok: false,
@@ -55,6 +62,10 @@ export async function POST(req: Request) {
   if (!checkPassword(password)) {
     const tripped = recordFailure(req.headers);
     if (tripped.locked) {
+      captureError(
+        "auth.login",
+        new Error(`locked out after repeated wrong passwords (${clientKey(req.headers)})`),
+      );
       return NextResponse.json(
         {
           ok: false,
@@ -63,6 +74,7 @@ export async function POST(req: Request) {
         { status: 429, headers: { "Retry-After": String(tripped.retryAfterSec) } },
       );
     }
+    captureError("auth.login", new Error(`wrong password (${clientKey(req.headers)})`));
     return NextResponse.json({ ok: false, error: "Wrong password." }, { status: 401 });
   }
 
@@ -71,6 +83,7 @@ export async function POST(req: Request) {
 
   const token = await makeToken();
   if (!token) {
+    captureError("auth.login", new Error("token unavailable (auth misconfigured)"));
     return NextResponse.json({ ok: false, error: "Auth unavailable." }, { status: 500 });
   }
   const res = NextResponse.json({ ok: true });

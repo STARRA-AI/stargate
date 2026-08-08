@@ -8,15 +8,39 @@
  */
 import assert from "node:assert/strict";
 import { after, before, describe, it } from "node:test";
+import { join } from "node:path";
+import { tmpdir } from "node:os";
 import { GET } from "../src/app/api/voice-tools/[action]/route";
 
-const T = "test-token-long-enough-for-the-guard-0123456789";
-let saved: string | undefined;
-before(() => { saved = process.env.STARRA_MCP_TOKEN; process.env.STARRA_MCP_TOKEN = T; });
-after(() => { if (saved === undefined) delete process.env.STARRA_MCP_TOKEN; else process.env.STARRA_MCP_TOKEN = saved; });
+// Denials are reported through captureError (shared invariant: no bare return
+// on a failure path), which writes to sqlite. Point that at a temp DB so this
+// suite never drops test noise into the real deck's errors table. getDb() is
+// lazy, so setting it after the static import is still in time.
+process.env.STARGATE_DB_PATH = join(
+  tmpdir(),
+  `voice-tools-${process.pid}-${Math.random().toString(36).slice(2)}.db`,
+);
 
-/** The action is a PATH segment now, so tests pass it the way Next.js does. */
-const hit = async (action: string, qs = "", tok: string = T) => {
+const T = "test-token-long-enough-for-the-guard-0123456789";
+/** Writes need their OWN key now, and it must differ from the read key. */
+const W = "write-token-long-enough-for-the-guard-012345678";
+const WRITE_ACTIONS = new Set(["remember", "note", "funding_status"]);
+let saved: string | undefined;
+let savedW: string | undefined;
+before(() => {
+  saved = process.env.STARRA_MCP_TOKEN;
+  savedW = process.env.STARRA_MCP_WRITE_TOKEN;
+  process.env.STARRA_MCP_TOKEN = T;
+  process.env.STARRA_MCP_WRITE_TOKEN = W;
+});
+after(() => {
+  if (saved === undefined) delete process.env.STARRA_MCP_TOKEN; else process.env.STARRA_MCP_TOKEN = saved;
+  if (savedW === undefined) delete process.env.STARRA_MCP_WRITE_TOKEN; else process.env.STARRA_MCP_WRITE_TOKEN = savedW;
+});
+
+/** The action is a PATH segment now, so tests pass it the way Next.js does.
+ *  The default token is whichever one that action legitimately needs. */
+const hit = async (action: string, qs = "", tok: string = WRITE_ACTIONS.has(action) ? W : T) => {
   const r = await GET(
     new Request(`http://x/api/voice-tools/${action}?${qs}`, {
       headers: { authorization: `Bearer ${tok}` },
@@ -72,11 +96,44 @@ describe("voice tools — she speaks, she does not serialize", () => {
     for (const [action, qs] of [["recall", "query=a"], ["nonsense", ""], ["remember", "text=x"]]) {
       const r = await GET(
         new Request(`http://x/api/voice-tools/${action}?${qs}`, {
-          headers: { authorization: `Bearer ${T}` },
+          headers: {
+            authorization: `Bearer ${WRITE_ACTIONS.has(action as string) ? W : T}`,
+          },
         }),
         { params: Promise.resolve({ action }) },
       );
       assert.match(r.headers.get("content-type") ?? "", /text\/plain/);
     }
+  });
+
+  // ── the split itself, driven through the real route ──────────────────────
+  it("the READ token cannot remember — a stranger must not rewrite her", async () => {
+    const r = await hit("remember", "text=she+loves+brussels+sprouts", T);
+    assert.equal(r.status, 403, "read access leaks; write access rewrites her");
+  });
+
+  it("the READ token cannot take a note or move a funding lead either", async () => {
+    assert.equal((await hit("note", "text=x", T)).status, 403);
+    assert.equal((await hit("funding_status", "name=a&status=b", T)).status, 403);
+  });
+
+  it("the WRITE token still reads — it is the stronger key, not a parallel one", async () => {
+    assert.equal((await hit("recall", "query=engine", W)).status, 200);
+  });
+
+  it("with NO write token configured, writes are denied and reads survive", async () => {
+    const prev = process.env.STARRA_MCP_WRITE_TOKEN;
+    delete process.env.STARRA_MCP_WRITE_TOKEN;
+    const write = await hit("remember", "text=x", T);
+    const read = await hit("recall", "query=engine", T);
+    process.env.STARRA_MCP_WRITE_TOKEN = prev;
+    assert.equal(write.status, 403, "absent must never mean open");
+    assert.equal(read.status, 200, "a missing variable costs capability, not the read surface");
+  });
+
+  it("a denial is still speech — never JSON, never a stack", async () => {
+    const r = await hit("remember", "text=x", T);
+    assert.doesNotMatch(r.text, /^\s*[[{]/);
+    assert.doesNotMatch(r.text, /\n\s+at /);
   });
 });
