@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
-import { spawn } from "child_process";
+import { createRequire } from "node:module";
+
+// child_process is loaded OPAQUELY on purpose — see tests/route-bundler-traps.test.ts.
+// Turbopack statically traces the argument array of any spawn()/exec() call whose
+// binding it can see and tries to resolve that string as a module, which 500s the
+// route in dev (it took the whole /tools page down on 2026-08-08). createRequire
+// returns a value the bundler cannot identify, so it stops tracing. Reverting this
+// to a static import reintroduces the failure.
+const nodeRequire = createRequire(import.meta.url);
+const { spawn } = nodeRequire("child_process") as typeof import("node:child_process");
 import fs from "fs";
 import path from "path";
 import os from "os";
@@ -45,7 +54,10 @@ export async function POST(req: Request) {
 
   // Build the path at runtime (path.join, not a static literal) so Turbopack
   // never tries to resolve it as a module.
-  const dir = path.join(os.homedir(), "Desktop", "STARGATE", "starra-avatar");
+  // STARGATE moved off ~/Desktop in the 2026-08-06 machine migration; the old
+  // path no longer exists, so this silently launched nothing. Verified
+  // 2026-08-08: ~/STARGATE/starra-avatar is the real directory.
+  const dir = path.join(os.homedir(), "STARGATE", "starra-avatar");
   const script = path.join(dir, "main.py");
   const python = resolvePython();
 

@@ -1,10 +1,22 @@
 import { promises as fs } from "fs";
 import path from "path";
-// Static builtin import ON PURPOSE: `await import("child_process")` is a
-// dynamic import, and Turbopack context-folds dynamics in route files into a
-// server-relative resolution ("Can't resolve './ROOT/scripts' <dynamic>"),
-// breaking the whole build. A static node: builtin cannot be folded.
-import { spawn } from "node:child_process";
+import { createRequire } from "node:module";
+
+// ── WHY child_process IS LOADED THROUGH createRequire (2026-08-08) ──
+// Turbopack STATICALLY TRACES the argument array of a `spawn()` call it can see,
+// and tries to resolve that string as a module. Every shape of the path failed:
+//   - absolute from process.cwd() -> "Can't resolve './ROOT/scripts' <dynamic>"
+//   - relative "scripts/<name>"   -> "Can't resolve ('scripts/' <dynamic> | ...)"
+// Both 500 the route and blow up the /tools page, because the tracer runs before
+// any of this code executes. The path is not the problem; the VISIBLE BINDING is.
+//
+// createRequire returns an opaque value at build time, so Turbopack cannot tell
+// that `spawn` is child_process.spawn and stops tracing its arguments entirely.
+// This is a bundler workaround, not a style choice — reverting it to a static
+// import reintroduces the build failure. Verified by reproduction on 2026-08-08:
+// static import = 500 + "ROOT/scripts" in the log, this version = 200, clean.
+const nodeRequire = createRequire(import.meta.url);
+const { spawn } = nodeRequire("child_process") as typeof import("node:child_process");
 
 export const runtime = "nodejs";
 

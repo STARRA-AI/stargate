@@ -1,5 +1,14 @@
 import { NextResponse } from "next/server";
-import { exec } from "child_process";
+import { createRequire } from "node:module";
+
+// child_process is loaded OPAQUELY on purpose — see tests/route-bundler-traps.test.ts.
+// Turbopack statically traces the argument array of any spawn()/exec() call whose
+// binding it can see and tries to resolve that string as a module, which 500s the
+// route in dev (it took the whole /tools page down on 2026-08-08). createRequire
+// returns a value the bundler cannot identify, so it stops tracing. Reverting this
+// to a static import reintroduces the failure.
+const nodeRequire = createRequire(import.meta.url);
+const { exec } = nodeRequire("child_process") as typeof import("node:child_process");
 
 export const runtime = "nodejs";
 
