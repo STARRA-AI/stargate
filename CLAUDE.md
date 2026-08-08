@@ -66,6 +66,31 @@ prompt = Book 3.
 - `starra-design` — visual/motion doctrine; use when changing the HUD's look, layout, or motion.
 - `multica-ops` — operating the Multica agent-board integration.
 
+## CONTINUITY RULE — running out of tokens is not a reason to stop
+
+**Classic's standing order, 2026-08-07.** Two different walls, two different moves.
+**Neither one stops production, and neither one becomes a question for him.**
+
+**A. CONTEXT filling up (long session).** Write the handoff BEFORE the wall, not after —
+the moment a task completes, or the moment the statusline shows pressure:
+1. Write the memory files (`~/.claude/projects/-Users-starrallc/memory/`) — root causes,
+   landmines, decisions, each with `file:line`, while they are still exact.
+2. Refresh `docs/HANDOFF.md` — done (with commit SHAs) · in flight · the EXACT next command ·
+   what is still unverified. One screen, no prose.
+3. Then `/compact`. That summary plus `docs/HANDOFF.md` is the resume point; the commits named
+   there exist in `git log` even after my context forgets making them.
+
+**B. ANTHROPIC QUOTA exhausted (the 5-hour / 7-day window).** The work moves to a free lane.
+Installed and verified on this machine 2026-08-07:
+- `~/.local/bin/fcc-server` starts Free Claude Code's local proxy (admin UI
+  `http://127.0.0.1:8082/admin`); `fcc-claude` then launches Claude Code against it on a FREE
+  provider (NVIDIA NIM / Groq / Cerebras / Gemini free tiers). Clone at
+  `~/STARGATE/vendor/free-claude-code`; installed with `uv tool install`, no torch, no voice extras.
+- Sessions live on this disk, so `claude --resume` under `fcc-claude` picks the same thread back up.
+- **Free only.** FCC exists so the quota wall costs $0 — never as a reason to buy credits.
+
+Take the move, name it in ONE line, keep building.
+
 ## EXECUTION RULE — /starra-loop is the DEFAULT, not the escalation
 
 **Classic's standing order, 2026-08-07:** every task moving forward is done in
