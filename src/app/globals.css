@@ -233,3 +233,22 @@ a:hover {
     animation: none !important;
   }
 }
+
+/* Interaction feedback the deck currently has none of.
+   Transform + opacity only; no layout properties animate. */
+.deck-panel {
+  transition: border-color 200ms ease-out, box-shadow 200ms ease-out;
+}
+.deck-panel:hover {
+  border-color: color-mix(in oklab, var(--purple) 55%, transparent);
+}
+.deck-badge {
+  transition: opacity 200ms ease-out;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .deck-panel,
+  .deck-badge {
+    transition: none;
+  }
+}

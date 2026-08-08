@@ -32,6 +32,10 @@ export const DUR = {
   reveal: 200,
   /** The badge's resting breath. Slow enough to read as alive, not as busy. */
   badgeBreathe: 3000,
+  /** A tap/click acknowledgement; must feel instant. */
+  press: 90,
+  /** A badge changing meaning. */
+  status: 200,
 } as const;
 
 /**
@@ -207,4 +211,20 @@ export function tabsIn(target: Target): void {
     ease: EASE.out,
     delay: stagger(22),
   });
+}
+
+/** Acknowledge a press. Scale only — never move layout under a finger. */
+export function pressable(target: Target): void {
+  if (prefersReducedMotion()) return;
+  animate(target, { scale: [1, 0.97, 1], duration: DUR.press, ease: EASE.out });
+}
+
+/**
+ * A status badge changing meaning. Emil's rule: motion explains the CHANGE,
+ * so this fires only on transition, never on mount — an idle deck of badges
+ * pulsing at each other is noise, not information.
+ */
+export function statusChange(target: Target): void {
+  if (prefersReducedMotion()) return;
+  animate(target, { opacity: [0.4, 1], scale: [0.96, 1], duration: DUR.status, ease: EASE.out });
 }
