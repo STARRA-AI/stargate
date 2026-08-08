@@ -125,6 +125,24 @@ task — **Classic's call whether that flag stays**, not something to change for
 
 4. **NOTHING IS LIVE.** Task 9's live gate is untouched and out of scope until paper orders
    actually fill.
-5. **Two things need Classic's own eyes, and no test can replace them:** look at the deck
+5. **DESIGN IS DONE — `38aa4de` + `2cedbd1`.** Tokens unified (globals.css is the single source
+   at 34/16/82; `/` moved 0 pixels), Book 1 starfield wired into Bridge, boot at exactly 1800ms.
+   The visual gate now measures design instead of machine load: `/tools`'s seven vendor probes
+   have real deadlines (`execFile` 4000ms, `AbortSignal.timeout` 8000ms) and **under load report a
+   vendor missing that is present on disk** — a flaky visual test here can be a POWER symptom.
+   Gates: tsc 0, `test:v2` 1546/0 fail, eslint 0, visual **10/10 three consecutive runs**.
+   `/tools` also had a live white-screen bug — 8 optional chains stopping one level short, fixed
+   in `514b0c5`.
+
+6. **LATENCY IS NOT FIXED, and do not let the green suite say otherwise.**
+   `src/lib/voice/sentence-chunker.ts` + its 2 test files are UNCOMMITTED on purpose: they
+   compile and pass, but **nothing imports them**, so the feature does not exist. Measured cause:
+   `stargate-context.tsx:611` hands the COMPLETE reply to `speakStarra`, and `/api/tts` takes
+   0.82s for "Copy." vs 4.02s for a paragraph — synthesis scales with length and only begins
+   after the brain has finished streaming. When wiring it, REUSE `speech-shaping.ts:844`'s
+   existing `splitSentences` rather than adding a second splitter, and do not regress
+   `tests/one-voice-chat-fallback.test.ts`.
+
+7. **Two things need Classic's own eyes, and no test can replace them:** look at the deck
    (skeletons, press feedback, polish), and **hear a live call** — she should now introduce
    herself as STARRA on every surface including private and offline.
