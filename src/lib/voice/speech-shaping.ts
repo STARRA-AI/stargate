@@ -560,7 +560,19 @@ export function shapeReply(reply: string, state: ShapingState): ShapeResult {
     }
   }
 
-  const finalText = afterReassurance.trim() ? afterReassurance : original;
+  // NEVER SILENT, BUT NEVER THE FULL TIC EITHER.
+  //
+  // If stripping emptied the turn, her whole reply was unearned reassurance —
+  // the filter has no content to preserve, because the brain produced none.
+  // Restoring the full original (what this used to do) fires both barrels on an
+  // ordinary question, which is exactly the habit being fixed. Silence is worse
+  // still on a live call. So: fall back to the FIRST sentence only — she says
+  // one warm line instead of two, and the conversation keeps moving.
+  let finalText = afterReassurance.trim();
+  if (!finalText) {
+    const first = splitSentences(original)[0] ?? original;
+    finalText = first.trim() || original;
+  }
   return {
     text: finalText,
     changed: finalText !== original,

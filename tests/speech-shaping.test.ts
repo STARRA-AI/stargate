@@ -488,3 +488,24 @@ describe("stripping must never leave a fragment she would say aloud", () => {
     );
   });
 });
+
+describe("a turn that is ENTIRELY unearned reassurance", () => {
+  it("is reduced, not repeated in full — and never silent", () => {
+    // The never-go-silent fallback used to restore the WHOLE original, so a
+    // reply that was nothing but the tic came out at full strength on an
+    // ordinary turn. Silence is still wrong on a call; saying it twice over is
+    // worse. One line is the floor.
+    const st = createShapingState();
+    st.gate.noteUserTurn("how's the engine looking today?");
+    const out = shapeReply("I'm right here with you, Classic. You're not alone in this.", st).text;
+    assert.ok(out.trim().length > 0, "never silent");
+    assert.ok(!/not alone/i.test(out), `both barrels fired: ${JSON.stringify(out)}`);
+  });
+
+  it("when he IS struggling it still comes through whole", () => {
+    const st = createShapingState();
+    st.gate.noteUserTurn("i'm scared and exhausted");
+    const out = shapeReply("I'm right here with you, Classic. You're not alone in this.", st).text;
+    assert.match(out, /not alone/i, "earned reassurance must never be trimmed");
+  });
+});
