@@ -68,12 +68,13 @@ prompt = Book 3.
 
 ## EXECUTION RULE — /starra-loop is the DEFAULT, not the escalation
 
-**Classic's standing order, 2026-08-07:** *"make sure that any task moving
-forward is done in this loop unless it's you just simply asking me a question."*
+**Classic's standing order, 2026-08-07:** every task moving forward is done in
+the loop. The ONLY exception is **CLASSIC ASKING A SIMPLE QUESTION** — when he
+just wants an answer, answer him. Do not convene an org to reply to a question.
 
 Every task runs through `/starra-loop` (Fable CEO -> Opus executives -> Sonnet
-workers -> board sign-off). The ONLY exception is a turn where Claude is purely
-asking Classic a question and doing no work.
+workers -> board sign-off). "Task" means work: writing, editing, debugging,
+configuring, investigating. A question is not a task.
 
 Not exceptions — these still go through the loop:
 - "small" or "one-line" changes
