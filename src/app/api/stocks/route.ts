@@ -19,7 +19,12 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 const ENGINE_BASE = "http://127.0.0.1:47401";
-const ENGINE_ENV = join(homedir(), "Desktop", "STARGATE", "engine", ".env");
+// STARGATE moved off ~/Desktop in the 2026-08-06 machine migration. This path
+// was never updated, so the token read always failed and the route reported
+// { linked: false } — the ENGINE ROOM panel showed unlinked no matter what the
+// engine was actually doing. Verified 2026-08-08: the real file is
+// ~/STARGATE/engine/.env.
+const ENGINE_ENV = join(homedir(), "STARGATE", "engine", ".env");
 
 function engineToken(): string | null {
   try {

@@ -239,6 +239,44 @@ heal_default_models() {
   fi
 }
 
+# ── ENGINE ROOM ── the stocks/crypto paper engine, on loopback 47401.
+# The deck's /api/stocks reads it and degrades to { linked: false } when it is
+# down, so a missing engine is never fatal — it just means the ENGINE ROOM panel
+# sits dark. Starting it here is what makes the panel real after a reboot
+# instead of a manual step Classic has to remember.
+ENGINE_DIR="$HOME/STARGATE/engine"
+ENGINE_PORT=47401
+
+engine_up() { curl -s -m 2 -o /dev/null "http://127.0.0.1:${ENGINE_PORT}/health"; }
+
+start_engine() {
+  if engine_up; then
+    echo "● Engine Room already online"
+    return 0
+  fi
+  if [[ ! -x "$ENGINE_DIR/.venv/bin/python" ]]; then
+    echo "◆ Engine Room venv missing at $ENGINE_DIR/.venv — skipping (deck runs fine without it)."
+    return 0
+  fi
+  echo "→ Starting Engine Room on 127.0.0.1:${ENGINE_PORT}…"
+  # Same trap-HUP form the deck and Ollama use: macOS nohup dies under launchd.
+  ( cd "$ENGINE_DIR" && trap '' HUP && exec .venv/bin/python -m uvicorn engine_room.api:app \
+      --host 127.0.0.1 --port "$ENGINE_PORT" ) </dev/null >>"$LOG" 2>&1 &
+  for _ in {1..25}; do
+    engine_up && { echo "● Engine Room online (paper)"; return 0; }
+    sleep 1
+  done
+  echo "⚠ Engine Room did not answer on ${ENGINE_PORT} — deck continues, panel stays unlinked."
+  return 0
+}
+
+stop_engine() {
+  if pgrep -f "uvicorn engine_room.api:app" >/dev/null 2>&1; then
+    pkill -f "uvicorn engine_room.api:app" >/dev/null 2>&1 || true
+    echo "● Engine Room stopped"
+  fi
+}
+
 start_ollama() {
   if ollama_up; then
     echo "● Ollama already online"
@@ -375,6 +413,7 @@ cmd_up() {
   set +e
   start_ollama
   local o=$?
+  start_engine
   start_deck
   local d=$?
   set -e
