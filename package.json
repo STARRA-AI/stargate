@@ -37,7 +37,7 @@
     "@pixiv/three-vrm": "^3.5.5",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
-    "next": "15.5.20",
+    "next": "16.3.0",
     "onnxruntime-web": "^1.27.0",
     "pdf-parse": "^2.4.5",
     "react": "19.1.0",
