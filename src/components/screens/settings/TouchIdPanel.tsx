@@ -26,30 +26,39 @@ function unavailable(): string | null {
   return null;
 }
 
+/** The list could not be READ — distinct from "there is nothing registered".
+ *  Conflating the two tells Classic he has no passkey when his cookie merely
+ *  expired, and he then walks into an excludeCredentials collision against a
+ *  credential the panel just swore did not exist. */
+type LoadState = "loading" | "error";
+
 /** A credential that can summon the phone/QR sheet instead of the fingerprint.
  *  The record on disk from 7/31 has NO `attachment` (it predates the field) and
  *  `transports: ["hybrid","internal"]` — `hybrid` IS the QR-your-phone channel.
  *  Both halves of this test must flag it. */
-function isRoaming(p: PasskeyRow): boolean {
+export function isRoaming(p: PasskeyRow): boolean {
   return p.attachment !== "platform" || p.transports.includes("hybrid");
 }
 
 export function TouchIdPanel() {
-  const [rows, setRows] = useState<PasskeyRow[] | null>(null);
+  const [rows, setRows] = useState<PasskeyRow[] | LoadState>("loading");
   const [msg, setMsg] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch("/api/auth/passkey");
+      // 401 (expired session) or any non-2xx means we do not KNOW what is
+      // registered. Falling back to [] here would render NOTHING REGISTERED
+      // over a credential that is still on disk.
       if (!res.ok) {
-        setRows([]);
+        setRows("error");
         return;
       }
       const data = (await res.json()) as { passkeys?: PasskeyRow[] };
       setRows(data.passkeys ?? []);
     } catch {
-      setRows([]);
+      setRows("error");
     }
   }, []);
 
@@ -127,9 +136,13 @@ export function TouchIdPanel() {
         will not bind to an IP address.
       </p>
 
-      {rows === null ? (
+      {rows === "loading" ? (
         <p className="font-[family-name:var(--font-mono)] text-xs text-[var(--star)]">
           PROCESSING
+        </p>
+      ) : rows === "error" ? (
+        <p className="font-[family-name:var(--font-mono)] text-xs text-[var(--danger)]">
+          COULD NOT READ THE LIST — RELOAD
         </p>
       ) : rows.length === 0 ? (
         <p className="font-[family-name:var(--font-mono)] text-xs text-[var(--star)]">
@@ -160,10 +173,13 @@ export function TouchIdPanel() {
         ))
       )}
 
+      {/* Disabled on "error" on purpose: the register route sends the existing
+          credentials as excludeCredentials, so offering setup when we could not
+          read that list is how the collision happens. Reload first. */}
       <button
         type="button"
         className="deck-badge is-ok mt-2"
-        disabled={busy}
+        disabled={busy || rows === "error"}
         onClick={() => void register()}
       >
         {busy ? "…" : "Set up Touch ID"}
