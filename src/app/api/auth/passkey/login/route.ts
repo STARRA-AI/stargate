@@ -12,6 +12,7 @@ import {
   rpFromRequest,
   passkeyBlocker,
   pubKeyFromStore,
+  loginTransports,
 } from "@/lib/webauthn";
 
 export const runtime = "nodejs";
@@ -33,10 +34,12 @@ export async function GET(req: Request) {
   }
   const options = await generateAuthenticationOptions({
     rpID,
-    userVerification: "preferred",
+    userVerification: "required",
     allowCredentials: list.map((p) => ({
       id: p.id,
-      transports: p.transports as AuthenticatorTransportFuture[] | undefined,
+      // NOT p.transports. A platform credential must never advertise hybrid,
+      // or the browser offers the QR sheet before the fingerprint reader.
+      transports: loginTransports(p) as AuthenticatorTransportFuture[] | undefined,
     })),
   });
   const res = NextResponse.json(options);

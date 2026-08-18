@@ -9,7 +9,7 @@
  */
 import assert from "node:assert/strict";
 import { describe, it, beforeEach, afterEach } from "node:test";
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, rmSync, readFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -130,5 +130,32 @@ describe("PLATFORM_AUTHENTICATOR_SELECTION — the three fields that decide the 
 
   it("keeps the credential discoverable so login needs no username", () => {
     assert.equal(PLATFORM_AUTHENTICATOR_SELECTION.residentKey, "required");
+  });
+});
+
+describe("the passkey management route", () => {
+  // Asserted against the SOURCE, not by importing the module. No test in this
+  // repo imports a route: they read the file and assert on it (see
+  // tests/public-token-scopes.test.ts:118,131). A route pulls next/headers,
+  // which is not something to bet a gate on under `tsx --test`.
+  const src = readFileSync(
+    join(process.cwd(), "src/app/api/auth/passkey/route.ts"),
+    "utf8",
+  );
+
+  it("exports GET and DELETE", () => {
+    assert.match(src, /export async function GET/);
+    assert.match(src, /export async function DELETE/);
+  });
+
+  it("runs on the Node runtime — it touches fs and cookies", () => {
+    assert.match(src, /export const runtime = "nodejs"/);
+  });
+
+  it("gates both verbs behind the existing session", () => {
+    // Two call sites: one in GET, one in DELETE. A management route that
+    // forgets one is a passkey-deletion endpoint open to anyone who can
+    // reach the port.
+    assert.equal((src.match(/isAuthed\(\)/g) ?? []).length >= 3, true);
   });
 });
