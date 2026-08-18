@@ -8,8 +8,17 @@
  * a platform credential never advertises a roaming transport.
  */
 import assert from "node:assert/strict";
-import { describe, it } from "node:test";
-import { loginTransports, PLATFORM_ONLY_REASON } from "../src/lib/webauthn";
+import { describe, it, beforeEach, afterEach } from "node:test";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  loginTransports,
+  PLATFORM_ONLY_REASON,
+  removePasskey,
+  loadPasskeys,
+  savePasskeys,
+} from "../src/lib/webauthn";
 import type { StoredPasskey } from "../src/lib/webauthn";
 
 function rec(over: Partial<StoredPasskey> = {}): StoredPasskey {
@@ -57,5 +66,49 @@ describe("PLATFORM_ONLY_REASON", () => {
   it("is one sentence Classic can act on, and never says 'passkey'", () => {
     assert.ok(PLATFORM_ONLY_REASON.length > 20);
     assert.ok(/Touch ID/.test(PLATFORM_ONLY_REASON));
+    assert.ok(!/passkey/i.test(PLATFORM_ONLY_REASON));
+  });
+});
+
+describe("removePasskey — against a redirected store, never the real one", () => {
+  let dir: string;
+  let prevDataDir: string | undefined;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), "passkeys-"));
+    prevDataDir = process.env.STARRA_DATA_DIR;
+    process.env.STARRA_DATA_DIR = dir;
+  });
+
+  afterEach(() => {
+    if (prevDataDir === undefined) delete process.env.STARRA_DATA_DIR;
+    else process.env.STARRA_DATA_DIR = prevDataDir;
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it("removing a present id returns true and the record is gone from loadPasskeys()", () => {
+    savePasskeys([rec({ id: "cred-1" }), rec({ id: "cred-2" })]);
+    assert.equal(removePasskey("cred-1"), true);
+    assert.deepEqual(
+      loadPasskeys().map((p) => p.id),
+      ["cred-2"],
+    );
+  });
+
+  it("removing an absent id returns false and the store is left byte-identical", () => {
+    savePasskeys([rec({ id: "cred-1" })]);
+    const before = loadPasskeys();
+    assert.equal(removePasskey("nope"), false);
+    assert.deepEqual(loadPasskeys(), before);
+  });
+
+  it("a savePasskeys -> loadPasskeys round trip preserves attachment and transports", () => {
+    const p = rec({
+      id: "cred-1",
+      attachment: "platform",
+      transports: ["hybrid", "internal"],
+    });
+    savePasskeys([p]);
+    assert.deepEqual(loadPasskeys(), [p]);
   });
 });

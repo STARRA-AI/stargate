@@ -12,7 +12,16 @@
 import fs from "fs";
 import path from "path";
 
-const STORE = path.join(process.cwd(), "data", "passkeys.json");
+/**
+ * Resolved per call, not at module load, so a test can redirect the whole store
+ * with STARRA_DATA_DIR and never touch the real data/passkeys.json — which holds
+ * the one credential that logs Classic in. Same convention the Dragon ticket
+ * store uses.
+ */
+function storePath(): string {
+  const dir = process.env.STARRA_DATA_DIR || path.join(process.cwd(), "data");
+  return path.join(dir, "passkeys.json");
+}
 
 export const RP_NAME = "STARGATE";
 
@@ -33,7 +42,7 @@ export interface StoredPasskey {
 
 export function loadPasskeys(): StoredPasskey[] {
   try {
-    const raw = fs.readFileSync(STORE, "utf8");
+    const raw = fs.readFileSync(storePath(), "utf8");
     const list = JSON.parse(raw) as StoredPasskey[];
     return Array.isArray(list) ? list : [];
   } catch {
@@ -42,8 +51,8 @@ export function loadPasskeys(): StoredPasskey[] {
 }
 
 export function savePasskeys(list: StoredPasskey[]): void {
-  fs.mkdirSync(path.dirname(STORE), { recursive: true });
-  fs.writeFileSync(STORE, JSON.stringify(list, null, 2));
+  fs.mkdirSync(path.dirname(storePath()), { recursive: true });
+  fs.writeFileSync(storePath(), JSON.stringify(list, null, 2));
 }
 
 /**
