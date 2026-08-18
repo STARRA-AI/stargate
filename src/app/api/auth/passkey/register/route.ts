@@ -13,6 +13,8 @@ import {
   passkeyBlocker,
   pubKeyToStore,
   RP_NAME,
+  PLATFORM_AUTHENTICATOR_SELECTION,
+  PLATFORM_ONLY_REASON,
 } from "@/lib/webauthn";
 
 // crypto + fs → Node runtime.
@@ -51,10 +53,7 @@ export async function GET(req: Request) {
       id: p.id,
       transports: p.transports as AuthenticatorTransportFuture[] | undefined,
     })),
-    authenticatorSelection: {
-      residentKey: "preferred",
-      userVerification: "preferred",
-    },
+    authenticatorSelection: PLATFORM_AUTHENTICATOR_SELECTION,
   });
   const res = NextResponse.json(options);
   res.cookies.set(CHALLENGE_COOKIE, options.challenge, {
@@ -103,6 +102,15 @@ export async function POST(req: Request) {
     return NextResponse.json({ ok: false, error: "not verified" }, { status: 400 });
   }
 
+  // WHAT THE BROWSER ACTUALLY USED, not what we asked for. `authenticatorAttachment`
+  // rides on the credential response (@simplewebauthn/server 13.3.2,
+  // types/index.d.ts:78). Chrome and Safari both populate it. Storing a
+  // cross-platform credential here is how the deck ended up with a hybrid one
+  // in the first place — refuse it instead of collecting another.
+  if (body.authenticatorAttachment && body.authenticatorAttachment !== "platform") {
+    return NextResponse.json({ ok: false, error: PLATFORM_ONLY_REASON }, { status: 400 });
+  }
+
   const cred = verification.registrationInfo.credential;
   const list = loadPasskeys();
   list.push({
@@ -110,7 +118,8 @@ export async function POST(req: Request) {
     publicKey: pubKeyToStore(cred.publicKey),
     counter: cred.counter,
     transports: cred.transports,
-    label: `Passkey · ${new Date().toLocaleDateString()}`,
+    attachment: body.authenticatorAttachment ?? "platform",
+    label: `Touch ID · ${new Date().toLocaleDateString()}`,
     createdAt: Date.now(),
   });
   savePasskeys(list);

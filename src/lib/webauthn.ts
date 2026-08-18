@@ -128,6 +128,26 @@ export function loginTransports(p: StoredPasskey): string[] | undefined {
   return kept.length > 0 ? kept : undefined;
 }
 
+/**
+ * THE THREE FIELDS THAT DECIDE WHICH SHEET APPEARS.
+ *
+ * Without `authenticatorAttachment: "platform"` the browser is free to offer
+ * roaming authenticators — iCloud Keychain sync, phone-via-QR, a security key
+ * — which is exactly the sheet Classic kept getting instead of Touch ID.
+ * MDN: "platform" means "the authenticator is part of the device WebAuthn is
+ * running on … a public key credential bound to a platform authenticator is
+ * called a platform credential."
+ *
+ * `userVerification: "required"` makes the fingerprint mandatory; "preferred"
+ * "will not fail if user verification cannot be performed" (MDN), i.e. a
+ * passkey with no biometric, which is not the thing he asked for.
+ */
+export const PLATFORM_AUTHENTICATOR_SELECTION = {
+  authenticatorAttachment: "platform",
+  residentKey: "required",
+  userVerification: "required",
+} as const;
+
 /** Remove one credential by id. Returns whether anything was actually removed. */
 export function removePasskey(id: string): boolean {
   const list = loadPasskeys();

@@ -18,6 +18,7 @@ import {
   removePasskey,
   loadPasskeys,
   savePasskeys,
+  PLATFORM_AUTHENTICATOR_SELECTION,
 } from "../src/lib/webauthn";
 import type { StoredPasskey } from "../src/lib/webauthn";
 
@@ -110,5 +111,24 @@ describe("removePasskey — against a redirected store, never the real one", () 
     });
     savePasskeys([p]);
     assert.deepEqual(loadPasskeys(), [p]);
+  });
+});
+
+// The registration option block is data, not behaviour, so it is asserted as
+// data. Importing the route would drag next/headers and a cookie store into a
+// unit test; this pins the same three fields the route sends.
+describe("PLATFORM_AUTHENTICATOR_SELECTION — the three fields that decide the sheet", () => {
+  it("pins the built-in authenticator", () => {
+    assert.equal(PLATFORM_AUTHENTICATOR_SELECTION.authenticatorAttachment, "platform");
+  });
+
+  it("makes the biometric mandatory, not optional", () => {
+    // "preferred" does not fail if user verification cannot be performed
+    // (MDN). That is a passkey with no fingerprint, which is not the feature.
+    assert.equal(PLATFORM_AUTHENTICATOR_SELECTION.userVerification, "required");
+  });
+
+  it("keeps the credential discoverable so login needs no username", () => {
+    assert.equal(PLATFORM_AUTHENTICATOR_SELECTION.residentKey, "required");
   });
 });
