@@ -2,6 +2,7 @@
 
 import { RoutinesTable } from "@/components/bridge/RoutinesTable";
 import { ScreenShell } from "@/components/hud/ScreenShell";
+import { TouchIdPanel } from "@/components/screens/settings/TouchIdPanel";
 import { VoicePicker } from "@/components/screens/settings/VoicePanel";
 import type { Tier1Data } from "@/lib/context/tier1";
 import { KEY_GROUP_LABELS, KEY_SLOTS } from "@/lib/keys";
@@ -371,6 +372,7 @@ export default function SettingsPage() {
     <ScreenShell title="Settings">
       <div className="deck-grid">
         <KeyVault />
+        <TouchIdPanel />
         <VoicePicker />
         <section className="deck-panel">
           <h2 className="deck-title">Deck</h2>
