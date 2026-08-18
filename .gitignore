@@ -104,3 +104,6 @@ vendor/
 /e2e/.auth/
 /test-results/
 /playwright-report/
+
+# SDD scratch — ledger, briefs, review packages
+.superpowers/
