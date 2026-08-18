@@ -1,4 +1,5 @@
 import { test, expect, type Page } from "@playwright/test";
+import { KEY_SLOTS } from "@/lib/keys";
 
 const SCREENS = ["/", "/brief", "/connectors", "/memory", "/pipeline", "/settings", "/tools", "/vault"];
 
@@ -84,6 +85,32 @@ async function freezeLiveData(page: Page, path: string) {
   if (path === "/tools") {
     await page.route("**/api/tools/**", (route) =>
       route.fulfill({ status: 200, contentType: "application/json", body: TOOLS_STUB }),
+    );
+  }
+  if (path === "/settings") {
+    // settings/page.tsx:272 renders `● linked ${s.masked}` — the masked tail
+    // of every REAL key — so an unstubbed snapshot against live /api/keys
+    // would commit fragments of the operator's real credentials to git.
+    // Every slot reports linked:false / masked:null here, derived from
+    // KEY_SLOTS (not hand-typed) so no key-shaped string can ever reach a
+    // committed baseline even after a slot is added or the vault changes.
+    await page.route("**/api/keys", (route) =>
+      route.fulfill({
+        status: 200,
+        contentType: "application/json",
+        body: JSON.stringify({
+          slots: KEY_SLOTS.map((s) => ({
+            id: s.id,
+            label: s.label,
+            hint: s.hint,
+            powers: s.powers,
+            linked: false,
+            masked: null,
+            source: null,
+            shadowedByEngine: false,
+          })),
+        }),
+      }),
     );
   }
 }
