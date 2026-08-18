@@ -152,10 +152,34 @@ describe("the passkey management route", () => {
     assert.match(src, /export const runtime = "nodejs"/);
   });
 
-  it("gates both verbs behind the existing session", () => {
-    // Two call sites: one in GET, one in DELETE. A management route that
-    // forgets one is a passkey-deletion endpoint open to anyone who can
-    // reach the port.
-    assert.equal((src.match(/isAuthed\(\)/g) ?? []).length >= 3, true);
+  // /api/auth is in PUBLIC_PREFIXES (src/middleware.ts:13), so middleware
+  // does NOT cover this route — this in-route gate is the only lock on an
+  // endpoint that deletes the credential Classic logs in with. A count of
+  // the string "isAuthed()" passes on a comment, an inverted `if`, a missing
+  // `await`, or a gate that never `return`s — so pin the SHAPE instead:
+  // negated, awaited, early-return, first statement in the handler.
+  const gateShape = (verb: string) =>
+    new RegExp(
+      `export async function ${verb}\\([^)]*\\)\\s*{\\s*if \\(!\\(await isAuthed\\(\\)\\)\\)\\s*{\\s*return`,
+    );
+
+  for (const verb of ["GET", "DELETE"]) {
+    it(`${verb} refuses before it touches the store`, () => {
+      assert.match(src, gateShape(verb));
+    });
+  }
+
+  it("the gate regex rejects the four ways this goes wrong", () => {
+    const bad = [
+      // un-awaited: `!Promise` is always false, so the gate never fires
+      `export async function GET() {\n  if (!isAuthed()) {\n    return x;\n  }`,
+      // inverted: refuses the authorised caller, admits everyone else
+      `export async function GET() {\n  if (await isAuthed()) {\n    return x;\n  }`,
+      // computes the gate but never returns — falls straight through
+      `export async function GET() {\n  const ok = await isAuthed();\n  return y;\n}`,
+      // store access before the gate
+      `export async function GET() {\n  const list = loadPasskeys();\n  if (!(await isAuthed())) {\n    return x;\n  }`,
+    ];
+    for (const badSrc of bad) assert.equal(gateShape("GET").test(badSrc), false);
   });
 });
