@@ -21,6 +21,12 @@ export interface StoredPasskey {
   publicKey: string; // base64url-encoded COSE public key
   counter: number;
   transports?: string[];
+  /**
+   * What the browser reported at registration. "platform" is Touch ID — the
+   * authenticator built into this Mac. Absent on records written before
+   * 2026-08-18, which is why loginTransports leaves those alone.
+   */
+  attachment?: "platform" | "cross-platform";
   label: string;
   createdAt: number;
 }
@@ -87,4 +93,37 @@ export function pubKeyFromStore(stored: string): Uint8Array<ArrayBuffer> {
   const out = new Uint8Array(buf.byteLength);
   out.set(buf);
   return out;
+}
+
+/** The one sentence shown wherever a non-Touch-ID authenticator is refused. */
+export const PLATFORM_ONLY_REASON =
+  "That wasn't Touch ID — it was a phone or a security key. Pick \"This device\" on the sheet so the fingerprint reader on this Mac is what gets registered.";
+
+/**
+ * Transports that are safe to put in `allowCredentials` for this credential.
+ *
+ * `hybrid` means cross-device: the browser reads it as "this may live on a
+ * phone" and offers the QR sheet. A credential we KNOW is platform-bound must
+ * never carry it, or the Touch ID sheet is never the first thing he sees.
+ *
+ * A record with no recorded `attachment` predates this rule and is returned
+ * unchanged — narrowing a credential we cannot vouch for could lock him out.
+ */
+const ROAMING_TRANSPORTS = new Set(["hybrid", "ble", "nfc", "usb", "cable"]);
+
+export function loginTransports(p: StoredPasskey): string[] | undefined {
+  if (p.attachment !== "platform" || !p.transports) return p.transports;
+  const kept = p.transports.filter((t) => !ROAMING_TRANSPORTS.has(t));
+  // An EMPTY array is a hint that nothing works; omitting the field lets the
+  // browser decide. Never send [].
+  return kept.length > 0 ? kept : undefined;
+}
+
+/** Remove one credential by id. Returns whether anything was actually removed. */
+export function removePasskey(id: string): boolean {
+  const list = loadPasskeys();
+  const next = list.filter((p) => p.id !== id);
+  if (next.length === list.length) return false;
+  savePasskeys(next);
+  return true;
 }
