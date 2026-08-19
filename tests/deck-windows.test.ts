@@ -45,7 +45,7 @@ describe("getWindowRect", () => {
 
   it("returns the fallback on unparseable JSON rather than throwing", async () => {
     restore();
-    restore = installStorage({ "stargate.window.console": "{{{" });
+    restore = installStorage({ "stargate.window.rect.console": "{{{" });
     const { getWindowRect } = await import("../src/lib/deck/deck-windows");
     assert.deepEqual(getWindowRect("console", FALLBACK), FALLBACK);
   });
@@ -53,7 +53,7 @@ describe("getWindowRect", () => {
   it("clamps a stored rect that would sit off the deck", async () => {
     restore();
     restore = installStorage({
-      "stargate.window.console": JSON.stringify({ x: 99999, y: 0, w: 400, h: 300 }),
+      "stargate.window.rect.console": JSON.stringify({ x: 99999, y: 0, w: 400, h: 300 }),
     });
     const { getWindowRect } = await import("../src/lib/deck/deck-windows");
     assert.equal(getWindowRect("console", FALLBACK).x, STAGE_W - 400);
@@ -61,7 +61,7 @@ describe("getWindowRect", () => {
 
   it("rejects a stored value missing a field", async () => {
     restore();
-    restore = installStorage({ "stargate.window.console": JSON.stringify({ x: 1, y: 2 }) });
+    restore = installStorage({ "stargate.window.rect.console": JSON.stringify({ x: 1, y: 2 }) });
     const { getWindowRect } = await import("../src/lib/deck/deck-windows");
     assert.deepEqual(getWindowRect("console", FALLBACK), FALLBACK);
   });
@@ -83,6 +83,23 @@ describe("expanded flag", () => {
     );
     setWindowExpanded("console", true);
     assert.equal(getWindowExpanded("console"), true);
+  });
+});
+
+describe("key-prefix collision", () => {
+  beforeEach(() => {
+    restore = installStorage();
+  });
+
+  it("a window id starting with 'expanded.' cannot collide with another window's flag", async () => {
+    const { getWindowRect, setWindowRect, getWindowExpanded, setWindowExpanded } = await import(
+      "../src/lib/deck/deck-windows"
+    );
+    setWindowRect("expanded.foo", { x: 1, y: 2, w: 300, h: 200 });
+    setWindowExpanded("foo", true);
+    // Neither write may have disturbed the other.
+    assert.equal(getWindowExpanded("foo"), true);
+    assert.deepEqual(getWindowRect("expanded.foo", FALLBACK), { x: 1, y: 2, w: 300, h: 200 });
   });
 });
 

@@ -9,7 +9,11 @@
  */
 import { clampToStage, type WindowRect } from "./window-geometry";
 
-const PREFIX = "stargate.window.";
+// PREFIX and EXPANDED_PREFIX are structural siblings under "stargate.window."
+// (rect. vs expanded.) so no window id can ever make the two collide — an id
+// of "expanded.foo" still lands under stargate.window.rect.expanded.foo, not
+// on top of the "foo" expanded flag.
+const PREFIX = "stargate.window.rect.";
 const EXPANDED_PREFIX = "stargate.window.expanded.";
 
 /** Dispatched on window after any write, so open UI refreshes. */
@@ -29,7 +33,7 @@ function writeRaw(key: string, value: string): void {
   try {
     window.localStorage.setItem(key, value);
   } catch {
-    // storage disabled — the in-page value still applies for this session
+    // storage disabled — the write is dropped, the value is not persisted
   }
   try {
     window.dispatchEvent(new CustomEvent(DECK_WINDOWS_EVENT));
