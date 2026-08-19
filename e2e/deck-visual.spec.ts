@@ -49,6 +49,27 @@ const TOOLS_STUB = JSON.stringify({
   summary: { counts: { total: 0, acceptedNow: 0, futureHooks: 0, rejected: 0 } },
 });
 
+// /settings also renders a Tier-1 business-context panel (MRR label, task
+// titles, project/goal counts — src/app/settings/page.tsx:391-431) off live
+// /api/context (src/app/api/context/route.ts, src/lib/context/tier1.ts). It
+// is below the fold at the pinned 1440x900 fullPage:false capture today, so
+// it costs zero pixels now — but that is a viewport/layout accident, not a
+// guarantee, and the same class of leak as unstubbed /api/keys: Classic's
+// real MRR/tasks/decisions would land in a committed PNG the moment the
+// viewport grows, a panel is added above it, or fullPage flips true. Fixed,
+// fake, schema-shaped values only — matches Tier1Schema (tier1.ts:33-39) and
+// the route's { tier1, snap } envelope (context/route.ts:11-21).
+const CONTEXT_STUB = JSON.stringify({
+  tier1: {
+    mrrLabel: "$0 (stub)",
+    goals: [{ id: "g1", horizon: "monthly", text: "Stub goal" }],
+    projects: [{ id: "p1", name: "Stub project", status: "active" }],
+    tasks: [{ id: "t1", title: "Stub task", owner: "Stub", priority: "med", done: false }],
+    decisions: [{ id: "d1", text: "Stub decision", why: "Stub reason", at: "2026-01-01" }],
+  },
+  snap: { mrrLabel: "$0 (stub)", tasksDue: 1, pipelineOpen: 1, working: 0, summaries: 0, archival: 0 },
+});
+
 // The screens above paint a placeholder until a client-side fetch commits, and
 // `networkidle` proves only that the response arrived — not that React
 // committed it. The placeholder is a STABLE DOM, so Playwright settles and
@@ -94,7 +115,7 @@ async function freezeLiveData(page: Page, path: string) {
     // Every slot reports linked:false / masked:null here, derived from
     // KEY_SLOTS (not hand-typed) so no key-shaped string can ever reach a
     // committed baseline even after a slot is added or the vault changes.
-    await page.route("**/api/keys", (route) =>
+    await page.route("**/api/keys*", (route) =>
       route.fulfill({
         status: 200,
         contentType: "application/json",
@@ -111,6 +132,9 @@ async function freezeLiveData(page: Page, path: string) {
           })),
         }),
       }),
+    );
+    await page.route("**/api/context*", (route) =>
+      route.fulfill({ status: 200, contentType: "application/json", body: CONTEXT_STUB }),
     );
   }
 }
