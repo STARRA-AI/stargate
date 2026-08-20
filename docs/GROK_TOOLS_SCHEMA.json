@@ -214,6 +214,83 @@
     {
       "type": "function",
       "function": {
+        "name": "stargate_dragon_control",
+        "description": "START or STOP Classic's Dragon Tradar bot, or change its Dragon Mode config. Engaging starts REAL trading with his own money. His app keeps its own brakes (the Agent-trading toggle, the per-order cap, live-trading enabled) and this cannot loosen any of them. Confirm with him before engaging; disengage on his word without asking twice.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "action": { "type": "string", "enum": ["engage", "disengage", "config"] },
+            "category": {
+              "type": "string",
+              "enum": ["sports", "crypto", "politics", "economics", "parallel"],
+              "description": "Required for engage. Nothing else is a valid category."
+            },
+            "config": {
+              "type": "object",
+              "description": "Required for config. Any of minBetCents, maxLegs, minEdgePct, minConfidencePct, autoFire, scanIntervalMin, thinkTank. An unknown key or a bad value is refused before it reaches his app.",
+              "properties": {
+                "minBetCents": { "type": "integer", "minimum": 0 },
+                "maxLegs": { "type": "integer", "minimum": 1 },
+                "minEdgePct": { "type": "number", "minimum": 0, "maximum": 100 },
+                "minConfidencePct": { "type": "number", "minimum": 0, "maximum": 100 },
+                "autoFire": { "type": "boolean" },
+                "scanIntervalMin": { "type": "integer", "minimum": 1 },
+                "thinkTank": { "type": "boolean" }
+              },
+              "additionalProperties": false
+            }
+          },
+          "required": ["action"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "POST", "path": "/api/dragon/control" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_dragon_order",
+        "description": "Place a REAL order against Classic's Kalshi funds. Prices are whole cents 1-99; count is a whole number of contracts. The server enforces his per-order cap and the daily loss floor, and the deck refuses anything over its own ceiling before sending. One attempt, never retried — a repeat inside the same second is treated as the SAME order, not a second position. Never fire this without his explicit go-ahead on that specific trade.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "ticker": { "type": "string", "description": "Kalshi market ticker." },
+            "side": { "type": "string", "enum": ["yes", "no"] },
+            "action": { "type": "string", "enum": ["buy", "sell"] },
+            "count": { "type": "integer", "minimum": 1, "description": "Contracts." },
+            "priceCents": { "type": "integer", "minimum": 1, "maximum": 99 }
+          },
+          "required": ["ticker", "side", "action", "count", "priceCents"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "POST", "path": "/api/dragon/order" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
+        "name": "stargate_dragon_cancel",
+        "description": "Cancel a resting Dragon Tradar order by id. Only ever reduces his exposure, so it does not need the same hesitation as placing one.",
+        "parameters": {
+          "type": "object",
+          "properties": {
+            "orderId": { "type": "string" }
+          },
+          "required": ["orderId"],
+          "additionalProperties": false
+        }
+      },
+      "stargate_mapping": {
+        "route": { "method": "DELETE", "path": "/api/dragon/order" }
+      }
+    },
+    {
+      "type": "function",
+      "function": {
         "name": "stargate_think_tank",
         "description": "Think Tank vote snapshot (uses keyed providers including xAI grok-3-mini).",
         "parameters": {
