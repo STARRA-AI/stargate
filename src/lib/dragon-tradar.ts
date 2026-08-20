@@ -42,7 +42,7 @@ export type AgentResult<T> =
   | { state: "off" }
   | { state: "ok"; stats: T }
   | { state: "blocked" }
-  | { state: "rejected" }
+  | { state: "rejected"; code?: string }
   | { state: "error"; status: number; code?: string };
 
 /** readAgent()'s original shape — AgentResult specialized to /stats. */
@@ -136,7 +136,13 @@ async function agentRequest<T>(
       signal: ac.signal,
     });
     if (res.status === 429) return { state: "blocked" };
-    if (res.status === 401 || res.status === 403) return { state: "rejected" };
+    if (res.status === 401 || res.status === 403) {
+      // Carry his app's own code through. 401/403 SHOULD only ever mean the
+      // token, but if a business refusal ever comes back on a 403 it must not
+      // read to him as "regenerate your token" with no further explanation.
+      const code = await extractErrorCode(res);
+      return code === undefined ? { state: "rejected" } : { state: "rejected", code };
+    }
     if (!res.ok) {
       const code = await extractErrorCode(res);
       return code === undefined
@@ -195,9 +201,18 @@ export async function readPositions(deps: AgentDeps = {}): Promise<AgentResult<A
   return agentGet<AgentPosition[]>("/positions", deps);
 }
 
-/** GET /orders — resting + historical orders (shape TBD: Half A). */
-export async function readOrders(deps: AgentDeps = {}): Promise<AgentResult<AgentOrder[]>> {
-  return agentGet<AgentOrder[]>("/orders", deps);
+/**
+ * GET /orders — resting orders by default (shape TBD: Half A).
+ *
+ * `status` is sent EXPLICITLY rather than left to his server's default: the
+ * snapshot asks "what is resting right now", and silently receiving full
+ * history instead would look like the same answer with more rows in it.
+ */
+export async function readOrders(
+  deps: AgentDeps = {},
+  status: "open" | "all" = "open",
+): Promise<AgentResult<AgentOrder[]>> {
+  return agentGet<AgentOrder[]>(`/orders?status=${status}`, deps);
 }
 
 /** GET /bot/state. */

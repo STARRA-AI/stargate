@@ -88,10 +88,10 @@ describe("dragon tradar agent read", () => {
     assert.equal(s.calls(), 1, "a retry here locks him out of his own bot");
   });
 
-  it("401 is REJECTED and also asked exactly once", async () => {
+  it("401 is REJECTED, keeps his app's reason, and is asked exactly once", async () => {
     const s = stub(401, { error: "invalid_agent_token" });
     const r = await readAgent({ token: "bad", fetchImpl: s.fetchImpl });
-    assert.deepEqual(r, { state: "rejected" });
+    assert.deepEqual(r, { state: "rejected", code: "invalid_agent_token" });
     assert.equal(s.calls(), 1);
   });
 
@@ -142,10 +142,11 @@ describe("agentGet — the generic client the read wrappers share", () => {
     assert.equal(s.calls(), 1);
   });
 
-  it("401 stays REJECTED with no code field", async () => {
+  it("401 stays REJECTED — the state is the decision, the code is the detail", async () => {
     const s = stub(401, { error: "invalid_agent_token" });
     const r = await agentGet<unknown>("/bot/state", { token: "bad", fetchImpl: s.fetchImpl });
-    assert.deepEqual(r, { state: "rejected" });
+    assert.deepEqual(r, { state: "rejected", code: "invalid_agent_token" });
+    assert.equal(r.state, "rejected", "still one named state, not a generic error");
   });
 
   it("200 wraps the raw body as-is, untyped", async () => {
@@ -179,10 +180,16 @@ describe("thin read wrappers — one path each, same agentGet underneath", () =>
     assert.deepEqual(r, { state: "ok", stats: [] });
   });
 
-  it("readOrders hits /orders", async () => {
+  it("readOrders asks for RESTING orders by default, never the whole history", async () => {
     const s = stub(200, []);
     await readOrders({ token: "t", fetchImpl: s.fetchImpl });
-    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/orders`);
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/orders?status=open`);
+  });
+
+  it("readOrders can ask for all of them when told to", async () => {
+    const s = stub(200, []);
+    await readOrders({ token: "t", fetchImpl: s.fetchImpl }, "all");
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/orders?status=all`);
   });
 
   it("readBotState hits /bot/state", async () => {
@@ -359,5 +366,22 @@ describe("dragon tradar config patch", () => {
       thinkTank: false,
     };
     assert.deepEqual(validateConfigPatch(full), { ok: true, patch: full });
+  });
+});
+
+describe("a rejection carries its reason", () => {
+  it("401 with a code keeps the code — 'invalid_agent_token' is not 'missing_agent_token'", async () => {
+    const s = stub(401, { error: "invalid_agent_token" });
+    assert.deepEqual(await readAgent({ token: "t", fetchImpl: s.fetchImpl }), {
+      state: "rejected",
+      code: "invalid_agent_token",
+    });
+  });
+
+  it("401 with no parsable body is still just rejected", async () => {
+    const s = stub(401, undefined);
+    assert.deepEqual(await readAgent({ token: "t", fetchImpl: s.fetchImpl }), {
+      state: "rejected",
+    });
   });
 });
