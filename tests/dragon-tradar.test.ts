@@ -9,7 +9,16 @@
  */
 import assert from "node:assert/strict";
 import { describe, it } from "node:test";
-import { readAgent, balanceUsd, DRAGON_TRADAR_AGENT_BASE } from "../src/lib/dragon-tradar";
+import {
+  readAgent,
+  balanceUsd,
+  DRAGON_TRADAR_AGENT_BASE,
+  agentGet,
+  readPositions,
+  readOrders,
+  readBotState,
+  readPerformance,
+} from "../src/lib/dragon-tradar";
 
 function stub(status: number, body: unknown = {}) {
   let calls = 0;
@@ -95,5 +104,73 @@ describe("dragon tradar agent read", () => {
       state: "error",
       status: 503,
     });
+  });
+});
+
+describe("agentGet — the generic client the read wrappers share", () => {
+  it("agentGet surfaces the app's error code verbatim", async () => {
+    const s = stub(423, { error: "daily_loss_floor_reached" });
+    const r = await agentGet<unknown>("/bot/state", { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "error", status: 423, code: "daily_loss_floor_reached" });
+    assert.equal(s.calls(), 1);
+  });
+
+  it("a non-OK body with no error field omits code entirely", async () => {
+    const s = stub(503, {});
+    const r = await agentGet<unknown>("/bot/state", { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "error", status: 503 });
+    assert.ok(!("code" in r));
+  });
+
+  it("429 stays BLOCKED with no code field, even with a JSON error body", async () => {
+    const s = stub(429, { error: "temporarily_blocked" });
+    const r = await agentGet<unknown>("/bot/state", { token: "bad", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "blocked" });
+    assert.equal(s.calls(), 1);
+  });
+
+  it("401 stays REJECTED with no code field", async () => {
+    const s = stub(401, { error: "invalid_agent_token" });
+    const r = await agentGet<unknown>("/bot/state", { token: "bad", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "rejected" });
+  });
+
+  it("200 wraps the raw body as-is, untyped", async () => {
+    const s = stub(200, { running: true, category: "sports" });
+    const r = await agentGet<{ running: boolean }>("/bot/state", { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "ok", stats: { running: true, category: "sports" } });
+  });
+});
+
+describe("thin read wrappers — one path each, same agentGet underneath", () => {
+  it("readPositions hits /positions", async () => {
+    const s = stub(200, []);
+    const r = await readPositions({ token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/positions`);
+    assert.deepEqual(r, { state: "ok", stats: [] });
+  });
+
+  it("readOrders hits /orders", async () => {
+    const s = stub(200, []);
+    await readOrders({ token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/orders`);
+  });
+
+  it("readBotState hits /bot/state", async () => {
+    const s = stub(200, {});
+    await readBotState({ token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/bot/state`);
+  });
+
+  it("readPerformance hits /performance", async () => {
+    const s = stub(200, {});
+    await readPerformance({ token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/performance`);
+  });
+
+  it("readPositions is off with no token, same as every other read", async () => {
+    const s = stub(200, []);
+    assert.deepEqual(await readPositions({ token: null, fetchImpl: s.fetchImpl }), { state: "off" });
+    assert.equal(s.calls(), 0);
   });
 });

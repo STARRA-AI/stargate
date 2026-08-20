@@ -38,12 +38,35 @@ export type AgentStats = {
 };
 
 /** Every outcome is named. Nothing is silently swallowed into `null`. */
-export type AgentRead =
+export type AgentResult<T> =
   | { state: "off" }
-  | { state: "ok"; stats: AgentStats }
+  | { state: "ok"; stats: T }
   | { state: "blocked" }
   | { state: "rejected" }
-  | { state: "error"; status: number };
+  | { state: "error"; status: number; code?: string };
+
+/** readAgent()'s original shape — AgentResult specialized to /stats. */
+export type AgentRead = AgentResult<AgentStats>;
+
+export type AgentOrder = Record<string, unknown>;
+
+/** GET /bot/state — Task A1 contract; field values are best-effort, unverified live. */
+export type AgentBotState = {
+  running: boolean;
+  category: string;
+  mode: string;
+  lastScanAt: string | null;
+  config: Record<string, unknown>;
+};
+
+/** GET /performance — Task A1 contract, verbatim field list. */
+export type AgentPerformance = {
+  realizedPnlCents: number;
+  unrealizedPnlCents: number;
+  winRate: number;
+  tradeCount: number;
+  since: string;
+};
 
 type Deps = {
   /** null/"" = not configured. undefined = resolve via getKey(). */
@@ -62,10 +85,26 @@ function coerceStats(raw: unknown): AgentStats {
   };
 }
 
+/** Parses `{"error": "..."}` out of a non-OK JSON body. Never throws. */
+async function extractErrorCode(res: Response): Promise<string | undefined> {
+  try {
+    const body: unknown = await res.json();
+    if (body && typeof body === "object") {
+      const err = (body as Record<string, unknown>).error;
+      if (typeof err === "string") return err;
+    }
+  } catch {
+    // not JSON, or no body — no code to report
+  }
+  return undefined;
+}
+
 /**
- * One GET /stats. One attempt. No retry — see the landmine note above.
+ * One GET to `${base}${path}`. One attempt. No retry — see the landmine note
+ * above. This is the only place in the module that talks HTTP; every read
+ * below, including readAgent, routes through here.
  */
-export async function readAgent(deps: Deps = {}): Promise<AgentRead> {
+export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentResult<T>> {
   const token =
     deps.token !== undefined ? deps.token : await getKey("dragontradar_agent_token");
   if (!token) return { state: "off" };
@@ -76,14 +115,19 @@ export async function readAgent(deps: Deps = {}): Promise<AgentRead> {
   const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? 10_000);
 
   try {
-    const res = await doFetch(`${base}/stats`, {
+    const res = await doFetch(`${base}${path}`, {
       headers: { Authorization: `Bearer ${token}` },
       signal: ac.signal,
     });
     if (res.status === 429) return { state: "blocked" };
     if (res.status === 401 || res.status === 403) return { state: "rejected" };
-    if (!res.ok) return { state: "error", status: res.status };
-    return { state: "ok", stats: coerceStats(await res.json()) };
+    if (!res.ok) {
+      const code = await extractErrorCode(res);
+      return code === undefined
+        ? { state: "error", status: res.status }
+        : { state: "error", status: res.status, code };
+    }
+    return { state: "ok", stats: (await res.json()) as T };
   } catch {
     // Network down / aborted. Status 0 says "never reached him", which is a
     // different fact from any HTTP code and must not read as a rejection.
@@ -91,6 +135,32 @@ export async function readAgent(deps: Deps = {}): Promise<AgentRead> {
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** GET /stats, coerced so a garbage body can't crash a caller. */
+export async function readAgent(deps: Deps = {}): Promise<AgentRead> {
+  const r = await agentGet<AgentStats>("/stats", deps);
+  return r.state === "ok" ? { state: "ok", stats: coerceStats(r.stats) } : r;
+}
+
+/** GET /positions — open positions, full per-position detail (shape TBD: Half A). */
+export async function readPositions(deps: Deps = {}): Promise<AgentResult<AgentPosition[]>> {
+  return agentGet<AgentPosition[]>("/positions", deps);
+}
+
+/** GET /orders — resting + historical orders (shape TBD: Half A). */
+export async function readOrders(deps: Deps = {}): Promise<AgentResult<AgentOrder[]>> {
+  return agentGet<AgentOrder[]>("/orders", deps);
+}
+
+/** GET /bot/state. */
+export async function readBotState(deps: Deps = {}): Promise<AgentResult<AgentBotState>> {
+  return agentGet<AgentBotState>("/bot/state", deps);
+}
+
+/** GET /performance. */
+export async function readPerformance(deps: Deps = {}): Promise<AgentResult<AgentPerformance>> {
+  return agentGet<AgentPerformance>("/performance", deps);
 }
 
 /** Dollars, for anything that shows a human a number. */
