@@ -1,7 +1,14 @@
 import { pushFeed } from "@/lib/feed";
 import { fetchPortfolio, fetchWatchlist, type WatchMarket } from "@/lib/kalshi";
-import { readAgent, readPositions, readBotState, readPerformance } from "@/lib/dragon-tradar";
-import { sweepState, type SweepMarks } from "@/lib/dragon-sweep";
+import {
+  readAgent,
+  readPositions,
+  readBotState,
+  readPerformance,
+  type AgentResult,
+  type AgentPerformance,
+} from "@/lib/dragon-tradar";
+import { sweepState, type SweepMarks, type SweepState } from "@/lib/dragon-sweep";
 
 export const runtime = "nodejs";
 
@@ -20,18 +27,52 @@ const SWEEP_ENV_DEFAULTS = {
   DRAGON_SWEEP_LAST_MARK_CENTS: 0,
 } as const;
 
-function envCents(name: keyof typeof SWEEP_ENV_DEFAULTS): number {
-  const n = Number.parseInt(process.env[name] ?? "", 10);
+function envCents(
+  name: keyof typeof SWEEP_ENV_DEFAULTS,
+  env: Record<string, string | undefined>,
+): number {
+  const n = Number.parseInt(env[name] ?? "", 10);
   return Number.isNaN(n) || n < 0 ? SWEEP_ENV_DEFAULTS[name] : n;
 }
 
-/** Classic's sweep thresholds. No store yet — env is the source until one exists. */
-export function readSweepMarks(): SweepMarks {
+/**
+ * Classic's sweep thresholds. No store yet — env is the source until one
+ * exists. `env` defaults to `process.env` but is a parameter so a test can
+ * pass `{}` or a typo'd value without touching global state.
+ */
+export function readSweepMarks(env: Record<string, string | undefined> = process.env): SweepMarks {
   return {
-    targetCents: envCents("DRAGON_SWEEP_TARGET_CENTS"),
-    keepWorkingCents: envCents("DRAGON_SWEEP_KEEP_WORKING_CENTS"),
-    lastSweepAtRealizedCents: envCents("DRAGON_SWEEP_LAST_MARK_CENTS"),
+    targetCents: envCents("DRAGON_SWEEP_TARGET_CENTS", env),
+    keepWorkingCents: envCents("DRAGON_SWEEP_KEEP_WORKING_CENTS", env),
+    lastSweepAtRealizedCents: envCents("DRAGON_SWEEP_LAST_MARK_CENTS", env),
   };
+}
+
+type ReadState = AgentResult<unknown>["state"];
+
+/**
+ * Exactly one alert line for however many of the four agent reads failed —
+ * never one per read, so a bad token doesn't spam identical lines into his
+ * ops feed. `blocked` (429, back off) takes precedence over `rejected`
+ * (401/403, regenerate the token), matching the original single-read check.
+ * `null` means nothing worth reporting.
+ */
+export function agentAlertMessage(states: ReadState[]): string | null {
+  if (states.some((s) => s === "blocked")) {
+    return "Dragon Tradar throttled the agent token (429) — backing off, not retrying";
+  }
+  if (states.some((s) => s === "rejected")) {
+    return "Dragon Tradar rejected the agent token — regenerate it in Settings → AI Trading Agent";
+  }
+  return null;
+}
+
+/** `sweep` is null unless performance actually loaded — never a synthesised zero. */
+export function computeSweep(
+  performance: AgentResult<AgentPerformance>,
+  marks: SweepMarks,
+): SweepState | null {
+  return performance.state === "ok" ? sweepState(performance.stats, marks) : null;
 }
 
 export async function GET() {
@@ -66,16 +107,11 @@ export async function GET() {
 
   // One alert per request, not one per failing read — several bad reads off
   // the same bad token would otherwise spam identical lines into his ops feed.
-  const agentReads = [bot, positions, botState, performance];
-  if (agentReads.some((r) => r.state === "blocked")) {
-    pushFeed("ALERT", "Dragon Tradar throttled the agent token (429) — backing off, not retrying");
-  } else if (agentReads.some((r) => r.state === "rejected")) {
-    pushFeed("ALERT", "Dragon Tradar rejected the agent token — regenerate it in Settings → AI Trading Agent");
-  }
+  const alert = agentAlertMessage([bot.state, positions.state, botState.state, performance.state]);
+  if (alert) pushFeed("ALERT", alert);
 
   // Never synthesize a sweep number off data that never arrived.
-  const sweep =
-    performance.state === "ok" ? sweepState(performance.stats, readSweepMarks()) : null;
+  const sweep = computeSweep(performance, readSweepMarks());
 
   return Response.json({
     watchlist,
