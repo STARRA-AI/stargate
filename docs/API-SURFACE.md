@@ -122,8 +122,19 @@ Env fallbacks: `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, `GEMINI_API_KEY`, **`XAI_A
 | `stargate_queue_brief` | `POST /api/tools/openmontage` |
 | `stargate_multica_status` | `GET /api/tools/multica?action=status` |
 | `stargate_dragon_snapshot` | `GET /api/dragon` |
+| `stargate_dragon_control` | `POST /api/dragon/control` |
+| `stargate_dragon_order` | `POST /api/dragon/order` |
+| `stargate_dragon_cancel` | `DELETE /api/dragon/order` |
 | `stargate_think_tank` | `GET /api/tank` |
 | `stargate_chat` | `POST /api/chat` |
+
+
+**The three Dragon write routes are DECK-SESSION gated** (`src/middleware.ts`,
+they are not in `PUBLIC_PREFIXES`), like `/api/dragon` itself. A tool called from
+xAI's servers carries the agent token, not Classic's cookie, so it is answered
+401 there — only a logged-in deck reaches them. That is deliberate for an
+endpoint that spends real money; moving one to the public bearer lane
+(`/api/voice-tools`, `authorizePublic`) is Classic's call, not a default.
 
 ---
 
