@@ -140,6 +140,22 @@ describe("agentGet — the generic client the read wrappers share", () => {
     const r = await agentGet<{ running: boolean }>("/bot/state", { token: "t", fetchImpl: s.fetchImpl });
     assert.deepEqual(r, { state: "ok", stats: { running: true, category: "sports" } });
   });
+
+  it("a non-JSON error body degrades instead of throwing", async () => {
+    let calls = 0;
+    const fetchImpl = (async () => {
+      calls++;
+      return {
+        ok: false,
+        status: 404,
+        json: async () => { throw new SyntaxError("Unexpected token < in JSON"); },
+      } as unknown as Response;
+    }) as unknown as typeof fetch;
+    const r = await agentGet<unknown>("/bot/state", { token: "t", fetchImpl });
+    assert.deepEqual(r, { state: "error", status: 404 });
+    assert.ok(!("code" in r), "no code key when the body is not JSON");
+    assert.equal(calls, 1);
+  });
 });
 
 describe("thin read wrappers — one path each, same agentGet underneath", () => {
