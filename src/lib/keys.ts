@@ -106,6 +106,13 @@ export const KEY_SLOTS = [
     group: "dragontradar",
   },
   {
+    id: "dragontradar_agent_token",
+    label: "Dragon Tradar agent token",
+    hint: "Settings → AI Trading Agent → Generate Token",
+    powers: "Her own read of the bot: connected state, balance, open positions",
+    group: "dragontradar",
+  },
+  {
     id: "multica_token",
     label: "Multica PAT",
     hint: "mul_… (Settings → Tokens on multica.ai)",
@@ -256,6 +263,7 @@ function envKeyValue(id: KeySlotId): string | undefined {
     gemini: process.env.GEMINI_API_KEY,
     xai: process.env.XAI_API_KEY,
     groq: process.env.GROQ_API_KEY,
+    dragontradar_agent_token: process.env.DRAGON_TRADAR_AGENT_TOKEN,
     multica_token: process.env.MULTICA_TOKEN,
     multica_base_url: process.env.MULTICA_SERVER_URL ?? process.env.MULTICA_BASE_URL,
     github_token: process.env.GITHUB_TOKEN,
