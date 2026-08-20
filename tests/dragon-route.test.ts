@@ -103,3 +103,110 @@ describe("computeSweep — never a synthesised number", () => {
     }
   });
 });
+
+/**
+ * CONTROL ROUTE — the decisions `/api/dragon/control`'s POST handler is built
+ * from. This endpoint starts and stops REAL trading off a language model's
+ * tool call, so "what counts as a valid request" is pinned here rather than
+ * discovered live.
+ */
+import {
+  parseControlRequest,
+  controlFeedLine,
+  controlFeedTag,
+  type ControlCommand,
+} from "../src/app/api/dragon/control/route";
+
+describe("parseControlRequest", () => {
+  it("accepts the three actions", () => {
+    assert.deepEqual(parseControlRequest({ action: "engage", category: "crypto" }), {
+      ok: true,
+      cmd: { action: "engage", category: "crypto" },
+    });
+    assert.deepEqual(parseControlRequest({ action: "disengage" }), {
+      ok: true,
+      cmd: { action: "disengage" },
+    });
+    assert.deepEqual(parseControlRequest({ action: "config", config: { maxLegs: 2 } }), {
+      ok: true,
+      cmd: { action: "config", config: { maxLegs: 2 } },
+    });
+  });
+
+  it("engage without a category is refused, not defaulted", () => {
+    assert.deepEqual(parseControlRequest({ action: "engage" }), {
+      ok: false,
+      code: "category_required",
+    });
+  });
+
+  it("engage with an unknown category is refused", () => {
+    assert.deepEqual(parseControlRequest({ action: "engage", category: "commodities" }), {
+      ok: false,
+      code: "unknown_category",
+    });
+  });
+
+  it("an unknown, missing, or non-object action is refused", () => {
+    for (const raw of [{ action: "liquidate" }, {}, null, undefined, "engage", 7, []]) {
+      assert.deepEqual(
+        parseControlRequest(raw),
+        { ok: false, code: "unknown_action" },
+        `${JSON.stringify(raw)} must not become a command`,
+      );
+    }
+  });
+
+  it("config must carry an object, not an array or a string", () => {
+    for (const cfg of [undefined, null, "maxLegs=2", 3, [1, 2]]) {
+      assert.deepEqual(parseControlRequest({ action: "config", config: cfg }), {
+        ok: false,
+        code: "config_required",
+      });
+    }
+  });
+
+  it("disengage ignores extra fields — the stop is never blocked on parsing", () => {
+    assert.deepEqual(parseControlRequest({ action: "disengage", category: "bogus", x: 1 }), {
+      ok: true,
+      cmd: { action: "disengage" },
+    });
+  });
+});
+
+describe("controlFeedLine", () => {
+  const engage: ControlCommand = { action: "engage", category: "sports" };
+
+  it("names the outcome, not just the attempt", () => {
+    assert.match(controlFeedLine(engage, { state: "ok", stats: {} }), /ENGAGE sports — accepted/);
+    assert.match(controlFeedLine(engage, { state: "blocked" }), /throttled \(429\)/);
+    assert.match(controlFeedLine(engage, { state: "rejected" }), /token rejected/);
+    assert.match(controlFeedLine(engage, { state: "off" }), /nothing sent/);
+  });
+
+  it("carries his app's own refusal code through to the feed", () => {
+    const line = controlFeedLine(engage, {
+      state: "error",
+      status: 409,
+      code: "agent_trading_disabled",
+    });
+    assert.match(line, /409 agent_trading_disabled/);
+  });
+
+  it("a config line lists the fields that were sent", () => {
+    const cmd: ControlCommand = { action: "config", config: { maxLegs: 3, autoFire: true } };
+    assert.match(controlFeedLine(cmd, { state: "ok", stats: {} }), /CONFIG maxLegs,autoFire/);
+  });
+
+  it("only a clean accept is SYS — everything else is an ALERT he must see", () => {
+    assert.equal(controlFeedTag({ state: "ok", stats: {} }), "SYS");
+    for (const r of [
+      { state: "off" } as const,
+      { state: "blocked" } as const,
+      { state: "rejected" } as const,
+      { state: "error", status: 500 } as const,
+    ]) {
+      assert.equal(controlFeedTag(r), "ALERT");
+    }
+  });
+});

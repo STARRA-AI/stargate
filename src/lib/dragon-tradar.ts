@@ -99,12 +99,23 @@ async function extractErrorCode(res: Response): Promise<string | undefined> {
   return undefined;
 }
 
+type AgentMethod = "GET" | "POST" | "PATCH" | "DELETE";
+
 /**
- * One GET to `${base}${path}`. One attempt. No retry — see the landmine note
- * above. This is the only place in the module that talks HTTP; every read
- * below, including readAgent, routes through here.
+ * One request to `${base}${path}`. One attempt. No retry — see the landmine
+ * note above. This is the only place in the module that talks HTTP; every read
+ * AND every write below routes through here, so no later writer path can
+ * quietly reintroduce a retry.
+ *
+ * A body is JSON-encoded, and only a request that carries one sends
+ * Content-Type — a GET goes out exactly as it always did: Authorization alone.
  */
-export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentResult<T>> {
+async function agentRequest<T>(
+  method: AgentMethod,
+  path: string,
+  deps: Deps = {},
+  body?: unknown,
+): Promise<AgentResult<T>> {
   const token =
     deps.token !== undefined ? deps.token : await getKey("dragontradar_agent_token");
   if (!token) return { state: "off" };
@@ -114,9 +125,14 @@ export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentR
   const ac = new AbortController();
   const timer = setTimeout(() => ac.abort(), deps.timeoutMs ?? 10_000);
 
+  const headers: Record<string, string> = { Authorization: `Bearer ${token}` };
+  if (body !== undefined) headers["Content-Type"] = "application/json";
+
   try {
     const res = await doFetch(`${base}${path}`, {
-      headers: { Authorization: `Bearer ${token}` },
+      method,
+      headers,
+      ...(body === undefined ? {} : { body: JSON.stringify(body) }),
       signal: ac.signal,
     });
     if (res.status === 429) return { state: "blocked" };
@@ -135,6 +151,29 @@ export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentR
   } finally {
     clearTimeout(timer);
   }
+}
+
+/** GET — the read half. One attempt, no retry. */
+export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentResult<T>> {
+  return agentRequest<T>("GET", path, deps);
+}
+
+/** POST with a JSON body — the write half. One attempt, no retry. */
+export async function agentPost<T>(
+  path: string,
+  body: unknown,
+  deps: Deps = {},
+): Promise<AgentResult<T>> {
+  return agentRequest<T>("POST", path, deps, body);
+}
+
+/** PATCH with a JSON body. One attempt, no retry. */
+export async function agentPatch<T>(
+  path: string,
+  body: unknown,
+  deps: Deps = {},
+): Promise<AgentResult<T>> {
+  return agentRequest<T>("PATCH", path, deps, body);
 }
 
 /** GET /stats, coerced so a garbage body can't crash a caller. */
@@ -166,4 +205,118 @@ export async function readPerformance(deps: Deps = {}): Promise<AgentResult<Agen
 /** Dollars, for anything that shows a human a number. */
 export function balanceUsd(stats: AgentStats): number {
   return Math.round(stats.balanceCents) / 100;
+}
+
+/* ── CONTROL ─────────────────────────────────────────────────────────────────
+ * Engage / disengage / reconfigure his bot. These are the first calls in this
+ * module that CHANGE something on his side, so everything that can be checked
+ * locally is checked BEFORE the network: a mistyped category or a garbage
+ * config value is refused here rather than being posted at a live trading app.
+ * The server keeps its own brakes (the enable toggle, the per-order cap,
+ * AGENT_LIVE_TRADING_ENABLED); nothing below tries to speak for them.
+ * ──────────────────────────────────────────────────────────────────────────── */
+
+/** Dragon Mode categories — the literal union from the Task A1 contract. */
+export const DRAGON_CATEGORIES = [
+  "sports",
+  "crypto",
+  "politics",
+  "economics",
+  "parallel",
+] as const;
+
+export type DragonCategory = (typeof DRAGON_CATEGORIES)[number];
+
+export function isDragonCategory(v: unknown): v is DragonCategory {
+  return typeof v === "string" && (DRAGON_CATEGORIES as readonly string[]).includes(v);
+}
+
+/** PATCH /config — the Task A1 field list, verbatim. Every field optional. */
+export type DragonConfigPatch = {
+  minBetCents?: number;
+  maxLegs?: number;
+  minEdgePct?: number;
+  minConfidencePct?: number;
+  autoFire?: boolean;
+  scanIntervalMin?: number;
+  thinkTank?: boolean;
+};
+
+/** Whatever his app answers a write with. Never parsed into a decision here. */
+export type AgentAck = Record<string, unknown>;
+
+type ConfigRejection = "empty_config" | "unknown_config_key" | "bad_config_value";
+
+function validNumber(key: string, v: unknown): boolean {
+  if (typeof v !== "number" || !Number.isFinite(v)) return false;
+  switch (key) {
+    case "minBetCents":
+      return Number.isInteger(v) && v >= 0;
+    case "maxLegs":
+    case "scanIntervalMin":
+      return Number.isInteger(v) && v >= 1;
+    default:
+      // minEdgePct / minConfidencePct — percentages, not ratios.
+      return v >= 0 && v <= 100;
+  }
+}
+
+const CONFIG_NUMBER_KEYS = new Set([
+  "minBetCents",
+  "maxLegs",
+  "minEdgePct",
+  "minConfidencePct",
+  "scanIntervalMin",
+]);
+const CONFIG_BOOLEAN_KEYS = new Set(["autoFire", "thinkTank"]);
+
+/**
+ * Local gate on a config patch. Rejects an empty patch too: a PATCH with no
+ * fields is a no-op his app would answer 200 to, and a silent no-op reported
+ * as success is how "I changed it" becomes a lie on a money surface.
+ */
+export function validateConfigPatch(
+  patch: Record<string, unknown>,
+): { ok: true; patch: DragonConfigPatch } | { ok: false; code: ConfigRejection } {
+  const keys = Object.keys(patch);
+  if (keys.length === 0) return { ok: false, code: "empty_config" };
+
+  for (const k of keys) {
+    if (CONFIG_NUMBER_KEYS.has(k)) {
+      if (!validNumber(k, patch[k])) return { ok: false, code: "bad_config_value" };
+    } else if (CONFIG_BOOLEAN_KEYS.has(k)) {
+      if (typeof patch[k] !== "boolean") return { ok: false, code: "bad_config_value" };
+    } else {
+      return { ok: false, code: "unknown_config_key" };
+    }
+  }
+  return { ok: true, patch: patch as DragonConfigPatch };
+}
+
+/** POST /bot/engage — starts REAL trading in one category. */
+export async function engageBot(
+  category: DragonCategory,
+  deps: Deps = {},
+): Promise<AgentResult<AgentAck>> {
+  // Runtime check despite the type: this value arrives from her tool call and
+  // from HTTP, where TypeScript guarantees nothing.
+  if (!isDragonCategory(category)) {
+    return { state: "error", status: 0, code: "unknown_category" };
+  }
+  return agentPost<AgentAck>("/bot/engage", { category }, deps);
+}
+
+/** POST /bot/disengage — the stop. Always dispatched; never gated locally. */
+export async function disengageBot(deps: Deps = {}): Promise<AgentResult<AgentAck>> {
+  return agentPost<AgentAck>("/bot/disengage", {}, deps);
+}
+
+/** PATCH /config, after the local gate above. */
+export async function patchConfig(
+  patch: Record<string, unknown>,
+  deps: Deps = {},
+): Promise<AgentResult<AgentAck>> {
+  const v = validateConfigPatch(patch);
+  if (!v.ok) return { state: "error", status: 0, code: v.code };
+  return agentPatch<AgentAck>("/config", v.patch, deps);
 }

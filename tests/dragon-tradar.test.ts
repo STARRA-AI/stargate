@@ -18,14 +18,22 @@ import {
   readOrders,
   readBotState,
   readPerformance,
+  engageBot,
+  disengageBot,
+  patchConfig,
+  validateConfigPatch,
+  isDragonCategory,
+  DRAGON_CATEGORIES,
 } from "../src/lib/dragon-tradar";
 
 function stub(status: number, body: unknown = {}) {
   let calls = 0;
   const urls: string[] = [];
+  const inits: RequestInit[] = [];
   const fetchImpl = (async (url: unknown, init?: RequestInit) => {
     calls++;
     urls.push(String(url));
+    inits.push(init ?? {});
     return {
       ok: status >= 200 && status < 300,
       status,
@@ -34,7 +42,12 @@ function stub(status: number, body: unknown = {}) {
       __init: init,
     } as unknown as Response;
   }) as unknown as typeof fetch;
-  return { fetchImpl, calls: () => calls, urls };
+  return { fetchImpl, calls: () => calls, urls, inits };
+}
+
+/** Headers as a plain object — the client always sends a Record, never a Headers. */
+function sentHeaders(init: RequestInit): Record<string, string> {
+  return (init.headers ?? {}) as Record<string, string>;
 }
 
 describe("dragon tradar agent read", () => {
@@ -188,5 +201,163 @@ describe("thin read wrappers — one path each, same agentGet underneath", () =>
     const s = stub(200, []);
     assert.deepEqual(await readPositions({ token: null, fetchImpl: s.fetchImpl }), { state: "off" });
     assert.equal(s.calls(), 0);
+  });
+});
+
+/**
+ * BOT CONTROL — the half of this module that CHANGES something on his side.
+ * Two properties are load-bearing here and each has a test that fails loudly:
+ *   1. a bad category or a garbage config value never leaves this machine
+ *      (fetch call count 0), so his live trading app is never asked a
+ *      malformed question;
+ *   2. a write is still ONE attempt — 429 is reported, never retried.
+ */
+describe("dragon tradar bot control", () => {
+  it("refuses an unknown Dragon Mode category before any network call", async () => {
+    const s = stub(200, {});
+    const r = await engageBot("commodities" as never, { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "error", status: 0, code: "unknown_category" });
+    assert.equal(s.calls(), 0);
+  });
+
+  it("every category in the contract is accepted", async () => {
+    for (const c of DRAGON_CATEGORIES) {
+      const s = stub(200, { ok: true });
+      const r = await engageBot(c, { token: "t", fetchImpl: s.fetchImpl });
+      assert.equal(r.state, "ok", `${c} must be accepted`);
+      assert.equal(s.calls(), 1);
+    }
+  });
+
+  it("engage POSTs the category to /bot/engage with the bearer token", async () => {
+    const s = stub(200, { running: true });
+    await engageBot("sports", { token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/bot/engage`);
+    assert.equal(s.inits[0].method, "POST");
+    assert.equal(sentHeaders(s.inits[0]).Authorization, "Bearer t");
+    assert.equal(sentHeaders(s.inits[0])["Content-Type"], "application/json");
+    assert.equal(s.inits[0].body, JSON.stringify({ category: "sports" }));
+  });
+
+  it("a throttled engage is reported once and NEVER retried", async () => {
+    const s = stub(429, { error: "temporarily_blocked" });
+    const r = await engageBot("crypto", { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "blocked" });
+    assert.equal(s.calls(), 1, "a retry here locks him out of his own bot");
+  });
+
+  it("a refused write surfaces his app's own error code verbatim", async () => {
+    const s = stub(409, { error: "agent_trading_disabled" });
+    const r = await engageBot("politics", { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "error", status: 409, code: "agent_trading_disabled" });
+  });
+
+  it("disengage POSTs an empty body to /bot/disengage", async () => {
+    const s = stub(200, { running: false });
+    const r = await disengageBot({ token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(r.state, "ok");
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/bot/disengage`);
+    assert.equal(s.inits[0].method, "POST");
+    assert.equal(s.inits[0].body, "{}");
+  });
+
+  it("no token is OFF for writes too — control never guesses at an open door", async () => {
+    const s = stub(200, {});
+    assert.deepEqual(await engageBot("sports", { token: null, fetchImpl: s.fetchImpl }), {
+      state: "off",
+    });
+    assert.deepEqual(await disengageBot({ token: null, fetchImpl: s.fetchImpl }), { state: "off" });
+    assert.deepEqual(await patchConfig({ maxLegs: 2 }, { token: null, fetchImpl: s.fetchImpl }), {
+      state: "off",
+    });
+    assert.equal(s.calls(), 0);
+  });
+
+  it("a GET still sends no Content-Type after the POST refactor", async () => {
+    const s = stub(200, {});
+    await readAgent({ token: "t", fetchImpl: s.fetchImpl });
+    assert.equal(s.inits[0].method, "GET");
+    assert.equal(sentHeaders(s.inits[0])["Content-Type"], undefined);
+    assert.equal(s.inits[0].body, undefined);
+  });
+
+  it("isDragonCategory rejects non-strings and near-misses", () => {
+    assert.equal(isDragonCategory("sports"), true);
+    assert.equal(isDragonCategory("Sports"), false);
+    assert.equal(isDragonCategory(""), false);
+    assert.equal(isDragonCategory(null), false);
+    assert.equal(isDragonCategory(2), false);
+  });
+});
+
+describe("dragon tradar config patch", () => {
+  it("an empty patch is refused — a silent no-op must not report success", async () => {
+    const s = stub(200, {});
+    const r = await patchConfig({}, { token: "t", fetchImpl: s.fetchImpl });
+    assert.deepEqual(r, { state: "error", status: 0, code: "empty_config" });
+    assert.equal(s.calls(), 0);
+  });
+
+  it("an unknown key never reaches his app", async () => {
+    const s = stub(200, {});
+    const r = await patchConfig(
+      { maxLegs: 2, maxBetEverything: true },
+      { token: "t", fetchImpl: s.fetchImpl },
+    );
+    assert.deepEqual(r, { state: "error", status: 0, code: "unknown_config_key" });
+    assert.equal(s.calls(), 0);
+  });
+
+  it("a garbage value for a known key is refused locally", async () => {
+    const bad: Record<string, unknown>[] = [
+      { minBetCents: "10" },
+      { minBetCents: -1 },
+      { minBetCents: 10.5 },
+      { maxLegs: 0 },
+      { scanIntervalMin: 0.5 },
+      { minEdgePct: 101 },
+      { minConfidencePct: -0.1 },
+      { minEdgePct: Number.NaN },
+      { autoFire: "yes" },
+      { thinkTank: 1 },
+    ];
+    for (const patch of bad) {
+      const s = stub(200, {});
+      const r = await patchConfig(patch, { token: "t", fetchImpl: s.fetchImpl });
+      assert.deepEqual(
+        r,
+        { state: "error", status: 0, code: "bad_config_value" },
+        `${JSON.stringify(patch)} must be refused`,
+      );
+      assert.equal(s.calls(), 0);
+    }
+  });
+
+  it("a valid patch PATCHes /config with exactly the fields given", async () => {
+    const s = stub(200, { updated: true });
+    const r = await patchConfig(
+      { minBetCents: 100, maxLegs: 3, minEdgePct: 7.5, autoFire: false },
+      { token: "t", fetchImpl: s.fetchImpl },
+    );
+    assert.equal(r.state, "ok");
+    assert.equal(s.urls[0], `${DRAGON_TRADAR_AGENT_BASE}/config`);
+    assert.equal(s.inits[0].method, "PATCH");
+    assert.equal(
+      s.inits[0].body,
+      JSON.stringify({ minBetCents: 100, maxLegs: 3, minEdgePct: 7.5, autoFire: false }),
+    );
+  });
+
+  it("validateConfigPatch accepts every field in the contract", () => {
+    const full = {
+      minBetCents: 0,
+      maxLegs: 1,
+      minEdgePct: 0,
+      minConfidencePct: 100,
+      autoFire: true,
+      scanIntervalMin: 15,
+      thinkTank: false,
+    };
+    assert.deepEqual(validateConfigPatch(full), { ok: true, patch: full });
   });
 });
