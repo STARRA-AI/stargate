@@ -29,15 +29,26 @@ describe("dragon sweep", () => {
     assert.equal(s.atOrAboveTarget, false);
   });
 
-  it("realized dropping below the last sweep mark never goes negative", () => {
-    // Losses after a sweep: realized fell from 50k back to 40k.
+  it("realized dropping below the last sweep mark reports the honest loss, but never suggests a negative sweep", () => {
+    // Losses after a sweep: realized fell from 50k back to 40k. The delta is
+    // a real -$100 he is down since the sweep, and that must render as such
+    // — but the suggestion and target-check still floor/refuse at 0.
     const s = sweepState(
       { realizedPnlCents: 40_000, unrealizedPnlCents: 0 },
       { lastSweepAtRealizedCents: 50_000, targetCents: 25_000, keepWorkingCents: 10_000 },
     );
-    assert.equal(s.realizedSinceSweepCents, 0);
+    assert.equal(s.realizedSinceSweepCents, -10_000);
     assert.equal(s.atOrAboveTarget, false);
     assert.equal(s.suggestedSweepCents, 0);
+  });
+
+  it("realizedSinceSweepCents exactly at target counts as at-or-above (boundary, not off-by-one)", () => {
+    const s = sweepState(
+      { realizedPnlCents: 25_000, unrealizedPnlCents: 0 },
+      { lastSweepAtRealizedCents: 0, targetCents: 25_000, keepWorkingCents: 10_000 },
+    );
+    assert.equal(s.realizedSinceSweepCents, 25_000);
+    assert.equal(s.atOrAboveTarget, true);
   });
 
   it("recordSweep returns new marks at the swept realized total, without mutating the input", () => {

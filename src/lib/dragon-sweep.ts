@@ -42,16 +42,18 @@ export type SweepState = {
 /**
  * Realized profit earned since the last sweep, whether it has reached the
  * target, and how much to suggest sweeping (keeping `keepWorkingCents`
- * behind). Guarded against realized having dropped below the last sweep
- * mark — losses after a sweep must never produce a negative or phantom
- * suggestion, so `realizedSinceSweepCents` floors at 0 before anything else
- * is derived from it.
+ * behind). `realizedSinceSweepCents` is the RAW signed delta — it goes
+ * negative when losses after a sweep pull realized back below the mark, and
+ * that honest negative number is what a money-facing surface must show
+ * (Classic is down since his last sweep, not at breakeven). The safety
+ * property lives only in the two derived fields: `keepWorkingCents >= 0`
+ * means `suggestedSweepCents` floors at 0 for any negative delta, and
+ * `atOrAboveTarget` is already false against a positive target — so a
+ * negative delta can never produce an over-generous sweep suggestion even
+ * though the delta itself is left unclamped.
  */
 export function sweepState(perf: SweepPerf, marks: SweepMarks): SweepState {
-  const realizedSinceSweepCents = Math.max(
-    0,
-    perf.realizedPnlCents - marks.lastSweepAtRealizedCents,
-  );
+  const realizedSinceSweepCents = perf.realizedPnlCents - marks.lastSweepAtRealizedCents;
   const atOrAboveTarget = realizedSinceSweepCents >= marks.targetCents;
   const suggestedSweepCents = Math.max(0, realizedSinceSweepCents - marks.keepWorkingCents);
   return { realizedSinceSweepCents, atOrAboveTarget, suggestedSweepCents };
@@ -68,5 +70,9 @@ export function recordSweep(
   sweptCents: number,
   atRealizedCents: number,
 ): SweepMarks {
+  // sweptCents is intentionally NOT recorded — SweepMarks carries no running
+  // swept total (only the last mark), and nothing consumes it yet. Kept in
+  // the signature per the brief; discarding it silently on a money function
+  // would be the wrong kind of quiet, so this says so.
   return { ...marks, lastSweepAtRealizedCents: atRealizedCents };
 }
