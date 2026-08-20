@@ -3,6 +3,7 @@ import { fetchPortfolio, fetchWatchlist, type WatchMarket } from "@/lib/kalshi";
 import {
   readAgent,
   readPositions,
+  readOrders,
   readBotState,
   readPerformance,
   type AgentResult,
@@ -51,7 +52,7 @@ export function readSweepMarks(env: Record<string, string | undefined> = process
 type ReadState = AgentResult<unknown>["state"];
 
 /**
- * Exactly one alert line for however many of the four agent reads failed —
+ * Exactly one alert line for however many agent reads failed —
  * never one per read, so a bad token doesn't spam identical lines into his
  * ops feed. `blocked` (429, back off) takes precedence over `rejected`
  * (401/403, regenerate the token), matching the original single-read check.
@@ -97,17 +98,31 @@ export async function GET() {
   // see the landmine note in lib/dragon-tradar.ts. Every agent read degrades
   // independently — one failing field never blanks the others, and none of
   // them can throw out of this route.
-  const [portfolio, bot, positions, botState, performance] = await Promise.all([
+  //
+  // `orders` is read alongside `positions` on purpose: a position is a FILLED
+  // order, so without this she can only answer "what does he hold", never
+  // "what is resting on the book right now" — and a resting bid is money
+  // already committed. Five concurrent reads share one Bearer token; if his
+  // app ever throttles that burst the answer is `blocked`, reported once,
+  // never retried.
+  const [portfolio, bot, positions, orders, botState, performance] = await Promise.all([
     fetchPortfolio(),
     readAgent(),
     readPositions(),
+    readOrders(),
     readBotState(),
     readPerformance(),
   ]);
 
   // One alert per request, not one per failing read — several bad reads off
   // the same bad token would otherwise spam identical lines into his ops feed.
-  const alert = agentAlertMessage([bot.state, positions.state, botState.state, performance.state]);
+  const alert = agentAlertMessage([
+    bot.state,
+    positions.state,
+    orders.state,
+    botState.state,
+    performance.state,
+  ]);
   if (alert) pushFeed("ALERT", alert);
 
   // Never synthesize a sweep number off data that never arrived.
@@ -118,6 +133,7 @@ export async function GET() {
     portfolio,
     bot,
     positions,
+    orders,
     botState,
     performance,
     sweep,

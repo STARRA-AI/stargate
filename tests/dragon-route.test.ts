@@ -210,3 +210,27 @@ describe("controlFeedLine", () => {
     }
   });
 });
+
+describe("agentAlertMessage — with orders in the read set", () => {
+  it("one line however many of the five reads failed", () => {
+    assert.equal(
+      agentAlertMessage(["ok", "rejected", "rejected", "rejected", "rejected"]),
+      "Dragon Tradar rejected the agent token — regenerate it in Settings → AI Trading Agent",
+    );
+  });
+
+  it("a throttle anywhere in the five still outranks a rejection", () => {
+    assert.match(
+      String(agentAlertMessage(["ok", "rejected", "blocked", "ok", "ok"])),
+      /throttled the agent token \(429\)/,
+    );
+  });
+
+  it("orders failing alone still raises the line — a resting order is money", () => {
+    assert.match(String(agentAlertMessage(["ok", "ok", "blocked", "ok", "ok"])), /throttled/);
+  });
+
+  it("all five healthy says nothing", () => {
+    assert.equal(agentAlertMessage(["ok", "ok", "ok", "ok", "ok"]), null);
+  });
+});

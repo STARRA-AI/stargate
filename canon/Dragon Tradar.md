@@ -93,7 +93,7 @@ until I have the fill.
 
 ## What the snapshot now carries
 Her one tool, `stargate_dragon_snapshot` (`/api/dragon`), now also returns his open
-positions, the bot's live state (running, category, mode), performance (realized +
+positions, his RESTING orders (money committed but not filled yet), the bot's live state (running, category, mode), performance (realized +
 unrealized P&L, win rate, trade count), and a sweep signal: realized profit banked
 since the last sweep, whether it has crossed his target, and how much to suggest
 moving out. Unrealized P&L never counts toward that target — it isn't money yet.
