@@ -68,7 +68,7 @@ export type AgentPerformance = {
   since: string;
 };
 
-type Deps = {
+export type AgentDeps = {
   /** null/"" = not configured. undefined = resolve via getKey(). */
   token?: string | null;
   fetchImpl?: typeof fetch;
@@ -113,7 +113,7 @@ type AgentMethod = "GET" | "POST" | "PATCH" | "DELETE";
 async function agentRequest<T>(
   method: AgentMethod,
   path: string,
-  deps: Deps = {},
+  deps: AgentDeps = {},
   body?: unknown,
 ): Promise<AgentResult<T>> {
   const token =
@@ -154,7 +154,7 @@ async function agentRequest<T>(
 }
 
 /** GET — the read half. One attempt, no retry. */
-export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentResult<T>> {
+export async function agentGet<T>(path: string, deps: AgentDeps = {}): Promise<AgentResult<T>> {
   return agentRequest<T>("GET", path, deps);
 }
 
@@ -162,7 +162,7 @@ export async function agentGet<T>(path: string, deps: Deps = {}): Promise<AgentR
 export async function agentPost<T>(
   path: string,
   body: unknown,
-  deps: Deps = {},
+  deps: AgentDeps = {},
 ): Promise<AgentResult<T>> {
   return agentRequest<T>("POST", path, deps, body);
 }
@@ -171,34 +171,42 @@ export async function agentPost<T>(
 export async function agentPatch<T>(
   path: string,
   body: unknown,
-  deps: Deps = {},
+  deps: AgentDeps = {},
 ): Promise<AgentResult<T>> {
   return agentRequest<T>("PATCH", path, deps, body);
 }
 
+/** DELETE — no body. One attempt, no retry. */
+export async function agentDelete<T>(
+  path: string,
+  deps: AgentDeps = {},
+): Promise<AgentResult<T>> {
+  return agentRequest<T>("DELETE", path, deps);
+}
+
 /** GET /stats, coerced so a garbage body can't crash a caller. */
-export async function readAgent(deps: Deps = {}): Promise<AgentRead> {
+export async function readAgent(deps: AgentDeps = {}): Promise<AgentRead> {
   const r = await agentGet<AgentStats>("/stats", deps);
   return r.state === "ok" ? { state: "ok", stats: coerceStats(r.stats) } : r;
 }
 
 /** GET /positions — open positions, full per-position detail (shape TBD: Half A). */
-export async function readPositions(deps: Deps = {}): Promise<AgentResult<AgentPosition[]>> {
+export async function readPositions(deps: AgentDeps = {}): Promise<AgentResult<AgentPosition[]>> {
   return agentGet<AgentPosition[]>("/positions", deps);
 }
 
 /** GET /orders — resting + historical orders (shape TBD: Half A). */
-export async function readOrders(deps: Deps = {}): Promise<AgentResult<AgentOrder[]>> {
+export async function readOrders(deps: AgentDeps = {}): Promise<AgentResult<AgentOrder[]>> {
   return agentGet<AgentOrder[]>("/orders", deps);
 }
 
 /** GET /bot/state. */
-export async function readBotState(deps: Deps = {}): Promise<AgentResult<AgentBotState>> {
+export async function readBotState(deps: AgentDeps = {}): Promise<AgentResult<AgentBotState>> {
   return agentGet<AgentBotState>("/bot/state", deps);
 }
 
 /** GET /performance. */
-export async function readPerformance(deps: Deps = {}): Promise<AgentResult<AgentPerformance>> {
+export async function readPerformance(deps: AgentDeps = {}): Promise<AgentResult<AgentPerformance>> {
   return agentGet<AgentPerformance>("/performance", deps);
 }
 
@@ -296,7 +304,7 @@ export function validateConfigPatch(
 /** POST /bot/engage — starts REAL trading in one category. */
 export async function engageBot(
   category: DragonCategory,
-  deps: Deps = {},
+  deps: AgentDeps = {},
 ): Promise<AgentResult<AgentAck>> {
   // Runtime check despite the type: this value arrives from her tool call and
   // from HTTP, where TypeScript guarantees nothing.
@@ -307,14 +315,14 @@ export async function engageBot(
 }
 
 /** POST /bot/disengage — the stop. Always dispatched; never gated locally. */
-export async function disengageBot(deps: Deps = {}): Promise<AgentResult<AgentAck>> {
+export async function disengageBot(deps: AgentDeps = {}): Promise<AgentResult<AgentAck>> {
   return agentPost<AgentAck>("/bot/disengage", {}, deps);
 }
 
 /** PATCH /config, after the local gate above. */
 export async function patchConfig(
   patch: Record<string, unknown>,
-  deps: Deps = {},
+  deps: AgentDeps = {},
 ): Promise<AgentResult<AgentAck>> {
   const v = validateConfigPatch(patch);
   if (!v.ok) return { state: "error", status: 0, code: v.code };
