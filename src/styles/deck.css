@@ -1427,16 +1427,142 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
   z-index: 4; max-width: min(420px, 90vw);
 }
 
+/* ============================================================
+   PRESENCE LAYER (2026-08-20) — what makes her read as a person
+   on a call rather than a video that happens to be playing.
+
+   THE PROBLEM, measured rather than felt: base_loop.mp4 is 266
+   frames / 11.083s and her head travels 10x17px across the WHOLE
+   loop (starra-clip-map.ts:100-102). A subject that still, on a
+   period that short, reads as a photograph with a moving mouth.
+
+   Two verbs fix it without touching one pixel of her footage:
+
+     1. HANDHELD — the FRAME moves, the way a hand holding a phone
+        moves. Sub-1% translate plus a fifth of a degree of roll.
+        The eye reads this as CAMERA, not as subject, so it costs
+        nothing in likeness and cannot distort her.
+     2. BREATHE — a slow scale on its own period.
+
+   THE PERIODS ARE DELIBERATELY NOT RATIOS OF THE CLIP. The clip
+   is 11.083s; handheld is 19s, breath 4.3s. Neither divides into
+   11.083, so the three cycles never re-align on a beat the eye
+   can learn. That beating IS the feature: it is what stops an
+   11-second loop from announcing itself as a loop.
+
+   WHY INDIVIDUAL TRANSFORM PROPERTIES (translate/rotate/scale)
+   and not `transform`: one element cannot run two `transform`
+   animations on two different periods — the second would win
+   outright. As separate properties they compose. Safari 14.1+,
+   Chrome 104+.
+
+   WHY NO `filter` ON THE PORTRAIT: a per-frame filter pass over
+   two <video> layers plus the mouth canvas is precisely the cost
+   this machine cannot pay mid-call (Intel i7-9750H). The grade
+   lives in the grain overlay below, which is one composited
+   layer, not a per-frame repaint of her face.
+   ============================================================ */
+.call-face-portrait {
+  animation:
+    starra-handheld 19s ease-in-out infinite,
+    starra-breathe 4.3s ease-in-out infinite;
+}
+@keyframes starra-handheld {
+  /* Stops sit on irregular percentages on purpose. Evenly spaced
+     stops make even a slow drift feel metronomic. */
+  0%   { translate: 0 0;          rotate: 0deg; }
+  17%  { translate: 0.38% -0.22%; rotate: 0.14deg; }
+  33%  { translate: -0.22% 0.34%; rotate: -0.09deg; }
+  51%  { translate: -0.5% -0.14%; rotate: -0.2deg; }
+  68%  { translate: 0.26% 0.42%;  rotate: 0.11deg; }
+  84%  { translate: 0.44% 0.1%;   rotate: 0.18deg; }
+  100% { translate: 0 0;          rotate: 0deg; }
+}
+@keyframes starra-breathe {
+  0%, 100% { scale: 1; }
+  44%      { scale: 1.0072; }
+}
+
+/* SAME TWO VERBS, RETIMED PER STATE. Not new motion and not new
+   elements — only the periods change, so there is nothing to cut
+   to and nothing that can pop. People breathe shallower and
+   quicker while they are talking and settle while they listen;
+   that is the whole model here. This is also the first thing on
+   the stage that has ever reacted to her state: `mode` reaches
+   the DOM as `.call-face-{speaking,listening,idle}` on the stage
+   (VoiceCallOverlay.tsx:608) and until now nothing consumed it. */
+.call-face-speaking  .call-face-portrait { animation-duration: 16s, 3.1s; }
+.call-face-listening .call-face-portrait { animation-duration: 20s, 5.2s; }
+.call-face-idle      .call-face-portrait { animation-duration: 25s, 6.1s; }
+
+/* FILM GRAIN — the single cheapest thing that kills the plastic,
+   rendered-surface read. Sits above her face and the scrim, below
+   the status/controls (z-index 3), so it grades HER and never
+   fights the operator chrome for legibility.
+
+   inset:-50% so the drift below can never expose an edge; the
+   stage is `overflow:hidden` (see .call-facetime .call-face-stage)
+   so the overhang is clipped. Fixed and pointer-events:none, which
+   is the only safe way to run grain — on a scrolling container it
+   would repaint continuously. It does not move with her: grain
+   belongs to the lens, not to the subject. */
+.call-facetime .call-face-stage::after {
+  content: "";
+  position: absolute; inset: -50%;
+  z-index: 2; pointer-events: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E");
+  background-repeat: repeat;
+  opacity: 0.055;
+  animation: starra-grain 840ms steps(5) infinite;
+}
+@keyframes starra-grain {
+  0%   { transform: translate(0, 0); }
+  20%  { transform: translate(-1.5%, 1%); }
+  40%  { transform: translate(1%, -1.5%); }
+  60%  { transform: translate(-1%, -1%); }
+  80%  { transform: translate(1.5%, 1.5%); }
+  100% { transform: translate(0, 0); }
+}
+
+/* Lens vignette. A real lens falls off at the corners; a render
+   does not. Below the grain, above her. box-shadow rather than a
+   gradient image so it costs no texture upload. */
+.call-facetime .call-face-stage::before {
+  content: "";
+  position: absolute; inset: 0;
+  z-index: 2; pointer-events: none;
+  box-shadow: inset 0 0 120px 24px rgba(5, 2, 10, 0.5);
+}
+
 /* Reduced-motion / low-power: keep her face (her presence) but hold her
    completely still + hold the glow steady (no breathe, no pulse). */
 @media (prefers-reduced-motion: reduce) {
-  .call-face-listening .call-face-portrait,
-  .call-face-speaking .call-face-portrait { animation: none; transform: none; }
+  /* EVERY state, not just listening/speaking. The old pair guarded an
+     animation that no longer existed, and left `.call-face-idle` — the state
+     she is in most of a call — completely unguarded. Presence motion is now
+     declared on `.call-face-portrait` itself, so the guard is declared there
+     too and cannot drift out of sync with it again.
+
+     RESETTING `transform` IS NOT ENOUGH ANY MORE. Handheld and breathe use the
+     INDIVIDUAL transform properties, and `transform: none` does not clear
+     `translate` / `rotate` / `scale` — they are separate properties with
+     separate initial values. Each is reset explicitly or she would freeze
+     mid-drift, off-centre and slightly rolled, instead of coming to rest. */
+  .call-face-portrait {
+    animation: none;
+    transform: none; translate: none; rotate: none; scale: none;
+  }
   .call-face-speaking .call-face-glow { animation: none; opacity: 0.5; }
+  /* Grain stays; its STEP FLICKER goes. The texture is not motion, the
+     6-per-second reshuffle is. */
+  .call-facetime .call-face-stage::after { animation: none; }
 }
-body.low-power .call-face-listening .call-face-portrait,
-body.low-power .call-face-speaking .call-face-portrait { animation: none; transform: none; }
+body.low-power .call-face-portrait {
+  animation: none;
+  transform: none; translate: none; rotate: none; scale: none;
+}
 body.low-power .call-face-speaking .call-face-glow { animation: none; opacity: 0.5; }
+body.low-power .call-facetime .call-face-stage::after { animation: none; }
 
 .call-error-box {
   display: flex; flex-direction: column; gap: 6px; padding: 10px 12px;
