@@ -169,11 +169,17 @@ describe("presence layer: accessibility and low-power guards", () => {
 });
 
 describe("presence layer: grain and vignette cannot eat input or chrome", () => {
+  /**
+   * Select the DEFINING block by content, not by position. State overrides
+   * (e.g. the collapsed call retunes the vignette) also match the selector,
+   * and a position-based match silently asserts against the override instead.
+   */
   const overlay = (pseudo: string) => {
-    const re = new RegExp(`\\.call-face-stage::${pseudo}\\s*\\{([\\s\\S]*?)\\n\\}`);
-    const m = re.exec(deck);
-    assert.ok(m, `::${pseudo} overlay not found`);
-    return m[1];
+    const re = new RegExp(`\\.call-face-stage::${pseudo}\\s*\\{([\\s\\S]*?)\\n\\}`, "g");
+    const blocks = [...deck.matchAll(re)].map((m) => m[1]);
+    const defining = blocks.find((b) => b.includes("content:") && b.includes("position:"));
+    assert.ok(defining, `::${pseudo} defining overlay block not found`);
+    return defining as string;
   };
 
   for (const pseudo of ["after", "before"]) {

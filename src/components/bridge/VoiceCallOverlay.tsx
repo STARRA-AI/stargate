@@ -188,6 +188,21 @@ export function VoiceCallOverlay({
   // own `ended`, on "stop the video"/"back to you", or with the call. Pure
   // decisions live in src/lib/voice/spicy-mode.ts (tested); this block is only
   // the wiring. Classic-initiated only, per the locked persona clause.
+  /**
+   * COLLAPSED CALL (2026-08-21, Classic's ask: "i want it to be able to collapse
+   * and be this size so that she can just be a small window if necessary. so
+   * basically want both").
+   *
+   * ONE VIDEO SERVES BOTH SIZES. Expanded is her waist-up frame as filmed;
+   * collapsed zooms the SAME layer to her head via a CSS transform on
+   * `.call-face-portrait`. There is no second clip, no second render and no
+   * source swap — so nothing can pop, and a collapsed call costs nothing extra.
+   *
+   * MUTE and END stay mounted and reachable while collapsed. Only the engine
+   * selector and the chat pane hide. He must never be able to shrink himself
+   * into a call he cannot end.
+   */
+  const [collapsed, setCollapsed] = useState(false);
   const [spicyArmed, setSpicyArmed] = useState(false);
   const [spicyClip, setSpicyClip] = useState<string | null>(null);
   const spicyArmedRef = useRef(false);
@@ -592,7 +607,7 @@ export function VoiceCallOverlay({
 
   return (
     <div
-      className="call-overlay call-facetime"
+      className={`call-overlay call-facetime${collapsed ? " is-collapsed" : ""}`}
       role="dialog"
       aria-modal="true"
       aria-label="Voice call with STARRA"
@@ -606,6 +621,19 @@ export function VoiceCallOverlay({
           aspect ratio is untouched — the chat lives in its own column). */}
       <div className="call-face-col">
         <div className={`call-face-stage call-face-${faceMode}`}>
+          {/* Lives INSIDE the stage on purpose: the stage is the one thing that
+              stays on screen when collapsed, so the way back out is always
+              visible. `.call-ft-controls` is hidden-by-parts, not wholesale. */}
+          <button
+            type="button"
+            className="call-collapse-btn"
+            onClick={() => setCollapsed((v) => !v)}
+            aria-expanded={!collapsed}
+            aria-label={collapsed ? "Expand call to full size" : "Collapse call to a small window"}
+            title={collapsed ? "Expand" : "Collapse"}
+          >
+            {collapsed ? "EXPAND" : "COLLAPSE"}
+          </button>
           <img className="call-face-backdrop" src="/avatar/starra-portrait.jpg" alt="" aria-hidden />
           {/* The HERO-FRAME backstop is NOT here. It has to live inside
               StarraClipFace's own `.call-face-portrait`, which is a stacking

@@ -1428,6 +1428,95 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
 }
 
 /* ============================================================
+   COLLAPSED CALL (2026-08-21) — big waist-up, or a small window.
+
+   ONE VIDEO SERVES BOTH. Expanded shows her frame as filmed;
+   collapsed zooms the SAME layer to her head with a static CSS
+   transform. No second clip, no source swap, no extra render, so
+   there is nothing to pop and a collapsed call costs nothing.
+
+   The zoom uses `transform`, deliberately NOT `scale`. The
+   presence layer above animates the INDIVIDUAL properties
+   (translate/rotate/scale); `transform` is a separate property
+   that composes with them, so she keeps breathing and drifting
+   while collapsed instead of freezing.
+
+   MUTE and END stay mounted. Only the engine selector, the
+   status kicker and the chat pane hide, so there is no state in
+   which he is shrunk into a call he cannot end.
+   ============================================================ */
+.call-collapse-btn {
+  position: absolute; top: 10px; right: 10px; z-index: 4;
+  font-family: var(--font-mono); font-size: 10px;
+  letter-spacing: 0.14em; text-transform: uppercase;
+  padding: 5px 9px; border-radius: 8px; cursor: pointer;
+  color: var(--chrome);
+  border: 1px solid var(--border);
+  background: color-mix(in oklab, var(--void) 62%, transparent);
+  backdrop-filter: blur(6px);
+  transition: background 180ms ease, border-color 180ms ease;
+}
+.call-collapse-btn:hover {
+  border-color: color-mix(in oklab, var(--purple) 55%, transparent);
+  background: color-mix(in oklab, var(--void-2) 82%, transparent);
+}
+.call-collapse-btn:active { transform: translateY(1px); }
+.call-collapse-btn:focus-visible { outline: 2px solid var(--purple); outline-offset: 2px; }
+
+/* The window itself. Bottom-right, above the deck, below nothing. */
+.call-overlay.call-facetime.is-collapsed {
+  inset: auto 18px 18px auto;
+  width: min(268px, 46vw);
+  height: auto;
+  display: block;
+  padding: 0;
+  background: var(--void);
+  backdrop-filter: none;
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  overflow: hidden;
+  animation: none;
+  box-shadow:
+    0 20px 56px rgba(5, 2, 10, 0.72),
+    inset 0 1px 0 color-mix(in oklab, var(--chrome) 8%, transparent);
+}
+.is-collapsed .call-chat-pane { display: none; }
+.is-collapsed .call-face-col { position: relative; flex: none; }
+
+/* The stage stops being a full-bleed absolute layer and becomes a
+   sized box. aspect-ratio, not a fixed height, so the window keeps
+   its shape at any width. */
+.call-facetime.is-collapsed .call-face-stage {
+  position: relative; inset: auto;
+  width: 100%; height: auto;
+  aspect-ratio: 4 / 5;
+}
+
+/* The zoom to her head. transform-origin sits high because her face
+   occupies the TOP of the frame in a waist-up composition — measured
+   on the real clip, her head fills the top ~46%. */
+.is-collapsed .call-face-portrait,
+.is-collapsed .call-face-backdrop {
+  transform: scale(2.05);
+  transform-origin: 50% 15%;
+}
+
+.is-collapsed .call-ft-top { display: none; }
+.is-collapsed .call-engine-select,
+.is-collapsed .call-engine-note { display: none; }
+.is-collapsed .call-ft-controls {
+  padding: 0 8px 8px; gap: 8px;
+}
+.is-collapsed .call-ft-controls button {
+  font-size: 10px; padding: 5px 9px;
+}
+/* The grain overlay is sized off the stage, so it follows automatically.
+   The vignette tightens: a 120px inset spread would swallow a 268px window. */
+.call-facetime.is-collapsed .call-face-stage::before {
+  box-shadow: inset 0 0 44px 10px rgba(5, 2, 10, 0.5);
+}
+
+/* ============================================================
    PRESENCE LAYER (2026-08-20) — what makes her read as a person
    on a call rather than a video that happens to be playing.
 
