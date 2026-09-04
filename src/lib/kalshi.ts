@@ -319,3 +319,26 @@ export async function placeOrder(order: KalshiOrder) {
     },
   });
 }
+
+/**
+ * Lifetime realised P&L and fees, summed across every market position.
+ *
+ * Kalshi has no "P&L since time T" endpoint, so a daily figure is this number
+ * minus a snapshot taken at the start of the UTC day. Both values are strings
+ * in DOLLARS on the wire.
+ */
+export async function fetchRealisedPnl(): Promise<{ pnl: number; fees: number } | null> {
+  const pos = await kalshiAuthed("/trade-api/v2/portfolio/positions");
+  if (!pos) return null;
+  const rows =
+    ((pos as { market_positions?: { realized_pnl_dollars?: string; fees_paid_dollars?: string }[] })
+      .market_positions) ?? [];
+  const num = (v: string | undefined) => {
+    const n = parseFloat(v ?? "0");
+    return Number.isFinite(n) ? n : 0;
+  };
+  return {
+    pnl: rows.reduce((a, r) => a + num(r.realized_pnl_dollars), 0),
+    fees: rows.reduce((a, r) => a + num(r.fees_paid_dollars), 0),
+  };
+}

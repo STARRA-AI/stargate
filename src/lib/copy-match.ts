@@ -143,3 +143,93 @@ export function matchMlbOutcome(
     live: isLive(hit, now),
   };
 }
+
+// ── general name matching (tennis, esports, soccer) ────────────────────────
+// MLB needed a code table because Kalshi writes cities ("San Diego") where
+// Polymarket writes clubs ("San Diego Padres"). Every OTHER sport puts the full
+// human-readable name in yes_sub_title — "Tommy Paul", "The Otter Side",
+// "Taylor Townsend" — so those match on the name directly and need no table.
+
+/** Lowercase, strip accents, drop club cruft and punctuation, collapse spaces. */
+export function normaliseName(s: string): string {
+  return s
+    .normalize("NFD")
+    .replace(/[̀-ͯ]/g, "")
+    .toLowerCase()
+    .replace(/\b(fc|cf|sc|afc|club|esports|gaming|team)\b/g, "")
+    .replace(/[^a-z0-9 ]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+/**
+ * Does a Polymarket outcome name the same competitor as this Kalshi market?
+ *
+ * Exact normalised equality first. Then a surname/keyword rule: every
+ * significant token of the SHORTER name must appear in the longer one, so
+ * "Medvedev" matches "Daniil Medvedev" but "Taylor Fritz" never matches
+ * "Taylor Townsend" — the shared first name is not enough on its own.
+ */
+export function sameCompetitor(polyOutcome: string, kalshiSubTitle: string): boolean {
+  const a = normaliseName(polyOutcome);
+  const b = normaliseName(kalshiSubTitle);
+  if (!a || !b) return false;
+  if (a === b) return true;
+
+  const short = a.length <= b.length ? a : b;
+  const long = a.length <= b.length ? b : a;
+  const tokens = short.split(" ").filter((t) => t.length >= 3);
+  if (tokens.length === 0) return false;
+  const longTokens = new Set(long.split(" "));
+  return tokens.every((t) => longTokens.has(t));
+}
+
+/**
+ * Match an outcome to a live market by NAME, for any sport that publishes real
+ * names. Skips draw lines ("Tie") — a copied moneyline is never a draw bet.
+ */
+export function matchByName(
+  outcome: string,
+  candidates: KalshiMarketLite[],
+  now = new Date(),
+): Match | null {
+  const hit = candidates.find(
+    (m) =>
+      (m.yes_sub_title ?? "").toLowerCase() !== "tie" &&
+      sameCompetitor(outcome, m.yes_sub_title ?? ""),
+  );
+  if (!hit) return null;
+  return {
+    ticker: hit.ticker,
+    team: hit.yes_sub_title ?? outcome,
+    code: tickerTeamCode(hit.ticker),
+    askDollars: parseFloat(hit.yes_ask_dollars ?? "0"),
+    shard: Number(hit.exchange_index ?? 0),
+    live: isLive(hit, now),
+  };
+}
+
+/** Series scanned for a copyable signal, with the shard each one settles on. */
+export const COPY_SERIES = [
+  { series: "KXMLBGAME", sport: "mlb", matcher: "code" as const },
+  { series: "KXATPMATCH", sport: "tennis-atp", matcher: "name" as const },
+  { series: "KXWTAMATCH", sport: "tennis-wta", matcher: "name" as const },
+  { series: "KXLOLGAME", sport: "lol", matcher: "name" as const },
+  { series: "KXCS2GAMES", sport: "cs2", matcher: "name" as const },
+  { series: "KXCS2MAPWINNER", sport: "cs2-map", matcher: "name" as const },
+  { series: "KXEPLGAME", sport: "soccer-epl", matcher: "name" as const },
+  { series: "KXUCLGAME", sport: "soccer-ucl", matcher: "name" as const },
+  { series: "KXNFLGAME", sport: "nfl", matcher: "name" as const },
+];
+
+/** One entry point: use the code table for MLB, names for everything else. */
+export function matchOutcome(
+  outcome: string,
+  candidates: KalshiMarketLite[],
+  matcher: "code" | "name",
+  now = new Date(),
+): Match | null {
+  return matcher === "code"
+    ? matchMlbOutcome(outcome, candidates, now)
+    : matchByName(outcome, candidates, now);
+}

@@ -1,5 +1,6 @@
 import { callMcpTool, listMcpServers } from "@/lib/mcp/client";
 import { parseMcpCommand } from "@/lib/mcp/commands";
+import { maybeTradeReply } from "@/lib/tools/trade-voice";
 import { runRepomix } from "@/lib/tools/repomix";
 import { briefForPipeline, queueMontageJob } from "@/lib/tools/openmontage";
 import {
@@ -27,6 +28,13 @@ import { fenceUntrusted } from "@/lib/security/fencing";
  */
 export async function maybeToolReply(lastUser: string): Promise<string | null> {
   const q = lastUser.toLowerCase().trim();
+
+  // TRADING (2026-09-04). This lane is LOCAL — nothing has to be registered in
+  // xAI's console, so she can do this in chat as soon as the deck restarts.
+  // Only "trade for real" spends; a bare "trade" runs dry on purpose, so a
+  // half-heard word is never the thing that commits funds.
+  const trade = await maybeTradeReply(lastUser);
+  if (trade) return trade;
 
   // MCP BRIDGE (2026-07-31): her hands on Playwright + Composio. Exact
   // operator fast-paths only — free-form intent stays with the LLM. Works

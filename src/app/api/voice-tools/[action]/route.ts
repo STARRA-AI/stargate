@@ -25,6 +25,12 @@
  */
 
 import { getMemory, recordExchange } from "@/lib/memory/store";
+import {
+  spokenPositions,
+  spokenShards,
+  spokenSignals,
+  spokenTrade,
+} from "@/lib/tools/trade-voice";
 import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { authorizePublic, notePublicDenial, type PublicScope } from "@/lib/api/public-auth";
@@ -34,7 +40,8 @@ import { captureError } from "@/lib/errlog";
 export const runtime = "nodejs";
 
 /** Which actions MUTATE. Anything not listed here is read-only. */
-const WRITE_ACTIONS = new Set(["remember", "note", "funding_status"]);
+// `trade` is here because it SPENDS. positions/shards/signals only look.
+const WRITE_ACTIONS = new Set(["remember", "note", "funding_status", "trade"]);
 
 /** Plain text — this is speech, not an API payload. */
 function say(text: string, status = 200) {
@@ -142,6 +149,22 @@ export async function GET(
         await recordExchange("user", `[note] ${text.slice(0, 1000)}`);
         return say("Noted — it'll be on the deck when you sit down.");
       }
+
+      // ── trading (2026-09-04) ────────────────────────────────────────────
+      // Reads are free. `trade` takes the WRITE token AND still refuses to
+      // spend unless ?live=true is explicit — two separate gates, because on a
+      // call a misheard word must never be what commits funds.
+      case "positions":
+        return say(await spokenPositions());
+
+      case "shards":
+        return say(await spokenShards());
+
+      case "signals":
+        return say(await spokenSignals());
+
+      case "trade":
+        return say(await spokenTrade(url.searchParams.get("live") === "true"));
 
       case "funding_status": {
         const name = url.searchParams.get("name") ?? "";
