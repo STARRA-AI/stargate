@@ -107,3 +107,6 @@ vendor/
 
 # SDD scratch — ledger, briefs, review packages
 .superpowers/
+
+# production build lane (npm run deck:fast) — kept separate from dev's .next
+.next-prod/

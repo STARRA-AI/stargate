@@ -1,6 +1,15 @@
 import type { NextConfig } from "next";
 
 const nextConfig: NextConfig = {
+  // ★ SEPARATE BUILD DIRECTORIES. A production `next build` writes the same
+  // .next/ that a RUNNING dev server is serving from, deletes its development
+  // manifests, and the live deck starts throwing
+  // `ENOENT: .next/static/development/_buildManifest.js.tmp` on every request.
+  // That happened for real on 2026-09-04 — a build took the running deck down.
+  // STARRA_DIST lets the production lane live in .next-prod so `npm run dev`
+  // and `npm run deck:fast` can run at the same time without touching each
+  // other. Unset (the default) keeps plain `.next`, so dev is unchanged.
+  distDir: process.env.STARRA_DIST || ".next",
   // CACHING: her media (clips, viseme PNGs, brand art) revalidates hourly
   // instead of on every deck load. NOT immutable on purpose — these files are
   // replaced in place (the viseme bank was rebuilt tonight under the same
