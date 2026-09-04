@@ -99,12 +99,25 @@ export default function ReactorSphere() {
       ctx.lineWidth = Math.max(1, unit * 0.012);
       ctx.stroke();
 
-      if (!still) raf = requestAnimationFrame(draw);
+      if (!still && !document.hidden) raf = requestAnimationFrame(draw);
     };
 
     // Under reduced motion this paints ONCE and never schedules a frame — the
     // loop is not merely hidden, it never runs.
     raf = requestAnimationFrame(draw);
+
+    // A hidden tab has nobody to draw for. Browsers throttle rAF in a fully
+    // backgrounded tab, but NOT in a visible-but-unfocused window and not
+    // reliably inside the WKWebView dock app — so stop scheduling rather than
+    // trusting the host to do it. Resuming repaints immediately.
+    const onVisibility = () => {
+      if (document.hidden) {
+        cancelAnimationFrame(raf);
+      } else if (!still && !disposed) {
+        raf = requestAnimationFrame(draw);
+      }
+    };
+    document.addEventListener("visibilitychange", onVisibility);
 
     const ro = new ResizeObserver(() => {
       resize();
@@ -115,6 +128,7 @@ export default function ReactorSphere() {
     return () => {
       disposed = true;
       cancelAnimationFrame(raf);
+      document.removeEventListener("visibilitychange", onVisibility);
       ro.disconnect();
     };
   }, [bands, read]);
