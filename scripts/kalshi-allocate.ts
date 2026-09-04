@@ -10,10 +10,12 @@
  * Reads the current split first, shows the change, and only writes when you
  * pass --yes. Without --yes it is a read-only preview.
  *
- *   npx tsx scripts/kalshi-allocate.ts                 # preview 70/30
- *   npx tsx scripts/kalshi-allocate.ts --yes           # apply 70/30
- *   npx tsx scripts/kalshi-allocate.ts 60 40 --yes     # apply 60/40
- *   npx tsx scripts/kalshi-allocate.ts --clear --yes   # disable rebalancing
+ *   npx tsx scripts/kalshi-allocate.ts                      # preview 70/30
+ *   npx tsx scripts/kalshi-allocate.ts --yes                # apply 70/30
+ *   npx tsx scripts/kalshi-allocate.ts 0:40,1:20,3:40 --yes # any shards
+ *   npx tsx scripts/kalshi-allocate.ts --clear --yes        # disable rebalancing
+ *
+ * Shards: 0 Default · 1 Combos · 2 Crypto · 3 Tennis & Baseball
  *
  * Full background: docs/reference/KALSHI_COMBOS.md
  */
@@ -22,11 +24,22 @@ import { fetchShardBalances, setTargetAllocation, KALSHI_SHARDS } from "../src/l
 const argv = process.argv.slice(2);
 const apply = argv.includes("--yes");
 const clear = argv.includes("--clear");
-const nums = argv.filter((a) => /^\d+$/.test(a)).map(Number);
 
-const defaultSplit = { 0: 70, 1: 30 } as Record<number, number>;
-const split: Record<number, number> =
-  nums.length === 2 ? { 0: nums[0], 1: nums[1] } : defaultSplit;
+// Accepts "shard:percent" pairs so ANY shard can be funded, e.g. "0:40,1:20,3:40".
+// This matters because Kalshi keeps moving categories off shard 0: combos went to
+// shard 1 (2026-08-17), crypto to shard 2 and tennis/baseball to shard 3
+// (2026-08-24), basketball and commodities on 2026-09-10. Funding only 0 and 1
+// leaves every MLB order uncollateralised.
+const spec = argv.find((a) => /^\d+:\d+(,\d+:\d+)*$/.test(a));
+const defaultSplit: Record<number, number> = { 0: 70, 1: 30 };
+const split: Record<number, number> = spec
+  ? Object.fromEntries(
+      spec.split(",").map((pair) => {
+        const [idx, pct] = pair.split(":").map(Number);
+        return [idx, pct];
+      }),
+    )
+  : defaultSplit;
 
 async function show(label: string) {
   const shards = await fetchShardBalances();

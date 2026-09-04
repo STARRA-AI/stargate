@@ -13,7 +13,7 @@
  *
  * Full background: docs/reference/KALSHI_COMBOS.md
  */
-import { placeOrder, fetchPortfolio, fetchShardBalances } from "../src/lib/kalshi";
+import { placeOrder, fetchPortfolio, fetchShardBalances, KALSHI_SHARDS } from "../src/lib/kalshi";
 
 const argv = process.argv.slice(2);
 const arg = (name: string) => {
@@ -71,11 +71,21 @@ const BASE = "https://api.elections.kalshi.com";
     console.log(`        To take the offer immediately, use --price ${ask.toFixed(2)}`);
   }
 
+  // ★ Check the shard THIS market actually lives on, not shard 0. Kalshi moved
+  //   baseball and tennis to shard 3 on 2026-08-24 and crypto to shard 2, so an
+  //   MLB order collateralises against shard 3 — which is $0 on a fresh account.
+  //   Checking shard 0 here would greenlight an order that cannot possibly fill.
+  const marketShard = Number(market.exchange_index ?? 0);
   const before = await fetchShardBalances();
-  const shard0 = before?.find((s) => s.exchangeIndex === 0)?.dollars ?? 0;
-  console.log(`\nFree on shard 0: $${shard0.toFixed(4)}`);
-  if (shard0 < notional) {
-    console.error(`NOT ENOUGH free collateral on shard 0 for $${notional.toFixed(2)}.`);
+  const free = before?.find((s) => s.exchangeIndex === marketShard)?.dollars ?? 0;
+  const shardName =
+    KALSHI_SHARDS[marketShard as keyof typeof KALSHI_SHARDS] ?? `shard ${marketShard}`;
+  console.log(`\nThis market settles on shard ${marketShard} (${shardName}) — free: $${free.toFixed(4)}`);
+  if (free < notional) {
+    console.error(
+      `\nNOT ENOUGH collateral on shard ${marketShard} for $${notional.toFixed(2)}.` +
+        `\nMove funds there first:  npx tsx scripts/kalshi-allocate.ts 0:70,${marketShard}:30 --yes`,
+    );
     process.exit(1);
   }
 
