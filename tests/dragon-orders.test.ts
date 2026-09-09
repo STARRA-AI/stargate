@@ -384,3 +384,65 @@ describe("order feed lines", () => {
     assert.match(cancelOutcome({ state: "error", status: 0, code: "bad_order_id" }), /bad_order_id/);
   });
 });
+
+/**
+ * THE CEILING IS A BUY-ONLY BRAKE.
+ *
+ * The notional ceiling caps how much NEW risk may be opened. An exit reduces
+ * exposure, so gating it on the same number would mean refusing to let him out
+ * of a position — the one refusal this file must never produce. A blocked buy
+ * costs a trade he did not make; a blocked sell costs a position he cannot
+ * escape. These tests pin that asymmetry so it cannot be quietly reversed.
+ */
+describe("buildOrder — entry brakes never block an exit", () => {
+  const exit = {
+    ticker: "T",
+    side: "yes",
+    action: "sell",
+    count: 100,
+    priceCents: 90,
+  } as const;
+
+  it("allows a sell whose notional is far over the ceiling", () => {
+    const r = buildOrder({ ...exit, maxNotionalCents: 5_000 }, 1_700_000_000_000);
+    assert.equal(r.ok, true, "an exit must not be refused for being large");
+    assert.equal(notionalCents(exit) > 5_000, true, "guard: this sell really does exceed it");
+  });
+
+  it("allows a sell with no usable ceiling at all", () => {
+    for (const ceiling of [0, Number.NaN, -1]) {
+      const r = buildOrder({ ...exit, maxNotionalCents: ceiling }, 1_700_000_000_000);
+      assert.equal(r.ok, true, `an exit must not need a ceiling (got ${String(ceiling)})`);
+    }
+  });
+
+  it("still refuses a BUY over the ceiling — the brake is intact where it belongs", () => {
+    const r = buildOrder(
+      { ...exit, action: "buy", maxNotionalCents: 5_000 },
+      1_700_000_000_000,
+    );
+    assert.deepEqual(r, { ok: false, reason: "exceeds_local_max_notional" });
+  });
+
+  it("still refuses a BUY with no usable ceiling", () => {
+    const r = buildOrder({ ...exit, action: "buy", maxNotionalCents: 0 }, 1_700_000_000_000);
+    assert.deepEqual(r, { ok: false, reason: "bad_max_notional" });
+  });
+
+  it("structural validation still applies to an exit — malformed is malformed either way", () => {
+    const cases: [Partial<OrderRequest>, string][] = [
+      [{ count: 0 }, "bad_count"],
+      [{ count: 1.5 }, "bad_count"],
+      [{ priceCents: 0 }, "bad_price"],
+      [{ priceCents: 100 }, "bad_price"],
+      [{ ticker: "" }, "bad_ticker"],
+    ];
+    for (const [patch, reason] of cases) {
+      const r = buildOrder(
+        { ...exit, maxNotionalCents: 10_000, ...patch } as OrderRequest,
+        1_700_000_000_000,
+      );
+      assert.deepEqual(r, { ok: false, reason }, `an exit with ${JSON.stringify(patch)}`);
+    }
+  });
+});

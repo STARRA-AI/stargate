@@ -92,9 +92,23 @@ export function notionalCents(intent: Pick<OrderIntent, "count" | "priceCents">)
 }
 
 /**
- * Validate, then build. The ceiling is applied to sells as well as buys: a sell
- * that is wrong about its size is still a position he did not mean to take, and
- * refusing it costs nothing but a corrected retry.
+ * Validate, then build.
+ *
+ * ── THE CEILING IS A BUY-ONLY BRAKE ──────────────────────────────────────────
+ * Structural checks (ticker, side, action, count, price) run on EVERY order —
+ * a malformed order is malformed whichever way it points. The NOTIONAL CEILING
+ * is different: it exists to cap how much new risk may be opened, so it gates
+ * `buy` and nothing else.
+ *
+ * A sell reduces exposure. Refusing one because it is "too large" is refusing
+ * to let him OUT of a position, which is the one failure this file must never
+ * cause: the worst case for a blocked buy is a trade he did not make, and the
+ * worst case for a blocked sell is a position he cannot escape. Those are not
+ * symmetric, so they do not get the same brake.
+ *
+ * This reverses an earlier choice here that applied the ceiling to sells too.
+ * That reasoning — "a sell wrong about its size is still a position he did not
+ * mean to take" — is true and still loses to the asymmetry above.
  */
 export function buildOrder(req: OrderRequest, nowMs: number = Date.now()): BuildResult {
   if (typeof req.ticker !== "string" || req.ticker.trim() === "") {
@@ -106,12 +120,15 @@ export function buildOrder(req: OrderRequest, nowMs: number = Date.now()): Build
   if (!Number.isInteger(req.priceCents) || req.priceCents < 1 || req.priceCents > 99) {
     return { ok: false, reason: "bad_price" };
   }
-  if (!Number.isFinite(req.maxNotionalCents) || req.maxNotionalCents <= 0) {
-    // No usable ceiling is a refusal, never an unlimited order.
-    return { ok: false, reason: "bad_max_notional" };
-  }
-  if (notionalCents(req) > req.maxNotionalCents) {
-    return { ok: false, reason: "exceeds_local_max_notional" };
+  if (req.action === "buy") {
+    // ENTRY ONLY. A buy with no usable ceiling is a refusal, never an
+    // unlimited order; an exit is never gated on the ceiling at all.
+    if (!Number.isFinite(req.maxNotionalCents) || req.maxNotionalCents <= 0) {
+      return { ok: false, reason: "bad_max_notional" };
+    }
+    if (notionalCents(req) > req.maxNotionalCents) {
+      return { ok: false, reason: "exceeds_local_max_notional" };
+    }
   }
 
   const intent: OrderIntent = {
