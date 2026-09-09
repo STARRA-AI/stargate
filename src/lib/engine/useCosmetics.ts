@@ -45,6 +45,9 @@ export interface LiveCosmetics {
   idlePool: string[];
   mouthSync: boolean;
   fontScale: number;
+  /** "still" = base_loop + composited mouth (shipped). "alive" = the moving
+   *  anchor family. See EngineCosmetics.bodyMode. */
+  bodyMode: "still" | "alive";
 }
 
 export const COSMETICS_URL = "/api/engine/cosmetics";
@@ -64,6 +67,7 @@ export const DEFAULT_LIVE_COSMETICS: LiveCosmetics = {
   idlePool: ["idle_a1", "idle_c1", "idle_a2"],
   mouthSync: true,
   fontScale: 1,
+  bodyMode: "still",
 };
 
 /**
@@ -107,6 +111,7 @@ export function normalizeLiveCosmetics(raw: unknown): LiveCosmetics {
     reduceMotion: d.reduceMotion,
     idlePool: [...d.idlePool],
     mouthSync: d.mouthSync,
+    bodyMode: d.bodyMode,
     fontScale: d.fontScale,
   };
   if (typeof raw !== "object" || raw === null || Array.isArray(raw)) return out;
@@ -131,6 +136,9 @@ export function normalizeLiveCosmetics(raw: unknown): LiveCosmetics {
   // coercing it would flip a gate the operator never touched.
   if (typeof src.reduceMotion === "boolean") out.reduceMotion = src.reduceMotion;
   if (typeof src.mouthSync === "boolean") out.mouthSync = src.mouthSync;
+  // Only the two known modes are accepted; anything else leaves the default in
+  // place, so a malformed payload cannot move her onto the new body path.
+  if (src.bodyMode === "still" || src.bodyMode === "alive") out.bodyMode = src.bodyMode;
 
   if (Array.isArray(src.idlePool)) {
     const pool: string[] = [];

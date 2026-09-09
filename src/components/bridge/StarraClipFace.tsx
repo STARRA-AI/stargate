@@ -5,6 +5,8 @@ import {
   STARRA_CLIPS,
   SPEAKING_CLIP,
   CONTINUOUS_BODY_CLIP,
+  pickBodyClip,
+  type BodyMode,
   CROSSFADE_MS,
   type StarraClipKey,
 } from "@/lib/voice/starra-clip-map";
@@ -36,6 +38,12 @@ import {
   type MouthPatchAssets,
   type VisemeBaseBox,
 } from "@/lib/voice/viseme-sync";
+// HER MOUTH FROM THE WORDS, not only from loudness. speak.ts arms a timeline
+// of shapes from the text she is about to say and starts its clock the instant
+// sound comes out; this is the only consumer. When nothing is armed shapeMouth
+// returns the audio values UNCHANGED, so the audio-only behaviour is still the
+// floor — never a silent degrade into something else.
+import { sampleArmedTextViseme, shapeMouth } from "@/lib/voice/text-visemes";
 // ENGINE BUS — client-safe, secret-free. Never "@/lib/engine" (that barrel
 // reaches the credential resolvers); the bus module is the client's only door.
 import { useEngineBus } from "@/lib/engine/bus";
@@ -290,6 +298,24 @@ export function StarraClipFace({
   // env kill switch AND the runtime toggle. NEXT_PUBLIC_MOUTH_SYNC=0 still wins
   // outright; cosmetics can only turn the mouth off, never force it on.
   const mouthSyncOn = effectiveMouthSync(cosmetics.mouthSync);
+  // WHICH BODY. "still" is the shipped behaviour and the fallback for anything
+  // unrecognised, so a bad stored value can never strand her on the new path.
+  //
+  // READ THROUGH A REF, never a dependency. cosmetics-live-hook.test.ts pins the
+  // invariant that no cosmetics value may reach the clip effect's deps: doing so
+  // tears both video layers down and rebuilds them, which is a black flash in
+  // the middle of a live call. The mode is therefore LATCHED when the body
+  // starts, and a change takes effect on her next call rather than instantly.
+  // That is also why switching cannot produce a cross-family cut mid-sentence.
+  const bodyModeRef = useRef<BodyMode>("still");
+  bodyModeRef.current = cosmetics.bodyMode === "alive" ? "alive" : "still";
+
+  // Is she producing sound right now? Kept in a REF, not a dep: the alive
+  // scheduler reads it at handover time, and putting it in the effect's deps
+  // would tear the video layers down and rebuild them on every voice
+  // transition — a black flash on every single turn.
+  const speakingRef = useRef(false);
+  speakingRef.current = bus.speaking || analyser !== null;
 
   const aRef = useRef<HTMLVideoElement>(null);
   const bRef = useRef<HTMLVideoElement>(null);
@@ -316,10 +342,22 @@ export function StarraClipFace({
     // `!el.paused` is deliberate — a paused layer is the freeze symptom, not a
     // healthy one — and `!el.error` catches a decoder that failed after the
     // canplay that let it in.
-    const clipFile = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
+    // WHICH FILE COUNTS AS "landed" MOVES IN ALIVE MODE. In still mode this is
+    // one file for the life of the effect, exactly as before. In alive mode the
+    // scheduler advances through the pool, so health has to be judged against
+    // the clip currently scheduled — pinning it to base_loop would make every
+    // alive clip look like a failed load and trip the retry/watchdog path.
+    // Latched ONCE for the life of this effect — see bodyModeRef above.
+    const bodyMode: BodyMode = bodyModeRef.current;
+    let scheduledFile = STARRA_CLIPS[
+      bodyMode === "alive" ? pickBodyClip("alive", false, null, 0) : CONTINUOUS_BODY_CLIP
+    ].file;
     const layerLanded = (el: HTMLVideoElement): boolean =>
-      el.getAttribute("src") === clipFile && el.readyState >= 2 && !el.error;
+      el.getAttribute("src") === scheduledFile && el.readyState >= 2 && !el.error;
     const layerHealthy = (el: HTMLVideoElement): boolean => layerLanded(el) && !el.paused;
+
+    /** The clip currently scheduled onto a layer (alive mode advances it). */
+    let playingKey: StarraClipKey | null = null;
 
     // One crossfade may own the layers at a time. See createCrossfadeGate.
     const fades = createCrossfadeGate();
@@ -421,8 +459,23 @@ export function StarraClipFace({
     // play `key` on the hidden layer, then crossfade it in (no black flash).
     const play = (key: StarraClipKey) => {
       const clip = STARRA_CLIPS[key];
+      scheduledFile = clip.file;
+      playingKey = key;
       back.loop = clip.loop;
-      back.onended = null;
+      // HANDOVER. In still mode there is nothing to hand over to — one clip
+      // loops forever — so `ended` stays cleared exactly as it shipped. In alive
+      // mode this element IS the next clip, and clearing its `ended` here is
+      // what would freeze her on the first gesture: the handler armed before the
+      // first play() lives on whichever layer plays FIRST, and every subsequent
+      // play() targets the other one. Arm it per play, on the element that will
+      // actually carry the clip.
+      back.onended =
+        bodyMode === "alive" && !clip.loop
+          ? () => {
+              if (disposed || bodyMode !== "alive") return;
+              scheduleNextAlive();
+            }
+          : null;
       back.oncanplay = null;
       if (back.getAttribute("src") !== clip.file) back.src = clip.file;
       try {
@@ -582,6 +635,22 @@ export function StarraClipFace({
       lastFrontTime = t;
     };
 
+    // ── ALIVE MODE ───────────────────────────────────────────────────────────
+    // She actually moves between turns. Every clip in the pool begins and ends
+    // on the same anchor pose, measured, so handing over at `ended` is seamless
+    // — the chain's worst seam is 2.36 against the 2.025 base_loop already ships
+    // and that this file calls invisible (starra-clip-map.ts, ALIVE_POOL).
+    //
+    // Speech is deliberately NOT interrupted: `speakingRef` is read at handover
+    // time, so a clip finishes its gesture and the next choice reflects whatever
+    // she is doing by then. Cutting mid-gesture to answer is the twitchy look
+    // Classic objected to in the first place.
+    const scheduleNextAlive = () => {
+      if (disposed) return;
+      const next = pickBodyClip("alive", speakingRef.current, playingKey, Math.random());
+      play(next);
+    };
+
     const startContinuousBody = () => {
       // The heartbeat is armed ONCE and runs for the life of the effect; every
       // attempt just resets the stall sampler so a fresh layer is not judged on
@@ -592,7 +661,12 @@ export function StarraClipFace({
       back.onerror = scheduleBodyRetry;
       a.onerror = scheduleBodyRetry;
       b.onerror = scheduleBodyRetry;
-      play(CONTINUOUS_BODY_CLIP);
+      if (bodyMode === "alive") {
+        // play() arms the handover on whichever layer carries each clip.
+        scheduleNextAlive();
+      } else {
+        play(CONTINUOUS_BODY_CLIP);
+      }
     };
 
     startContinuousBody();
@@ -949,6 +1023,18 @@ export function StarraClipFace({
         // Roundness needs the SAME compensation — see roundRing above.
         const shownRound = delayMs > 0 ? roundRing.sample(now - delayMs) : roundness;
 
+        // SAME delay compensation for the text cue: the shape has to land on
+        // the sound leaving the speakers, not on the block the analyser just
+        // read. `now` here is the rAF timestamp, i.e. the same
+        // performance.now() timeline beginTextVisemes() stamps.
+        //
+        // What this buys, and it is the whole point: the envelope alone made
+        // every loud frame the same open mouth, so /m/ /b/ /p/ never shut and
+        // "oo" looked like "ee". The text knows both. It cannot widen the bank
+        // (still capped at half-open) — it can only pick better inside it.
+        const cue = sampleArmedTextViseme(delayMs > 0 ? now - delayMs : now);
+        const mouth = shapeMouth(shown, shownRound, cue);
+
         // ── V4: the mouth composited onto the CONTINUOUS BODY ────────────────
         if (patch.kind === "v4") {
           const b4 = patch.bank4;
@@ -961,7 +1047,7 @@ export function StarraClipFace({
           // The ceiling is enforced INSIDE pickVisemeFrame4: openness above the
           // bank's 0.55 clamps to the top of the real ladder instead of asking for
           // a gape that was deliberately dropped for reading as a shout.
-          const pick = pickVisemeFrame4(b4, shown, shownRound);
+          const pick = pickVisemeFrame4(b4, mouth.openness, mouth.roundness);
           const img = pick ? patch.images.get(pick.id) : null;
           if (!pick || !img || !img.complete || !img.naturalWidth) return hide();
           // NO RESCALING, EVER. Each PNG is already at base scale and its pixel
@@ -1042,8 +1128,8 @@ export function StarraClipFace({
         // makes "oo" and "ah" different mouths: the 1-D scan below cannot tell
         // them apart at equal loudness, because openness is all it has.
         const pick = bank2
-          ? pickVisemeFrame2(bank2, shown, shownRound)
-          : pickVisemeFrame(bank, shown);
+          ? pickVisemeFrame2(bank2, mouth.openness, mouth.roundness)
+          : pickVisemeFrame(bank, mouth.openness);
         const img = pick ? images.get(pick.id) : null;
         if (!img || !img.complete || !img.naturalWidth) return hide();
 

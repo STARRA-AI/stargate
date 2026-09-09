@@ -603,12 +603,29 @@ export function StargateProvider({ children }: { children: ReactNode }) {
         // Speak immediately. With sync OFF, `full` already rendered live during
         // the read loop, so commit straight to history instead of re-typing it
         // character-by-character.
-        const { speakStarra, subscribeTtsAudio, getTtsAudio } = await import(
-          "@/lib/voice/speak"
-        );
+        const { speakStarra, speakStarraChunks, subscribeTtsAudio, getTtsAudio } =
+          await import("@/lib/voice/speak");
+        const { chunkForSpeech } = await import("@/lib/voice/sentence-chunker");
         // Her voice says the prose; fenced code stays in the chat where it
         // renders as a sectioned, copyable block — never read aloud.
-        const speakPromise = speakStarra(speakableText(full), ttsAc.signal);
+        const spoken = speakableText(full);
+        // SHE STARTS TALKING ON THE FIRST SENTENCE. Synthesizing a long reply
+        // as ONE request means her first word waits on the LAST word's audio —
+        // seconds of dead air on exactly the answers worth listening to. The
+        // queue fires every chunk's synthesis at once and plays them in order,
+        // so time-to-first-sound becomes the length of one sentence while the
+        // rest downloads underneath it. chunkForSpeech caps the split (see
+        // MAX_SPEECH_CHUNKS) so this can never open a fan of parallel xAI
+        // requests and get itself rate-limited mid-reply.
+        //
+        // A reply that does not benefit — short, or a single sentence — comes
+        // back as one chunk and takes the original speakStarra path unchanged,
+        // which is also the path that owns the retry and the one-voice gate.
+        const speechChunks = chunkForSpeech(spoken);
+        const speakPromise =
+          speechChunks.length > 1
+            ? speakStarraChunks(speechChunks, ttsAc.signal)
+            : speakStarra(spoken, ttsAc.signal);
 
         // G3 ON: the reply is still buffered. Hold the commit until her voice
         // is genuinely audible, then release everything at once.

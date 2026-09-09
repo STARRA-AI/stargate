@@ -49,6 +49,19 @@ export interface EngineCosmetics {
   /** Master switch for the free local mouth sync. */
   mouthSync: boolean;
   fontScale: number;
+  /**
+   * Which body her face plays.
+   *
+   * "still" — base_loop.mp4 forever plus the composited viseme mouth. Her body
+   *           does not move, but her speech is really SYNCED to her words.
+   * "alive" — the 832x1248 anchor family: she nods, glances, tilts, laughs and
+   *           raises an eyebrow between turns. Her mouth then moves on her real
+   *           talking footage, which is photoreal but NOT synced to the words.
+   *
+   * Defaults to "still" so this landing changes nothing about his deck. See
+   * ALIVE_POOL in src/lib/voice/starra-clip-map.ts for the measurement.
+   */
+  bodyMode: "still" | "alive";
 }
 
 export interface EngineConfig {
@@ -96,6 +109,8 @@ const DEFAULT_COSMETICS: EngineCosmetics = {
   idlePool: ["idle_a1", "idle_c1", "idle_a2"],
   mouthSync: true,
   fontScale: 1,
+  /** Unchanged behaviour by default — "alive" is opt-in. */
+  bodyMode: "still",
 };
 
 function defaultProviders(): Partial<Record<ProviderId, EngineProviderConfig>> {

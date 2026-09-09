@@ -107,6 +107,7 @@ describe("cosmetics defaults parity", () => {
       idlePool: (panelDefault("idlePool").match(/"([a-z0-9_]+)"/g) ?? []).map((s) =>
         s.replace(/"/g, ""),
       ),
+      bodyMode: panelDefault("bodyMode").replace(/"/g, "") as "still" | "alive",
     };
     const parsed = S.cosmeticsSchema.safeParse(fromPanel);
     assert.equal(parsed.success, true, JSON.stringify(parsed));

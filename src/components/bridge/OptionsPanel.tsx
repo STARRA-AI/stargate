@@ -75,6 +75,9 @@ type Cosmetics = {
   idlePool: string[];
   mouthSync: boolean;
   fontScale: number;
+  /** "still" = base_loop + composited mouth (shipped). "alive" = the moving
+   *   832x1248 anchor family. See starra-clip-map.ts ALIVE_POOL. */
+  bodyMode: "still" | "alive";
 };
 
 type ProbeResult = {
@@ -98,6 +101,7 @@ const DEFAULT_COSMETICS: Cosmetics = {
   idlePool: ["idle_a1", "idle_c1", "idle_a2"],
   mouthSync: true,
   fontScale: 1,
+  bodyMode: "still",
 };
 
 
@@ -666,10 +670,33 @@ export function OptionsPanel() {
                 >
                   MOUTH SYNC · {cosmetics.mouthSync ? "ON" : "OFF"}
                 </button>
+                <button
+                  type="button"
+                  className="opt-btn"
+                  aria-pressed={cosmetics.bodyMode === "alive"}
+                  onClick={() =>
+                    patchCosmetics({
+                      bodyMode: cosmetics.bodyMode === "alive" ? "still" : "alive",
+                    })
+                  }
+                >
+                  BODY · {cosmetics.bodyMode === "alive" ? "ALIVE" : "STILL"}
+                </button>
               </div>
               <p className="opt-note">
                 Mouth sync drives the viseme patch from her live audio. It never gates playback — her
                 voice plays either way.
+              </p>
+              <p className="opt-note">
+                BODY picks which footage she is. STILL is the shipped one: base_loop holds a single
+                pose forever and the viseme patch moves her mouth, so speech is genuinely synced to
+                her words. ALIVE plays her 832x1248 anchor clips — she nods, glances, tilts, laughs
+                and raises an eyebrow between turns, at higher resolution — but her mouth then runs
+                on her real talking footage, which moves photorealistically without matching the
+                actual words. Measured 2026-08-22: every seam in that family is 0.81x-1.17x the
+                loop seam base_loop already ships, so the switching is invisible. The two families
+                cannot cut into each other, which is why this is a choice. Takes effect on her next
+                call — it never tears her face down mid-call.
               </p>
 
               <div className="opt-field opt-field-col">

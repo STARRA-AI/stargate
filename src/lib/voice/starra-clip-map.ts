@@ -38,6 +38,22 @@ export const STARRA_CLIPS = {
   idle_a: { file: "/avatar/clips/idle_a.mp4", durationMs: 10042, loop: false },
   idle_b: { file: "/avatar/clips/idle_b.mp4", durationMs: 10042, loop: false },
   idle_c: { file: "/avatar/clips/idle_c.mp4", durationMs: 15042, loop: false },
+
+  // ── THE ANCHOR FAMILY (832x1248) ────────────────────────────────────────────
+  // Eleven clips that were generated together from the same anchor pose, sitting
+  // unused in public/avatar/clips/ with zero references anywhere in src/. See
+  // ALIVE_POOL below for the measurement that brought them back.
+  // Durations are frames/fps measured with ffprobe 2026-08-22.
+  a_idle: { file: "/avatar/clips/idle.mp4", durationMs: 3120, loop: false },
+  a_nod: { file: "/avatar/clips/nod.mp4", durationMs: 1233, loop: false },
+  a_laugh: { file: "/avatar/clips/laugh.mp4", durationMs: 1767, loop: false },
+  a_eyebrow: { file: "/avatar/clips/eyebrow.mp4", durationMs: 1433, loop: false },
+  a_gaze_left: { file: "/avatar/clips/gaze_left.mp4", durationMs: 1600, loop: false },
+  a_gaze_right: { file: "/avatar/clips/gaze_right.mp4", durationMs: 1600, loop: false },
+  a_gaze_up: { file: "/avatar/clips/gaze_up.mp4", durationMs: 1567, loop: false },
+  a_tilt_left: { file: "/avatar/clips/tilt_left.mp4", durationMs: 1600, loop: false },
+  a_tilt_right: { file: "/avatar/clips/tilt_right.mp4", durationMs: 1600, loop: false },
+  a_talking_loop: { file: "/avatar/clips/talking_loop.mp4", durationMs: 2033, loop: true },
 } as const;
 
 export type StarraClipKey = keyof typeof STARRA_CLIPS;
@@ -111,6 +127,115 @@ export const SPEAKING_CLIP: StarraClipKey = "talking";
  * backoff — never a switch to another clip (Classic's order, 2026-07-30).
  */
 export const CONTINUOUS_BODY_CLIP: StarraClipKey = "body_base";
+
+/**
+ * THE ALIVE POOL — she actually moves.
+ *
+ * WHAT WAS WRONG, and it was a measurement error, not a footage problem.
+ * StarraClipFace.tsx:1029-1038 benched every gesture clip because each one's
+ * resting pose differs from `base_loop` by 14-29x its own natural motion. That
+ * measurement is correct and the conclusion drawn from it was wrong: it compared
+ * the clips against BASE_LOOP, which is a different generation at a different
+ * resolution (552x720 against their 832x1248 — the exact size of his ANGLE
+ * stills). Of course they did not match. Nobody compared them to EACH OTHER.
+ *
+ * MEASURED 2026-08-22 (scripts/clip-compat-matrix.py, full-resolution
+ * verification with ffmpeg blend=difference + signalstats):
+ *
+ *   - all 55 first-frame pairs in the family are within the bar: these clips
+ *     share one anchor pose;
+ *   - all 110 A-last -> B-first transitions pass;
+ *   - measured end to end over a real 11-clip chain, every seam lands at
+ *     1.65-2.36, i.e. 0.81x-1.17x the 2.025 seam base_loop ALREADY SHIPS and
+ *     that starra-clip-map.ts:99-105 calls invisible.
+ *
+ * So these clips are interchangeable by construction, and the switch that was
+ * abandoned as "the cut the eye reads" is not a cut at all inside this family.
+ *
+ * WHY IT IS A SEPARATE MODE AND NOT A REPLACEMENT. base_loop and this family
+ * CANNOT cut into one another — measured at ~26, and scripts/match-families.py
+ * shows a crop + colour-grade solve does not close it (residual 25.1), so it is
+ * a genuine generation difference, not framing. Picking one means giving up the
+ * other, and that is Classic's call, not mine:
+ *
+ *   still (default, unchanged)  base_loop forever + the composited viseme mouth,
+ *                               so speech is really SYNCED to her words.
+ *   alive                       this family: she nods, tilts, glances, laughs and
+ *                               raises an eyebrow, at 832x1248 instead of 552x720
+ *                               — but speech runs on her real talking footage,
+ *                               which moves photorealistically WITHOUT being
+ *                               synced to the actual words.
+ *
+ * The mouth compositor already fails safe here: it paints only when the video
+ * src is CONTINUOUS_BODY_CLIP (StarraClipFace.tsx:976), so an alive-mode clip
+ * suppresses the patch on its own rather than floating it over her cheek.
+ */
+export const ALIVE_POOL = [
+  "a_idle",
+  "a_nod",
+  "a_gaze_left",
+  "a_gaze_right",
+  "a_gaze_up",
+  "a_tilt_left",
+  "a_tilt_right",
+  "a_eyebrow",
+  "a_laugh",
+] as const;
+
+/** What she plays in alive mode while SPEAKING — her real talking footage. */
+export const ALIVE_SPEAKING_CLIP: StarraClipKey = "a_talking_loop";
+
+/** The clip alive mode rests on when nothing else is scheduled. */
+export const ALIVE_BASE_CLIP: StarraClipKey = "a_idle";
+
+export type BodyMode = "still" | "alive";
+
+/**
+ * Which clip the body should be showing, given the mode and what she is doing.
+ * Pure so the scheduler is testable without a DOM.
+ *
+ * `prev` avoids an immediate repeat; `rand` is injectable for tests.
+ */
+export function pickBodyClip(
+  mode: BodyMode,
+  speaking: boolean,
+  prev: StarraClipKey | null,
+  rand: number,
+  pool: readonly StarraClipKey[] = ALIVE_POOL,
+): StarraClipKey {
+  // still mode is the shipped behaviour, byte for byte: one clip, forever,
+  // through every state. Do not let anything below change that.
+  if (mode !== "alive") return CONTINUOUS_BODY_CLIP;
+  if (speaking) return ALIVE_SPEAKING_CLIP;
+  return pickAlive(prev, rand, pool);
+}
+
+/** Is `id` a clip alive mode is allowed to schedule? Same shape as isIdlePoolMember. */
+export function isAlivePoolMember(id: unknown): id is StarraClipKey {
+  if (typeof id !== "string") return false;
+  if (!Object.prototype.hasOwnProperty.call(STARRA_CLIPS, id)) return false;
+  return (ALIVE_POOL as readonly string[]).indexOf(id) !== -1;
+}
+
+/**
+ * Pick the next alive-pool clip, avoiding an immediate repeat.
+ *
+ * Mirrors pickIdle deliberately rather than sharing it: pickIdle falls back to
+ * IDLE_POOL, and an alive-mode fallback into a 768x1168 idle clip would be the
+ * one transition in this whole design that IS a visible cut.
+ */
+export function pickAlive(
+  prev: StarraClipKey | null,
+  rand: number,
+  pool: readonly StarraClipKey[] = ALIVE_POOL,
+): StarraClipKey {
+  const src = Array.isArray(pool) && pool.length > 0 ? pool : ALIVE_POOL;
+  const filtered = src.filter((k) => k !== prev);
+  const arr: readonly StarraClipKey[] = filtered.length ? filtered : src;
+  const r = Number.isFinite(rand) ? rand : 0;
+  const i = Math.floor(r * arr.length);
+  return arr[Math.min(arr.length - 1, Math.max(0, i))];
+}
 
 /** How long the crossfade between clips lasts (ms). Must match the CSS opacity transition. */
 export const CROSSFADE_MS = 320;

@@ -356,6 +356,8 @@ export const cosmeticsSchema = z.strictObject({
   idlePool: z.array(z.string().regex(IDLE_CLIP_ID)).min(1).max(IDLE_POOL_MAX),
   mouthSync: z.boolean(),
   fontScale: z.number().min(COSMETIC_BOUNDS.fontScale[0]).max(COSMETIC_BOUNDS.fontScale[1]),
+  /** See EngineCosmetics.bodyMode — "still" is the shipped behaviour. */
+  bodyMode: z.enum(["still", "alive"]),
 });
 
 export type Cosmetics = z.infer<typeof cosmeticsSchema>;
@@ -386,6 +388,7 @@ export const DEFAULT_COSMETICS: Cosmetics = {
   idlePool: [...COSMETIC_IDLE_CLIPS],
   mouthSync: true,
   fontScale: 1,
+  bodyMode: "still",
 };
 
 /** A fresh copy of the defaults — never the module's own idlePool array. */
@@ -437,6 +440,9 @@ export function normalizeCosmetics(raw: unknown): Cosmetics {
     idlePool: normalizeIdlePool(src.idlePool, d.idlePool),
     mouthSync: typeof src.mouthSync === "boolean" ? src.mouthSync : d.mouthSync,
     fontScale: clampCosmetic(src.fontScale, "fontScale", d.fontScale),
+    // Anything that is not one of the two known modes falls back to the shipped
+    // one. An unknown value must never strand her on the new path.
+    bodyMode: src.bodyMode === "alive" || src.bodyMode === "still" ? src.bodyMode : d.bodyMode,
   };
   const parsed = cosmeticsSchema.safeParse(merged);
   return parsed.success ? parsed.data : defaultCosmetics();

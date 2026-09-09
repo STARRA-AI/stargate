@@ -25,6 +25,17 @@ import {
   PIPER_VOICE_ID,
 } from "@/lib/voice/piper-speak";
 import { MOUTH_SYNC_ENABLED } from "@/lib/voice/viseme-sync";
+// HER MOUTH FROM THE WORDS. She knows the text before the speakers make a
+// sound, so the SHAPE of each viseme comes from here while the analyser
+// envelope keeps saying how far open. Pure and DOM-free; the renderer
+// (StarraClipFace) samples the armed track — this file only arms it, starts
+// its clock the instant sound begins, and clears it when the utterance dies.
+import {
+  armTextVisemes,
+  beginTextVisemes,
+  clearTextVisemes,
+  setTextVisemeDuration,
+} from "@/lib/voice/text-visemes";
 // THE BARGE-IN SEAM, and it is one-way ON PURPOSE: speak.ts imports the local
 // mouth, never the reverse. local-voice.ts is the only engine a PRIVATE reply
 // may reach, so it must not be able to drag this module — the one that POSTs to
@@ -590,6 +601,9 @@ function stopAraAudio() {
   // Pausing fires no `ended`/`pause` handler we own here, so the audio-truth
   // flag has to be cleared explicitly or her face would latch on "speaking".
   publishTts({ playing: false });
+  // Same reason, for the mouth SHAPE: an armed track left behind after the
+  // sound stops would hold her lips on the last cue.
+  clearTextVisemes();
   if (araSettle) {
     const settle = araSettle;
     araSettle = null;
@@ -638,7 +652,23 @@ export function stopHostedSpeech() {
  * hosted engines would leave the next queued sentence to start on top of the
  * new turn. This kills the queue, the element and its bus claim too.
  */
+/**
+ * Monotonic epoch bumped on every stopAllSpeech(). The chunk queue reads this
+ * before advancing to the next chunk — if it moved since the queue started,
+ * a barge-in landed and the queue must die silently. This is the mechanism
+ * the executive verdict at tests/speak-chunk-queue.test.ts:282-316 identified
+ * as the missing piece.
+ */
+let stopEpoch = 0;
+
+/** Current stop epoch. The chunk queue snapshots this at birth and compares
+ * before each advance — a mismatch means stopAllSpeech() fired. */
+export function getStopEpoch(): number {
+  return stopEpoch;
+}
+
 export function stopAllSpeech() {
+  stopEpoch += 1;
   stopHostedSpeech();
   stopLocalStream();
 }
@@ -711,6 +741,10 @@ async function speakAra(
         // face stuck in "speaking". Generation-stamped: if a NEWER utterance has
         // already taken her voice, this one may not retract its "speaking".
         publishTtsFor(generation, { playing: false });
+        // Generation-guarded for the same reason every publish above is: a late
+        // settle from a superseded utterance must not wipe the track a NEWER
+        // one has already armed, which would freeze her mouth on the envelope.
+        if (isCurrentUtterance(generation)) clearTextVisemes();
         cleanup();
         // A miss is "aborted" when the caller pulled the turn (barge-in, newer
         // utterance) and "failed" otherwise. Neither one may summon a second
@@ -775,6 +809,13 @@ async function speakAra(
           Number.isFinite(d) && d > 0 && Number.isFinite(t) ? (d - t) * 1000 : 0;
         armWatchdog((left > 0 ? left : 0) + PROGRESS_GRACE_MS);
       };
+      // Guarded: a dead or superseded element must never rewrite the duration
+      // of a NEWER utterance's armed track.
+      const syncVisemeDuration = () => {
+        if (settled || araAudio !== audio) return;
+        const d = audio.duration;
+        if (Number.isFinite(d) && d > 0) setTextVisemeDuration(d * 1000);
+      };
 
       // `playing` (not `play`) is the event that means sound is actually coming
       // out — `play` fires on the attempt, before any audio is rendered.
@@ -788,8 +829,18 @@ async function speakAra(
         if (settled || araAudio !== audio) return;
         heardSound = true;
         publishTtsFor(generation, { playing: true });
+        // THE TEXT-VISEME CLOCK STARTS HERE, not at arm time. `playing` is the
+        // event that means sound is actually leaving the element; starting the
+        // clock when the text arrived would run her mouth ahead of eve by the
+        // whole synthesis round trip.
+        beginTextVisemes();
+        syncVisemeDuration();
         armForProgress();
       });
+      // The blob's real length usually lands after `playing`. An honest
+      // duration is what keeps the shapes on the words instead of drifting
+      // against an estimate.
+      audio.addEventListener("durationchange", syncVisemeDuration);
       // Real progress proves the element is alive, so re-arm from it. timeupdate
       // fires ~4x/second during playback, so a healthy utterance of any length
       // never trips the watchdog.
@@ -822,6 +873,10 @@ async function speakAra(
       // switch is inaudible. (This used to be `await attachTtsAnalyser(audio)`
       // ABOVE the promise, i.e. an unbounded await sitting in front of the only
       // audio.play() in the file — total silence if resume() never settled.)
+      // Build the shape timeline from the words she is about to say. This does
+      // NOT start its clock (see the `playing` handler above) and it never
+      // touches her audio path — a throw here could not reach play().
+      armTextVisemes(text);
       armWatchdog(PLAY_START_TIMEOUT_MS);
       audio
         .play()
@@ -1127,4 +1182,309 @@ export async function speakStarra(
     arm(webSpeechWatchdogMs(text.length, u.rate));
     window.speechSynthesis.speak(u);
   });
+}
+
+// ── CHUNKED VOICE QUEUE ─────────────────────────────────────────────────────
+
+async function synthesizeChunk(
+  text: string,
+  signal: AbortSignal | undefined,
+): Promise<string | null> {
+  try {
+    const res = await fetch("/api/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text }),
+      signal,
+    });
+    if (!res.ok) return null;
+    const blob = await res.blob();
+    if (signal?.aborted) return null;
+    if (!blob.size) return null;
+    return URL.createObjectURL(blob);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Play ONE already-synthesized chunk and resolve when it is over.
+ *
+ * SAME TERMINAL-PATH MACHINERY AS speakAra, and for the same reasons — this
+ * promise is what the queue awaits, so every way an element can die has to
+ * settle it or the whole queue (and the caller awaiting it) hangs forever:
+ *
+ *   - `araSettle`. `stopAraAudio()` pauses the element and fires no event we
+ *     own, so WITHOUT this registration an external stop — a barge-in, or the
+ *     `stopAllSpeech()` a newer utterance runs on its way in — leaves this
+ *     promise pending for the life of the page. That was a real hang, caught by
+ *     tests/speak-chunk-queue.test.ts (4) SUPERSESSION, which times out against
+ *     a queue that lacks it.
+ *   - A STALL WATCHDOG. Routing the element into WebAudio adds a failure that
+ *     fires no `ended` and no `error`: if the context leaves "running" (output
+ *     device change, Bluetooth handoff, WebKit audio-session interruption) the
+ *     chunk renders nowhere, silently. Bounded the same way speakAra bounds it.
+ *
+ * Resolves TRUE only when sound actually came out and the chunk ran to its end
+ * — that is the queue's licence to advance. Every other exit is FALSE, and the
+ * queue then reads the generation/epoch to tell "she was interrupted" from
+ * "her voice broke", which are different outcomes for the operator.
+ */
+function playChunkAudio(
+  text: string,
+  url: string,
+  generation: number,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  return new Promise<boolean>((resolve) => {
+    const audio = new Audio(url);
+    stopAraAudio();
+    araAudio = audio;
+    // Tag the engine BEFORE any publish can fire, as speakAra does:
+    // attachTtsAnalyser also publishes and the two orders are not guaranteed.
+    ttsEngine = "ara";
+
+    // A barge-in may have landed while this chunk's blob was downloading.
+    if (signal?.aborted) {
+      if (araAudio === audio) araAudio = null;
+      URL.revokeObjectURL(url);
+      resolve(false);
+      return;
+    }
+
+    let settled = false;
+    let watchdog = 0;
+    let heardSound = false;
+
+    // Settles exactly once, from any path — ended / error / abort / play
+    // failure / external stopAraAudio / watchdog.
+    const settle = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      try {
+        window.clearTimeout(watchdog);
+      } catch {
+        /* ignore */
+      }
+      signal?.removeEventListener("abort", onAbort);
+      releaseTtsSource(audio);
+      if (araSettle === settleFalse) araSettle = null;
+      if (araAudio === audio) araAudio = null;
+      // Audio truth off on EVERY exit, generation-stamped so a chunk that has
+      // already been superseded can never retract a NEWER utterance's
+      // "speaking" and leave her face idle while she is audibly talking.
+      publishTtsFor(generation, { playing: false });
+      // Between chunks her mouth returns to rest; the next chunk arms its own
+      // track a moment later. Generation-guarded so a late settle cannot wipe
+      // a newer utterance's track.
+      if (isCurrentUtterance(generation)) clearTextVisemes();
+      URL.revokeObjectURL(url);
+      resolve(ok);
+    };
+    const settleFalse = () => settle(false);
+    araSettle = settleFalse;
+
+    const onAbort = () => {
+      try {
+        audio.pause();
+        audio.src = ""; // release the decoder now, as stopAraAudio does
+      } catch {
+        /* ignore */
+      }
+      settle(false);
+    };
+    signal?.addEventListener("abort", onAbort, { once: true });
+
+    const onWedged = () => {
+      try {
+        audio.pause();
+        audio.src = "";
+      } catch {
+        /* ignore */
+      }
+      // If sound DID come out, the chunk counts as spoken — re-speaking it
+      // would repeat her out loud. If nothing ever played, this chunk failed,
+      // and a failure means SILENCE, never a stand-in voice.
+      settle(heardSound);
+    };
+    const armWatchdog = (ms: number) => {
+      try {
+        window.clearTimeout(watchdog);
+        if (settled) return; // done already — never leave a timer behind
+        watchdog = window.setTimeout(onWedged, ms);
+      } catch {
+        /* ignore */
+      }
+    };
+    // Guarded: a dead or superseded element must never rewrite the duration of
+    // a NEWER utterance's armed track.
+    const syncVisemeDuration = () => {
+      if (settled || araAudio !== audio) return;
+      const d = audio.duration;
+      if (Number.isFinite(d) && d > 0) setTextVisemeDuration(d * 1000);
+    };
+    // Time still owed on this chunk, once the blob's duration is known.
+    const armForProgress = () => {
+      const d = audio.duration;
+      const t = audio.currentTime;
+      const left =
+        Number.isFinite(d) && d > 0 && Number.isFinite(t) ? (d - t) * 1000 : 0;
+      armWatchdog((left > 0 ? left : 0) + PROGRESS_GRACE_MS);
+    };
+
+    // `playing`, not `play` — `play` fires on the attempt, before any audio is
+    // rendered. A settled or superseded element must never publish `playing`.
+    audio.addEventListener("playing", () => {
+      if (settled || araAudio !== audio) return;
+      heardSound = true;
+      publishTtsFor(generation, { playing: true });
+      // Clock starts on real sound, per chunk — see speakAra for why.
+      beginTextVisemes();
+      syncVisemeDuration();
+      armForProgress();
+    });
+    audio.addEventListener("durationchange", syncVisemeDuration);
+    audio.addEventListener("timeupdate", armForProgress);
+    audio.addEventListener("pause", () => {
+      if (settled) return;
+      publishTtsFor(generation, { playing: false });
+    });
+    audio.onended = () => settle(true);
+    audio.onerror = () => settle(false);
+
+    // HER VOICE FIRST: play() is reached with no preceding await, so no
+    // WebAudio state can delay it. The analyser tap is attached afterwards and
+    // never awaited — same ordering speakAra documents at length.
+    // THIS chunk's words, not the whole reply's — each chunk carries its own
+    // timeline so the shapes stay locked to the audio actually playing.
+    armTextVisemes(text);
+    armWatchdog(PLAY_START_TIMEOUT_MS);
+    audio
+      .play()
+      .then(() => {
+        if (settled || signal?.aborted || araAudio !== audio) return;
+        void attachTtsAnalyser(audio);
+      })
+      .catch(() => settle(false));
+  });
+}
+
+export async function speakStarraChunks(
+  chunks: string[],
+  signal?: AbortSignal,
+): Promise<SpeakEngine> {
+  if (typeof window === "undefined" || chunks.length === 0) {
+    return "none";
+  }
+
+  if (getEngineState().callLive) {
+    stopHostedSpeech();
+    return "none";
+  }
+
+  // NOT HER VOICE? DON'T CHUNK. This queue speaks Ara/eve and ONLY Ara/eve —
+  // it has no Piper leg and no Web Speech leg, by design. So when the operator
+  // has explicitly picked another voice in Settings, chunking would produce
+  // SILENCE exactly where speakStarra's policy would have spoken. Hand the
+  // whole reply over instead: voice-fallback-policy.ts stays the single place
+  // that decides who is allowed to speak.
+  if (!isAraSelected()) {
+    return speakStarra(chunks.join(" "), signal);
+  }
+
+  stopAllSpeech();
+  const generation = beginUtterance();
+  const epochAtBirth = getStopEpoch();
+
+  const synthPromises: Promise<string | null>[] = chunks.map((text) =>
+    synthesizeChunk(text, signal),
+  );
+
+  const revoke = (url: string | null) => {
+    if (!url) return;
+    try {
+      URL.revokeObjectURL(url);
+    } catch {
+      /* ignore */
+    }
+  };
+  // Every chunk this queue synthesized but never played still holds a decoded
+  // blob until its object URL is revoked. playChunkAudio revokes the ones it
+  // plays; this sweeps the abandoned tail on every early exit (barge-in, a
+  // newer turn, a failure) so a long session cannot accumulate one per dropped
+  // chunk. Double-revoking is a no-op, so overlap with playChunkAudio is safe.
+  const releaseFrom = (from: number) => {
+    for (let i = from; i < synthPromises.length; i++) {
+      void synthPromises[i].then(revoke, () => {});
+    }
+  };
+
+  let heardSound = false;
+  let releaseFromIndex = chunks.length;
+
+  for (let i = 0; i < chunks.length; i++) {
+    // Superseded BEFORE this chunk's blob was even claimed.
+    if (
+      signal?.aborted ||
+      !isCurrentUtterance(generation) ||
+      getStopEpoch() !== epochAtBirth
+    ) {
+      releaseFromIndex = i;
+      break;
+    }
+
+    const url = await synthPromises[i];
+
+    // ...and again after the await, which is where a real barge-in lands.
+    if (
+      signal?.aborted ||
+      !isCurrentUtterance(generation) ||
+      getStopEpoch() !== epochAtBirth
+    ) {
+      revoke(url);
+      releaseFromIndex = i + 1;
+      break;
+    }
+
+    if (url === null) {
+      // THE FIRST CHUNK IS A DIFFERENT FAILURE FROM THE REST. Nothing has
+      // sounded yet, so this is not a reply cut in half — it is a reply that
+      // never started, which is precisely the case speakStarra already handles
+      // properly: one retry for a blip, then the one-voice gate, then the
+      // local voice ONLY if her hosted voice was never configured at all.
+      // Chunking must not quietly lose that. A LATER chunk failing is the
+      // genuinely different case the spec pins (test 3): she has already been
+      // heard, so she stops where she is and says so — no stand-in finishes
+      // her sentence.
+      if (i === 0) {
+        releaseFrom(1);
+        return await speakStarra(chunks.join(" "), signal);
+      }
+      const notice = voiceFailureNotice("failed");
+      if (notice) reportVoiceFailure(notice, "failed");
+      releaseFromIndex = i + 1;
+      break;
+    }
+
+    const ok = await playChunkAudio(chunks[i], url, generation, signal);
+    if (ok) heardSound = true;
+    if (ok) continue;
+
+    releaseFromIndex = i + 1;
+    // Interrupted, not broken: the operator (or a newer turn) took her voice.
+    // Nothing to announce.
+    if (
+      signal?.aborted ||
+      !isCurrentUtterance(generation) ||
+      getStopEpoch() !== epochAtBirth
+    ) {
+      break;
+    }
+    const notice = voiceFailureNotice("failed");
+    if (notice) reportVoiceFailure(notice, "failed");
+    break;
+  }
+
+  releaseFrom(releaseFromIndex);
+  return heardSound ? "ara" : "none";
 }
