@@ -210,6 +210,32 @@ export function pickBodyClip(
   return pickAlive(prev, rand, pool);
 }
 
+/**
+ * Does the alive scheduler need to be pushed off what it is currently showing?
+ *
+ * THE HOLE THIS PLUGS. Alive mode advances on the video element's `ended`
+ * event, and `ALIVE_SPEAKING_CLIP` is the one pool member with `loop: true` —
+ * so it fires no `ended`, ever. Without an outside nudge the FIRST time she
+ * speaks in alive mode she locks onto talking footage for the rest of the
+ * session and plays it straight through every silence that follows.
+ *
+ * Every other clip in the pool is non-looping and hands over on its own, so
+ * this returns false for them: pushing a gesture off mid-motion is the twitchy
+ * cut the whole anchor-family design exists to avoid.
+ *
+ * Pure, so the rule is testable without a DOM — the caller (the face's 2s body
+ * heartbeat) supplies the audio truth.
+ */
+export function aliveShouldAdvance(
+  mode: BodyMode,
+  playingKey: StarraClipKey | null,
+  speaking: boolean,
+): boolean {
+  if (mode !== "alive") return false;
+  if (playingKey !== ALIVE_SPEAKING_CLIP) return false;
+  return !speaking;
+}
+
 /** Is `id` a clip alive mode is allowed to schedule? Same shape as isIdlePoolMember. */
 export function isAlivePoolMember(id: unknown): id is StarraClipKey {
   if (typeof id !== "string") return false;

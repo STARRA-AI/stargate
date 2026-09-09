@@ -63,7 +63,11 @@ export type OrderRejection =
   | "bad_count"
   | "bad_price"
   | "bad_max_notional"
-  | "exceeds_local_max_notional";
+  | "exceeds_local_max_notional"
+  /** An EXIT over the ceiling. Same brake as above, named apart so a blocked
+   *  exit is never read as a blocked entry — the fix is the ceiling, not the
+   *  trade. See the argument on buildOrder. */
+  | "exceeds_local_max_notional_exit";
 
 export type BuildResult = { ok: true; order: BuiltOrder } | { ok: false; reason: OrderRejection };
 
@@ -94,21 +98,42 @@ export function notionalCents(intent: Pick<OrderIntent, "count" | "priceCents">)
 /**
  * Validate, then build.
  *
- * ── THE CEILING IS A BUY-ONLY BRAKE ──────────────────────────────────────────
- * Structural checks (ticker, side, action, count, price) run on EVERY order —
- * a malformed order is malformed whichever way it points. The NOTIONAL CEILING
- * is different: it exists to cap how much new risk may be opened, so it gates
- * `buy` and nothing else.
+ * ── THE CEILING APPLIES TO BOTH DIRECTIONS, AND HERE IS THE ARGUMENT ─────────
+ * Structural checks (ticker, side, action, count, price) run on every order — a
+ * malformed order is malformed whichever way it points. The NOTIONAL CEILING
+ * runs on every order too. That is a deliberate reversal of a change made here
+ * on 2026-08-25, and the reversal is worth spelling out because the argument it
+ * reverses is a GOOD one.
  *
- * A sell reduces exposure. Refusing one because it is "too large" is refusing
- * to let him OUT of a position, which is the one failure this file must never
- * cause: the worst case for a blocked buy is a trade he did not make, and the
- * worst case for a blocked sell is a position he cannot escape. Those are not
- * symmetric, so they do not get the same brake.
+ * THE CASE FOR EXEMPTING SELLS: a sell reduces exposure, so refusing one for
+ * being "too large" is refusing to let him OUT of a position. The worst case
+ * for a blocked buy is a trade he did not make; the worst case for a blocked
+ * sell is a position he cannot escape. Not symmetric.
  *
- * This reverses an earlier choice here that applied the ceiling to sells too.
- * That reasoning — "a sell wrong about its size is still a position he did not
- * mean to take" — is true and still loses to the asymmetry above.
+ * WHY IT STILL LOSES, on two counts:
+ *
+ *   1. `buildOrder` CANNOT SEE A POSITION. It takes a ticker, a side, a count
+ *      and a price — nothing else. "This sell reduces exposure" is therefore an
+ *      assumption this function has no way to check, and it is not always true:
+ *      a sell of a side he does not hold is not an exit, it is new exposure
+ *      pointing the other way. Exempting `sell` exempts both cases, because
+ *      from in here they are indistinguishable.
+ *
+ *   2. THE TWO FAILURES ARE NOT EQUALLY RECOVERABLE. A blocked exit costs him a
+ *      corrected retry — raise the ceiling, or sell in slices; the position is
+ *      still there and still sellable. An erroneous oversized order that goes
+ *      through costs money that does not come back. The caller is a language
+ *      model reading a tool schema, and this file's own header says it "will
+ *      eventually send something wrong."
+ *
+ * So the brake stays on both sides. An oversized exit gets its OWN refusal
+ * reason — `exceeds_local_max_notional_exit` — so a blocked exit can never be
+ * mistaken for a blocked entry in a log or a spoken reply, and he knows
+ * immediately that the fix is the ceiling and not the trade.
+ *
+ * This is a floor on caution, not a replacement for his app's
+ * `maxOrderNotionalUsd` or `AGENT_LIVE_TRADING_ENABLED` — both still run
+ * server-side, and nothing here can loosen either.
  */
 export function buildOrder(req: OrderRequest, nowMs: number = Date.now()): BuildResult {
   if (typeof req.ticker !== "string" || req.ticker.trim() === "") {
@@ -120,15 +145,18 @@ export function buildOrder(req: OrderRequest, nowMs: number = Date.now()): Build
   if (!Number.isInteger(req.priceCents) || req.priceCents < 1 || req.priceCents > 99) {
     return { ok: false, reason: "bad_price" };
   }
-  if (req.action === "buy") {
-    // ENTRY ONLY. A buy with no usable ceiling is a refusal, never an
-    // unlimited order; an exit is never gated on the ceiling at all.
-    if (!Number.isFinite(req.maxNotionalCents) || req.maxNotionalCents <= 0) {
-      return { ok: false, reason: "bad_max_notional" };
-    }
-    if (notionalCents(req) > req.maxNotionalCents) {
-      return { ok: false, reason: "exceeds_local_max_notional" };
-    }
+  // No usable ceiling is a refusal, never an unlimited order — in either
+  // direction, because this function cannot tell an exit from new exposure.
+  if (!Number.isFinite(req.maxNotionalCents) || req.maxNotionalCents <= 0) {
+    return { ok: false, reason: "bad_max_notional" };
+  }
+  if (notionalCents(req) > req.maxNotionalCents) {
+    // Same brake, different name, so a blocked EXIT is never read as a blocked
+    // entry — the fix for this one is the ceiling, not the trade.
+    return {
+      ok: false,
+      reason: req.action === "sell" ? "exceeds_local_max_notional_exit" : "exceeds_local_max_notional",
+    };
   }
 
   const intent: OrderIntent = {

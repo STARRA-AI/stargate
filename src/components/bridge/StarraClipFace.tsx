@@ -6,6 +6,9 @@ import {
   SPEAKING_CLIP,
   CONTINUOUS_BODY_CLIP,
   pickBodyClip,
+  aliveShouldAdvance,
+  ALIVE_POOL,
+  ALIVE_SPEAKING_CLIP,
   type BodyMode,
   CROSSFADE_MS,
   type StarraClipKey,
@@ -314,8 +317,17 @@ export function StarraClipFace({
   // scheduler reads it at handover time, and putting it in the effect's deps
   // would tear the video layers down and rebuild them on every voice
   // transition — a black flash on every single turn.
+  //
+  // AUDIO TRUTH ONLY — `bus.speaking`, never the analyser's presence. This read
+  // used to be `bus.speaking || analyser !== null`, which is permanently TRUE
+  // inside a live call: resolveMouthAnalyser returns `analyserProp` outright,
+  // and the call's tap "lives for the WHOLE call" (see shouldRunMouthEngine
+  // above), so she would have counted as speaking for the entire call and never
+  // gestured once. The bus is the right source and it already covers the call —
+  // useVoiceCall publishes the realtime leg through publishVoice, and
+  // ttsBusPatch deliberately refuses to blank a realtime-owned bus.
   const speakingRef = useRef(false);
-  speakingRef.current = bus.speaking || analyser !== null;
+  speakingRef.current = bus.speaking;
 
   const aRef = useRef<HTMLVideoElement>(null);
   const bRef = useRef<HTMLVideoElement>(null);
@@ -352,8 +364,29 @@ export function StarraClipFace({
     let scheduledFile = STARRA_CLIPS[
       bodyMode === "alive" ? pickBodyClip("alive", false, null, 0) : CONTINUOUS_BODY_CLIP
     ].file;
-    const layerLanded = (el: HTMLVideoElement): boolean =>
-      el.getAttribute("src") === scheduledFile && el.readyState >= 2 && !el.error;
+    // ...BUT THE NEWEST SCHEDULED FILE ALONE IS TOO STRICT DURING A HANDOVER.
+    // `play()` advances `scheduledFile` synchronously, while the incoming clip
+    // is still loading on the hidden layer. For that whole window the OUTGOING
+    // layer — still visible, still playing, perfectly healthy — carries the
+    // previous file and would read as "not landed", which sends the 2s
+    // heartbeat straight down `scheduleBodyRetry()` and yanks the clip that is
+    // loading. Alive clips run 1.2-3.1s, so handovers land at almost exactly
+    // the heartbeat cadence and this would fire constantly.
+    //
+    // In alive mode EVERY pool member is a legitimate thing to be showing, so
+    // health is judged against the family. In still mode the set is empty and
+    // this is byte-for-byte the old single-file check.
+    const aliveFiles = new Set<string>(
+      bodyMode === "alive"
+        ? [...ALIVE_POOL, ALIVE_SPEAKING_CLIP].map((k) => STARRA_CLIPS[k].file)
+        : [],
+    );
+    const layerLanded = (el: HTMLVideoElement): boolean => {
+      const src = el.getAttribute("src");
+      if (src === null) return false;
+      if (src !== scheduledFile && !aliveFiles.has(src)) return false;
+      return el.readyState >= 2 && !el.error;
+    };
     const layerHealthy = (el: HTMLVideoElement): boolean => layerLanded(el) && !el.paused;
 
     /** The clip currently scheduled onto a layer (alive mode advances it). */
@@ -598,6 +631,23 @@ export function StarraClipFace({
      */
     const bodyHeartbeat = () => {
       if (disposed) return;
+
+      // ALIVE MODE'S ONLY WAY OFF THE TALKING CLIP. `ALIVE_SPEAKING_CLIP` has
+      // `loop: true`, so it fires no `ended` — and `ended` is the sole trigger
+      // that advances the alive scheduler. Without this check the FIRST time she
+      // speaks in alive mode she locks onto talking footage for the rest of the
+      // session and plays it through every silence.
+      //
+      // Done on the heartbeat rather than a new timer, and rather than forcing
+      // `loop = false`: the heartbeat already ticks at the cadence this needs,
+      // and leaving the clip looping means no crossfade churn every 2s while
+      // she is actually talking. Worst-case latency back to a gesture is one
+      // tick.
+      if (aliveShouldAdvance(bodyMode, playingKey, speakingRef.current)) {
+        scheduleNextAlive();
+        return;
+      }
+
       const el = frontElRef.current;
       // Mid-crossfade (frontElRef null) there is no single front to measure.
       // Fall back to "is anything alive", and never accuse a blend of freezing.

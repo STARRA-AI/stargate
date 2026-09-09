@@ -394,7 +394,22 @@ describe("order feed lines", () => {
  * costs a trade he did not make; a blocked sell costs a position he cannot
  * escape. These tests pin that asymmetry so it cannot be quietly reversed.
  */
-describe("buildOrder — entry brakes never block an exit", () => {
+describe("buildOrder — the ceiling brakes BOTH directions", () => {
+  /**
+   * REVERSED 2026-09-09, and the reversal is the point of this block.
+   *
+   * These specs used to assert that an exit was exempt from the ceiling, on the
+   * argument that a blocked sell is a position he cannot escape. That argument
+   * is good and it still loses, for a reason the tests themselves make plain:
+   * `buildOrder` receives a ticker, a side, a count and a price and NOTHING
+   * ELSE. It cannot see a position, so it cannot tell an exit from new exposure
+   * pointing the other way — the exempt branch covered both.
+   *
+   * And the two failures are not equally recoverable: a blocked exit costs a
+   * corrected retry (raise the ceiling, or slice the sell — the position is
+   * still there), while an oversized order that goes through costs money that
+   * does not come back. The caller is a language model.
+   */
   const exit = {
     ticker: "T",
     side: "yes",
@@ -403,17 +418,38 @@ describe("buildOrder — entry brakes never block an exit", () => {
     priceCents: 90,
   } as const;
 
-  it("allows a sell whose notional is far over the ceiling", () => {
+  it("refuses a sell over the ceiling, under its OWN reason", () => {
     const r = buildOrder({ ...exit, maxNotionalCents: 5_000 }, 1_700_000_000_000);
-    assert.equal(r.ok, true, "an exit must not be refused for being large");
+    assert.deepEqual(r, { ok: false, reason: "exceeds_local_max_notional_exit" });
     assert.equal(notionalCents(exit) > 5_000, true, "guard: this sell really does exceed it");
   });
 
-  it("allows a sell with no usable ceiling at all", () => {
+  it("refuses a sell with no usable ceiling — never an unlimited order", () => {
     for (const ceiling of [0, Number.NaN, -1]) {
       const r = buildOrder({ ...exit, maxNotionalCents: ceiling }, 1_700_000_000_000);
-      assert.equal(r.ok, true, `an exit must not need a ceiling (got ${String(ceiling)})`);
+      assert.deepEqual(
+        r,
+        { ok: false, reason: "bad_max_notional" },
+        `a missing ceiling must refuse an exit too (got ${String(ceiling)})`,
+      );
     }
+  });
+
+  it("a blocked EXIT is distinguishable from a blocked ENTRY", () => {
+    const sell = buildOrder({ ...exit, maxNotionalCents: 5_000 }, 1_700_000_000_000);
+    const buy = buildOrder({ ...exit, action: "buy", maxNotionalCents: 5_000 }, 1_700_000_000_000);
+    assert.equal(sell.ok, false);
+    assert.equal(buy.ok, false);
+    assert.notEqual(
+      (sell as { reason: string }).reason,
+      (buy as { reason: string }).reason,
+      "he must be able to tell which brake fired — the fix differs",
+    );
+  });
+
+  it("an exit INSIDE the ceiling still goes through untouched", () => {
+    const r = buildOrder({ ...exit, maxNotionalCents: 1_000_000 }, 1_700_000_000_000);
+    assert.equal(r.ok, true, "the brake caps size; it does not forbid exiting");
   });
 
   it("still refuses a BUY over the ceiling — the brake is intact where it belongs", () => {

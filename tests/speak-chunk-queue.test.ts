@@ -492,6 +492,58 @@ describe("speakStarraChunks — the chunk queue contract", () => {
     }
   });
 
+  // ── (3b) CHUNK-0 PLAYBACK FAILURE ────────────────────────────────────
+  it("a chunk-0 PLAYBACK failure delegates the whole reply, like a chunk-0 synthesis failure", async () => {
+    // FOUND IN REVIEW 2026-09-09. Synthesis returning null at i===0 already
+    // delegated to speakStarra; playback returning false did not. So a rejected
+    // play() (autoplay/gesture policy), a decode error, or the WebAudio stall
+    // the watchdog catches ended her reply in SILENCE — while the very same
+    // fault on a reply one sentence shorter would have been retried by
+    // speakStarra and then run through the one-voice gate. Any reply long
+    // enough to chunk was strictly more fragile than a short one.
+    const h = installHarness();
+    try {
+      const enginePromise = speakChunks(["one", "two", "three"]);
+
+      await h.waitFor(() => h.pendingFetches.some((p) => p.text === "one"), "chunk one synthesizing");
+      h.respondOk("one");
+      await h.waitFor(
+        () => h.playLog.some((e) => e.event === "play-start" && e.text === "one"),
+        "chunk one playing",
+      );
+
+      // It never sounds. `error` without a preceding `playing` is exactly the
+      // autoplay-refusal / decode-failure shape: zero audio came out.
+      h.getAudio("one").fire("error");
+
+      // THE DELEGATION IS THE ASSERTION: speakStarra re-requests the WHOLE
+      // reply as one utterance. Without the fix nothing further is ever
+      // fetched and the turn dies here.
+      await h.waitFor(
+        () => h.pendingFetches.some((p) => p.text === "one two three"),
+        "the joined reply must be handed to speakStarra",
+      );
+      h.respondOk("one two three");
+      await h.waitFor(
+        () => h.playLog.some((e) => e.event === "play-start" && e.text === "one two three"),
+        "the delegated utterance plays",
+      );
+      h.getAudio("one two three").fire("playing");
+      h.getAudio("one two three").fire("ended");
+
+      const engine = await enginePromise;
+      assert.equal(engine, "ara", "the delegated path is still HER voice");
+      assert.equal(
+        h.speechSynthesisSpeakCalls.length,
+        0,
+        "delegating must not open a second voice",
+      );
+      assert.equal(h.onnxFetchCount.count, 0, "Piper must not be probed on this path");
+    } finally {
+      h.teardown();
+    }
+  });
+
   // ── (4) SUPERSESSION ─────────────────────────────────────────────────
   it("a new utterance's first chunk starting playback drops every pending chunk of the old one", async () => {
     const h = installHarness();

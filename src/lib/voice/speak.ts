@@ -1480,6 +1480,26 @@ export async function speakStarraChunks(
     ) {
       break;
     }
+
+    // A CHUNK-0 *PLAYBACK* FAILURE IS THE SAME "she never started" CASE AS A
+    // CHUNK-0 SYNTHESIS FAILURE, and has to be treated the same way. Synthesis
+    // returning null already delegates (above); playback returning false did
+    // not, so a rejected play() (autoplay/gesture policy), a decode error or the
+    // WebAudio stall the watchdog catches would end her reply in silence — while
+    // the SAME transient fault on a reply one sentence shorter would have been
+    // retried by speakStarra and then run through the one-voice gate. Any reply
+    // long enough to chunk was strictly more fragile than a short one.
+    //
+    // THE TRADEOFF, stated rather than hidden: if sound HAD started and then
+    // died mid-chunk, delegating replays the reply from the top, so she stutters
+    // the opening. That is worth it — the alternative is stopping dead partway
+    // through, and the common faults here (autoplay refusal, decode failure)
+    // produce no sound at all, where this is a clean win with no stutter.
+    if (i === 0 && !heardSound) {
+      releaseFrom(1);
+      return await speakStarra(chunks.join(" "), signal);
+    }
+
     const notice = voiceFailureNotice("failed");
     if (notice) reportVoiceFailure(notice, "failed");
     break;

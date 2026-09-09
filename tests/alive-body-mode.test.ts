@@ -38,6 +38,7 @@ import {
   pickBodyClip,
   pickAlive,
   isAlivePoolMember,
+  aliveShouldAdvance,
   type StarraClipKey,
 } from "../src/lib/voice/starra-clip-map";
 
@@ -237,8 +238,41 @@ describe("StarraClipFace wiring", () => {
     );
   });
 
-  it("never hands over on a looping clip — `ended` would never fire", () => {
+  it("never arms `ended` on a looping clip — it would never fire", () => {
     assert.match(FACE, /bodyMode === "alive" && !clip\.loop/);
+  });
+
+  it("HAS a second way off the looping speaking clip, or alive mode dead-ends", () => {
+    // THE BUG THIS PINS, found in review 2026-09-09: `ended` is the only thing
+    // that advances the alive scheduler, and ALIVE_SPEAKING_CLIP is the one
+    // pool member with loop:true — so it fires no `ended`. The first time she
+    // spoke, she locked onto talking footage for the whole session. The guard
+    // above is correct AND was not sufficient on its own.
+    assert.match(
+      FACE,
+      /aliveShouldAdvance\(bodyMode, playingKey, speakingRef\.current\)/,
+      "the body heartbeat must be able to push her off the looping talking clip",
+    );
+  });
+
+  it("judges layer health against the whole family, not just the newest file", () => {
+    // Review finding 2026-09-09: play() advances `scheduledFile` synchronously
+    // while the incoming clip is still loading, so for that whole window the
+    // OUTGOING (visible, healthy) layer read as "not landed" and sent the 2s
+    // heartbeat into scheduleBodyRetry() — yanking the clip that was loading.
+    assert.match(FACE, /const aliveFiles = new Set<string>\(/);
+    assert.match(FACE, /aliveFiles\.has\(src\)/);
+  });
+
+  it("takes speaking from the BUS, never from the analyser's presence", () => {
+    // The call's analyser tap lives for the WHOLE call, so `analyser !== null`
+    // is permanently true inside a call — she would have counted as speaking
+    // start to finish and never gestured once.
+    assert.match(FACE, /speakingRef\.current = bus\.speaking;/);
+    assert.ok(
+      !/speakingRef\.current = bus\.speaking \|\| analyser !== null/.test(FACE),
+      "analyser presence is not audio truth",
+    );
   });
 
   it("keeps cosmetics out of the clip effect's dependency list", () => {
@@ -258,5 +292,48 @@ describe("StarraClipFace wiring", () => {
 
   it("reads speaking through a ref so a voice transition cannot restart playback", () => {
     assert.match(FACE, /speakingRef\.current/);
+  });
+});
+
+describe("aliveShouldAdvance — the nudge off the looping talking clip", () => {
+  it("advances when the talking clip is up and she has gone quiet", () => {
+    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, false), true);
+  });
+
+  it("does NOT advance while she is still talking", () => {
+    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, true), false);
+  });
+
+  it("never interrupts a gesture — those hand over on `ended` themselves", () => {
+    for (const key of ALIVE_POOL) {
+      assert.equal(
+        aliveShouldAdvance("alive", key, false),
+        false,
+        `${key} must be allowed to finish its motion`,
+      );
+      assert.equal(aliveShouldAdvance("alive", key, true), false, `${key} while speaking`);
+    }
+  });
+
+  it("is inert in still mode, whatever else is true", () => {
+    for (const speaking of [true, false]) {
+      assert.equal(aliveShouldAdvance("still", ALIVE_SPEAKING_CLIP, speaking), false);
+      assert.equal(aliveShouldAdvance("still", null, speaking), false);
+    }
+  });
+
+  it("is inert before anything has been scheduled", () => {
+    assert.equal(aliveShouldAdvance("alive", null, false), false);
+  });
+
+  it("the clip it guards really is the looping one — the whole reason it exists", () => {
+    assert.equal(
+      STARRA_CLIPS[ALIVE_SPEAKING_CLIP].loop,
+      true,
+      "if this ever becomes non-looping, `ended` covers it and this guard is redundant",
+    );
+    for (const key of ALIVE_POOL) {
+      assert.equal(STARRA_CLIPS[key].loop, false, `${key} must hand over on ended`);
+    }
   });
 });
