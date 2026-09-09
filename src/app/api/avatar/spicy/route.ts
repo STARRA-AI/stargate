@@ -6,7 +6,7 @@ import { Readable } from "node:stream";
 /**
  * SPICY MODE clips — auth-gated streaming from OUTSIDE the repo.
  *
- * The videos live in the avatar app's asset folder on this machine and must
+ * The videos live in the avatar app's asset folders on this machine and must
  * never enter git or public/ (public/ is served ungated; these are private).
  * This route is covered by src/middleware.ts's default /api/* gate, so only a
  * logged-in deck can list or stream them.
@@ -16,39 +16,77 @@ import { Readable } from "node:stream";
  *                                      support (WKWebView/Safari refuse to
  *                                      play mp4 from a route without Range).
  *
- * NAME is matched against the directory's actual .mp4 listing — an allowlist
- * by construction, so traversal ("../", absolute paths, %2e tricks) cannot
- * reach anything else: whatever arrives either equals a listed basename or is
- * rejected.
+ * MULTIPLE DIRECTORIES (2026-08-22). Classic's spicy clips live in two places,
+ * and this route could only ever see the first — 5 of 17 clips. It now scans a
+ * LIST of directories and merges them into one flat namespace.
+ *
+ * THE SECURITY PROPERTY IS STRONGER THAN BEFORE, not weaker. The old code did
+ * `path.join(SPICY_DIR, clip)` after an `includes()` check — safe, but it still
+ * built a path out of caller-supplied text. Now the served path is the value
+ * stored in the listing map, produced by readdir; the request string is only
+ * ever used as a MAP KEY and never reaches the filesystem. Traversal ("../",
+ * absolute paths, %2e tricks) cannot express a key that readdir emitted, so it
+ * simply misses the map and 404s.
+ *
+ * First directory wins on a duplicate basename, so the order below is the
+ * precedence order.
  */
 
 export const runtime = "nodejs";
 
-const SPICY_DIR =
-  process.env.STARRA_SPICY_DIR ||
-  path.join(os.homedir(), "STARGATE/starra-avatar/assets/spicy");
+/**
+ * Override with STARRA_SPICY_DIR. A single path still works exactly as before;
+ * several are separated by the platform path delimiter (":" on macOS).
+ */
+const SPICY_DIRS: string[] = (
+  process.env.STARRA_SPICY_DIR
+    ? process.env.STARRA_SPICY_DIR.split(path.delimiter)
+    : [
+        path.join(os.homedir(), "STARGATE/starra-avatar/assets/spicy"),
+        path.join(
+          os.homedir(),
+          "STARGATE/STARRA IS ALIVE!!!/STARRA MOVEMENTS/spicy mode",
+        ),
+      ]
+)
+  .map((d) => d.trim())
+  .filter(Boolean);
 
-async function listClips(): Promise<string[]> {
-  try {
-    const entries = await fs.readdir(SPICY_DIR);
-    return entries.filter((f) => f.toLowerCase().endsWith(".mp4")).sort();
-  } catch {
-    return []; // folder missing/unreadable → empty list, never a throw
+/**
+ * basename → absolute path, for every .mp4 across every configured directory.
+ * A missing or unreadable directory is skipped, never thrown: one bad folder
+ * must not take her whole spicy library offline.
+ */
+async function listClipMap(): Promise<Map<string, string>> {
+  const found = new Map<string, string>();
+  for (const dir of SPICY_DIRS) {
+    let entries: string[];
+    try {
+      entries = await fs.readdir(dir);
+    } catch {
+      continue;
+    }
+    for (const name of entries) {
+      if (!name.toLowerCase().endsWith(".mp4")) continue;
+      if (!found.has(name)) found.set(name, path.join(dir, name));
+    }
   }
+  return found;
 }
 
 export async function GET(req: Request) {
   const url = new URL(req.url);
   const clip = url.searchParams.get("clip");
-  const clips = await listClips();
+  const found = await listClipMap();
 
-  if (!clip) return Response.json({ clips });
+  if (!clip) return Response.json({ clips: [...found.keys()].sort() });
 
-  // Allowlist check: the request must name EXACTLY one of the listed files.
-  if (!clips.includes(clip)) {
+  // Allowlist by construction: the only paths that exist are ones readdir
+  // produced. The request string is a map key and never touches the filesystem.
+  const filePath = found.get(clip);
+  if (!filePath) {
     return Response.json({ error: "unknown clip" }, { status: 404 });
   }
-  const filePath = path.join(SPICY_DIR, clip);
 
   let size: number;
   try {

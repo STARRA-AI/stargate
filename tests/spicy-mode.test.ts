@@ -86,13 +86,35 @@ describe("the streaming route's safety, on the source", () => {
   const src = read("src/app/api/avatar/spicy/route.ts");
 
   it("allowlists against the real directory listing — no traversal path", () => {
-    assert.match(src, /clips\.includes\(clip\)/);
+    // 2026-08-22: the route went multi-directory, and the allowlist got
+    // STRONGER. It used to be `clips.includes(clip)` followed by
+    // `path.join(SPICY_DIR, clip)` — safe, but it still built a path out of
+    // caller text. Now the served path is the MAP VALUE that readdir produced
+    // and the caller's string is only ever a map key, so a traversal string
+    // cannot even name a path. Behavioural coverage: spicy-route-multidir.test.ts.
+    assert.match(src, /found\.get\(clip\)/);
+
+    // The caller's string must NEVER be joined into a filesystem path, anywhere
+    // in the file — not just before the check. Comments are stripped first: the
+    // doc block legitimately quotes the OLD `path.join(SPICY_DIR, clip)` idiom
+    // to explain what changed.
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
     assert.ok(
-      !/path\.join\([^)]*clip[^)]*\)/.test(
-        src.slice(0, src.indexOf("clips.includes")),
-      ),
-      "no path.join on user input before the allowlist check",
+      !/path\.join\([^)]*\bclip\b[^)]*\)/.test(codeOnly),
+      "no path.join on user input anywhere — clip is a map key, not a path",
     );
+  });
+
+  it("scans MORE than one directory — 12 of his clips were invisible before", () => {
+    const codeOnly = src
+      .replace(/\/\*[\s\S]*?\*\//g, "")
+      .replace(/^\s*\/\/.*$/gm, "");
+    assert.match(codeOnly, /SPICY_DIRS/);
+    assert.match(codeOnly, /for\s*\(const dir of SPICY_DIRS\)/);
+    // The second real folder must be reachable by default, not only via env.
+    assert.match(codeOnly, /STARRA MOVEMENTS\/spicy mode/);
   });
 
   it("supports HTTP Range (WKWebView video requirement)", () => {
