@@ -1,0 +1,5 @@
+# Call logs carry lead phone numbers and transcripts — never commit them.
+logs/
+# The tunnel's current hostname; regenerated on every start.
+runtime/
+node_modules/
