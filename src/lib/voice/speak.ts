@@ -1267,6 +1267,20 @@ function playChunkAudio(
         /* ignore */
       }
       signal?.removeEventListener("abort", onAbort);
+      // SILENCE THIS ELEMENT BEFORE LETTING GO OF IT. `araAudio` is cleared two
+      // lines below, which makes a later `stopAraAudio()` a no-op for this
+      // element — so anything still coming out of it would keep coming out with
+      // nothing left holding the handle. That is reachable: a media `error`
+      // (or a rejected play()) settles false WITHOUT pausing, and a chunk-0
+      // failure now delegates the whole reply to speakStarra, whose
+      // stopAllSpeech() would find araAudio already null. Two of her, on the one
+      // path built to prevent exactly that. Pausing here costs nothing on the
+      // normal `ended` exit, where the element has already stopped.
+      try {
+        audio.pause();
+      } catch {
+        /* already gone — nothing to silence */
+      }
       releaseTtsSource(audio);
       if (araSettle === settleFalse) araSettle = null;
       if (araAudio === audio) araAudio = null;
@@ -1495,7 +1509,10 @@ export async function speakStarraChunks(
     // the opening. That is worth it — the alternative is stopping dead partway
     // through, and the common faults here (autoplay refusal, decode failure)
     // produce no sound at all, where this is a clean win with no stutter.
-    if (i === 0 && !heardSound) {
+    // `heardSound` is necessarily false here — the `ok` branch above `continue`s,
+    // so reaching this line at i === 0 means chunk 0 never completed — which is
+    // why this is a clean "she never started", not a reply cut in half.
+    if (i === 0) {
       releaseFrom(1);
       return await speakStarra(chunks.join(" "), signal);
     }

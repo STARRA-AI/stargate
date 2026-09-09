@@ -65,8 +65,8 @@ export type OrderRejection =
   | "bad_max_notional"
   | "exceeds_local_max_notional"
   /** An EXIT over the ceiling. Same brake as above, named apart so a blocked
-   *  exit is never read as a blocked entry — the fix is the ceiling, not the
-   *  trade. See the argument on buildOrder. */
+   *  exit is never read as a blocked entry — the answer is to SLICE it, not to
+   *  abandon the trade. See the argument on buildOrder. */
   | "exceeds_local_max_notional_exit";
 
 export type BuildResult = { ok: true; order: BuiltOrder } | { ok: false; reason: OrderRejection };
@@ -120,16 +120,34 @@ export function notionalCents(intent: Pick<OrderIntent, "count" | "priceCents">)
  *      from in here they are indistinguishable.
  *
  *   2. THE TWO FAILURES ARE NOT EQUALLY RECOVERABLE. A blocked exit costs him a
- *      corrected retry — raise the ceiling, or sell in slices; the position is
- *      still there and still sellable. An erroneous oversized order that goes
- *      through costs money that does not come back. The caller is a language
- *      model reading a tool schema, and this file's own header says it "will
- *      eventually send something wrong."
+ *      corrected retry and the position is still there and still sellable. An
+ *      erroneous oversized order that goes through costs money that does not
+ *      come back. The caller is a language model reading a tool schema, and
+ *      this file's own header says it "will eventually send something wrong."
  *
- * So the brake stays on both sides. An oversized exit gets its OWN refusal
- * reason — `exceeds_local_max_notional_exit` — so a blocked exit can never be
- * mistaken for a blocked entry in a log or a spoken reply, and he knows
- * immediately that the fix is the ceiling and not the trade.
+ * ── WHAT A BLOCKED EXIT ACTUALLY COSTS, stated exactly ──────────────────────
+ * SLICING IS THE RUNTIME REMEDY, and it is the only one. Selling N contracts as
+ * two orders of N/2 clears the same ceiling and needs nothing restarted.
+ *
+ * "Raise the ceiling" is NOT available mid-market, and this comment used to say
+ * it was. `effectiveCeilingCents` (api/dragon/order/route.ts) only ever applies
+ * `Math.min(requested, deckCeiling)` — a caller may tighten it and can never
+ * loosen it — and the deck ceiling itself comes from the
+ * `DRAGON_MAX_ORDER_NOTIONAL_CENTS` env read at
+ * `readOrderCeilingCents`, i.e. an env edit plus a server restart.
+ *
+ * THE REAL BITE, worth knowing before a position moves: the ceiling is on
+ * NOTIONAL, so a position that has appreciated needs more slices to exit than
+ * it took to enter. 1000 contracts bought at 10c is 10,000c — exactly the
+ * $100 default. At 90c the same 1000 contracts are 90,000c, so the exit takes
+ * nine orders where the entry took one. That is a real cost of keeping the
+ * brake symmetric, and it is Classic's call whether to accept it or to raise
+ * DRAGON_MAX_ORDER_NOTIONAL_CENTS.
+ *
+ * An oversized exit gets its OWN refusal reason —
+ * `exceeds_local_max_notional_exit` — so a blocked exit can never be mistaken
+ * for a blocked entry in a log or a spoken reply, and the answer is always
+ * "slice it", never "abandon the trade".
  *
  * This is a floor on caution, not a replacement for his app's
  * `maxOrderNotionalUsd` or `AGENT_LIVE_TRADING_ENABLED` — both still run

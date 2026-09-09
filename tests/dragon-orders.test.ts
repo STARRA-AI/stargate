@@ -386,13 +386,14 @@ describe("order feed lines", () => {
 });
 
 /**
- * THE CEILING IS A BUY-ONLY BRAKE.
+ * THE CEILING BRAKES BOTH DIRECTIONS.
  *
- * The notional ceiling caps how much NEW risk may be opened. An exit reduces
- * exposure, so gating it on the same number would mean refusing to let him out
- * of a position — the one refusal this file must never produce. A blocked buy
- * costs a trade he did not make; a blocked sell costs a position he cannot
- * escape. These tests pin that asymmetry so it cannot be quietly reversed.
+ * [SUPERSEDED 2026-09-09, kept because the argument it made is a good one and
+ * the next reader deserves to see why it lost: "The notional ceiling caps how
+ * much NEW risk may be opened. An exit reduces exposure, so gating it on the
+ * same number would mean refusing to let him out of a position." That is true
+ * whenever the sell really is an exit — and buildOrder cannot tell, because it
+ * never sees a position. See the block on the describe below.]
  */
 describe("buildOrder — the ceiling brakes BOTH directions", () => {
   /**
@@ -406,9 +407,10 @@ describe("buildOrder — the ceiling brakes BOTH directions", () => {
    * pointing the other way — the exempt branch covered both.
    *
    * And the two failures are not equally recoverable: a blocked exit costs a
-   * corrected retry (raise the ceiling, or slice the sell — the position is
-   * still there), while an oversized order that goes through costs money that
-   * does not come back. The caller is a language model.
+   * corrected retry — SLICE THE SELL, which is the only runtime remedy, since
+   * effectiveCeilingCents can only tighten and the deck ceiling is an env var
+   * behind a restart — while an oversized order that goes through costs money
+   * that does not come back. The caller is a language model.
    */
   const exit = {
     ticker: "T",

@@ -39,6 +39,7 @@ import {
   pickAlive,
   isAlivePoolMember,
   aliveShouldAdvance,
+  ALIVE_QUIET_TICKS_BEFORE_ADVANCE,
   type StarraClipKey,
 } from "../src/lib/voice/starra-clip-map";
 
@@ -250,8 +251,40 @@ describe("StarraClipFace wiring", () => {
     // above is correct AND was not sufficient on its own.
     assert.match(
       FACE,
-      /aliveShouldAdvance\(bodyMode, playingKey, speakingRef\.current\)/,
+      /aliveShouldAdvance\(bodyMode, playingKey, quietTicks\)/,
       "the body heartbeat must be able to push her off the looping talking clip",
+    );
+    assert.match(
+      FACE,
+      /if \(speakingRef\.current\) quietTicks = 0;/,
+      "audio truth must reset the quiet counter",
+    );
+  });
+
+  it("rewinds the scheduler when a crossfade rolls back, not just the pixels", () => {
+    // Review finding 2026-09-09: settleFront's rollback restored opacity and the
+    // front/back aliases but left playingKey/scheduledFile ADVANCED. In alive
+    // mode that is a permanent stall — the looping talking clip stays on screen
+    // with `ended` cleared, while playingKey says "gesture" so aliveShouldAdvance
+    // never nudges it either.
+    assert.match(FACE, /prevPlayingKey = playingKey;/);
+    assert.match(FACE, /prevScheduledFile = scheduledFile;/);
+    assert.match(
+      FACE,
+      /if \(prevScheduledFile !== null\) \{[\s\S]{0,120}?playingKey = prevPlayingKey;[\s\S]{0,120}?scheduledFile = prevScheduledFile;/,
+      "the rollback must restore both",
+    );
+  });
+
+  it("a HIDDEN layer may not vouch for a broken visible one", () => {
+    // The outgoing layer is set to opacity 0 but never paused, so in alive mode
+    // it keeps playing invisibly. With the family-wide layerLanded it would
+    // otherwise satisfy bodyPlaybackHealthy() and suppress recovery while the
+    // visible layer was actually broken.
+    assert.match(FACE, /const layerShowing = \(el: HTMLVideoElement\): boolean => el\.style\.opacity !== "0";/);
+    assert.match(
+      FACE,
+      /bodyPlaybackHealthy = \(\) => \[a, b\]\.some\(\(el\) => layerShowing\(el\) && layerHealthy\(el\)\)/,
     );
   });
 
@@ -296,34 +329,58 @@ describe("StarraClipFace wiring", () => {
 });
 
 describe("aliveShouldAdvance — the nudge off the looping talking clip", () => {
-  it("advances when the talking clip is up and she has gone quiet", () => {
-    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, false), true);
+  const QUIET = ALIVE_QUIET_TICKS_BEFORE_ADVANCE;
+
+  it("advances once she has been quiet for the full run of ticks", () => {
+    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, QUIET), true);
+    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, QUIET + 5), true);
   });
 
-  it("does NOT advance while she is still talking", () => {
-    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, true), false);
+  it("does NOT advance on a single quiet tick — that is an INTER-CHUNK GAP", () => {
+    // speakStarraChunks publishes {playing:false} at the end of EVERY chunk, so
+    // bus.speaking drops between the sentences of one reply. Advancing on one
+    // quiet sample would cut her talking footage into a gesture mid-sentence.
+    for (let t = 1; t < QUIET; t++) {
+      assert.equal(
+        aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, t),
+        false,
+        `${t} quiet tick(s) must not be read as the end of her turn`,
+      );
+    }
+  });
+
+  it("does NOT advance while she is still talking (counter at zero)", () => {
+    assert.equal(aliveShouldAdvance("alive", ALIVE_SPEAKING_CLIP, 0), false);
+  });
+
+  it("needs more than one tick, or the gap guard is meaningless", () => {
+    assert.ok(
+      ALIVE_QUIET_TICKS_BEFORE_ADVANCE >= 2,
+      "a threshold of 1 is the single-sample bug this constant exists to prevent",
+    );
   });
 
   it("never interrupts a gesture — those hand over on `ended` themselves", () => {
     for (const key of ALIVE_POOL) {
-      assert.equal(
-        aliveShouldAdvance("alive", key, false),
-        false,
-        `${key} must be allowed to finish its motion`,
-      );
-      assert.equal(aliveShouldAdvance("alive", key, true), false, `${key} while speaking`);
+      for (const ticks of [0, QUIET, QUIET + 10]) {
+        assert.equal(
+          aliveShouldAdvance("alive", key, ticks),
+          false,
+          `${key} must be allowed to finish its motion (${ticks} quiet ticks)`,
+        );
+      }
     }
   });
 
   it("is inert in still mode, whatever else is true", () => {
-    for (const speaking of [true, false]) {
-      assert.equal(aliveShouldAdvance("still", ALIVE_SPEAKING_CLIP, speaking), false);
-      assert.equal(aliveShouldAdvance("still", null, speaking), false);
+    for (const ticks of [0, QUIET, QUIET + 10]) {
+      assert.equal(aliveShouldAdvance("still", ALIVE_SPEAKING_CLIP, ticks), false);
+      assert.equal(aliveShouldAdvance("still", null, ticks), false);
     }
   });
 
   it("is inert before anything has been scheduled", () => {
-    assert.equal(aliveShouldAdvance("alive", null, false), false);
+    assert.equal(aliveShouldAdvance("alive", null, QUIET + 10), false);
   });
 
   it("the clip it guards really is the looping one — the whole reason it exists", () => {

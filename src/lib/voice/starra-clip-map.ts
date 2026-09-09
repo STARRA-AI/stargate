@@ -211,6 +211,13 @@ export function pickBodyClip(
 }
 
 /**
+ * How many CONSECUTIVE quiet heartbeat ticks before alive mode leaves the
+ * talking clip. At BODY_HEALTH_TICK_MS = 2000 that is ~4s of continuous
+ * silence — see aliveShouldAdvance for why a single tick is not enough.
+ */
+export const ALIVE_QUIET_TICKS_BEFORE_ADVANCE = 2;
+
+/**
  * Does the alive scheduler need to be pushed off what it is currently showing?
  *
  * THE HOLE THIS PLUGS. Alive mode advances on the video element's `ended`
@@ -223,17 +230,34 @@ export function pickBodyClip(
  * this returns false for them: pushing a gesture off mid-motion is the twitchy
  * cut the whole anchor-family design exists to avoid.
  *
- * Pure, so the rule is testable without a DOM — the caller (the face's 2s body
- * heartbeat) supplies the audio truth.
+ * ── WHY IT COUNTS TICKS INSTEAD OF READING "quiet" ONCE ─────────────────────
+ * `bus.speaking` is NOT continuous across a spoken reply. speakStarraChunks
+ * plays a long reply as up to three separate audio elements, and each one's
+ * settle publishes `{ playing: false }` on the way out (speak.ts, "Between
+ * chunks her mouth returns to rest") — so the bus reads NOT SPEAKING for the
+ * whole inter-chunk gap: element construction, play(), the `playing` event, and
+ * longer still if the next chunk's synthesis has not landed.
+ *
+ * A single-sample read would therefore let the 2s heartbeat land inside one of
+ * those gaps and cut her talking footage into a 1.2-3.1s gesture MID-SENTENCE,
+ * with no way back until that gesture ends. That is the same churn this design
+ * avoids by not forcing `loop = false`; it would just arrive at random instead
+ * of on a timer. Requiring consecutive quiet ticks means an inter-chunk gap —
+ * far shorter than one tick, let alone two — can never be mistaken for the end
+ * of her turn.
+ *
+ * Pure, so the rule is testable without a DOM: the caller (the face's body
+ * heartbeat) owns the counter and resets it whenever audio truth says she is
+ * speaking.
  */
 export function aliveShouldAdvance(
   mode: BodyMode,
   playingKey: StarraClipKey | null,
-  speaking: boolean,
+  quietTicks: number,
 ): boolean {
   if (mode !== "alive") return false;
   if (playingKey !== ALIVE_SPEAKING_CLIP) return false;
-  return !speaking;
+  return quietTicks >= ALIVE_QUIET_TICKS_BEFORE_ADVANCE;
 }
 
 /** Is `id` a clip alive mode is allowed to schedule? Same shape as isIdlePoolMember. */

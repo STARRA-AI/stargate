@@ -391,6 +391,19 @@ export function StarraClipFace({
 
     /** The clip currently scheduled onto a layer (alive mode advances it). */
     let playingKey: StarraClipKey | null = null;
+    /**
+     * What `playingKey`/`scheduledFile` were BEFORE the in-flight play(), so a
+     * crossfade that rolls back can rewind them. Without this the rollback
+     * leaves the scheduler believing it is showing the clip that failed to
+     * land: if the talking loop stayed on screen while `playingKey` said
+     * "gesture", `aliveShouldAdvance` would return false forever and the
+     * looping clip fires no `ended` — a permanent stall, the exact class this
+     * scheduler exists to prevent.
+     */
+    let prevPlayingKey: StarraClipKey | null = null;
+    let prevScheduledFile: typeof scheduledFile | null = null;
+    /** Consecutive body-heartbeat ticks with no audio. See aliveShouldAdvance. */
+    let quietTicks = 0;
 
     // One crossfade may own the layers at a time. See createCrossfadeGate.
     const fades = createCrossfadeGate();
@@ -470,6 +483,17 @@ export function StarraClipFace({
           front = outgoing;
           back = incoming;
           frontElRef.current = layerLanded(outgoing) ? outgoing : null;
+          // ROLL THE SCHEDULER BACK TOO, not just the pixels. `play()` advanced
+          // playingKey/scheduledFile synchronously; leaving them advanced after
+          // a failed landing makes the scheduler believe it is showing a clip
+          // that never arrived. In alive mode that is a PERMANENT stall: the
+          // talking loop is still on screen with `ended` cleared (it loops), so
+          // nothing fires it, while playingKey says "gesture" and
+          // aliveShouldAdvance therefore never nudges it either.
+          if (prevScheduledFile !== null) {
+            playingKey = prevPlayingKey;
+            scheduledFile = prevScheduledFile;
+          }
           return;
         }
         frontElRef.current = incoming;
@@ -492,6 +516,10 @@ export function StarraClipFace({
     // play `key` on the hidden layer, then crossfade it in (no black flash).
     const play = (key: StarraClipKey) => {
       const clip = STARRA_CLIPS[key];
+      // Remember what was showing, so a rolled-back crossfade can restore the
+      // scheduler's idea of reality along with the pixels.
+      prevPlayingKey = playingKey;
+      prevScheduledFile = scheduledFile;
       scheduledFile = clip.file;
       playingKey = key;
       back.loop = clip.loop;
@@ -567,7 +595,20 @@ export function StarraClipFace({
     // visible, healthy front. Testing `a`/`b` directly is immune to that.
     // (`clipFile` / `layerHealthy` are hoisted to the top of this effect —
     // settleFront needs them too.)
-    const bodyPlaybackHealthy = () => [a, b].some(layerHealthy);
+    // A LAYER THAT HAS BEEN HIDDEN MAY NOT VOUCH FOR THE VISIBLE ONE. After a
+    // completed crossfade the outgoing layer is set to opacity 0 but is never
+    // PAUSED, so in alive mode it keeps playing its old pool clip invisibly for
+    // the rest of that clip's duration. Since layerLanded now accepts any
+    // family file, such a layer would satisfy `some(layerHealthy)` and tell the
+    // retry path "the visible face is fine" while the front layer was actually
+    // broken — suppressing recovery for up to ~3s, or forever if the hidden
+    // layer happened to be the looping talking clip.
+    //
+    // Only the INLINE "0" counts as hidden — that is the exact value settleFront
+    // and the rollback set. An unset opacity reads as visible, so this can only
+    // ever exclude a layer deliberately put away, never a fresh one.
+    const layerShowing = (el: HTMLVideoElement): boolean => el.style.opacity !== "0";
+    const bodyPlaybackHealthy = () => [a, b].some((el) => layerShowing(el) && layerHealthy(el));
 
     const scheduleBodyRetry = () => {
       if (disposed) return;
@@ -643,7 +684,13 @@ export function StarraClipFace({
       // and leaving the clip looping means no crossfade churn every 2s while
       // she is actually talking. Worst-case latency back to a gesture is one
       // tick.
-      if (aliveShouldAdvance(bodyMode, playingKey, speakingRef.current)) {
+      // The counter, not a single read: bus.speaking drops to false in the gap
+      // between every chunk of a chunked reply, so one quiet sample is not the
+      // end of her turn. See aliveShouldAdvance.
+      if (speakingRef.current) quietTicks = 0;
+      else quietTicks += 1;
+      if (aliveShouldAdvance(bodyMode, playingKey, quietTicks)) {
+        quietTicks = 0;
         scheduleNextAlive();
         return;
       }
