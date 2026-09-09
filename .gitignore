@@ -110,3 +110,6 @@ vendor/
 
 # production build lane (npm run deck:fast) — kept separate from dev's .next
 .next-prod/
+
+# Runtime log dir — stale empty artifact, nothing in src/ or scripts/ writes it.
+/logs/
