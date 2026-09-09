@@ -39,6 +39,7 @@ import {
   pickAlive,
   isAlivePoolMember,
   aliveShouldAdvance,
+  nextQuietTicks,
   ALIVE_QUIET_TICKS_BEFORE_ADVANCE,
   type StarraClipKey,
 } from "../src/lib/voice/starra-clip-map";
@@ -256,8 +257,8 @@ describe("StarraClipFace wiring", () => {
     );
     assert.match(
       FACE,
-      /if \(speakingRef\.current\) quietTicks = 0;/,
-      "audio truth must reset the quiet counter",
+      /quietTicks = nextQuietTicks\(quietTicks, bodyMode, playingKey, speakingRef\.current\)/,
+      "the counter must go through the pure accumulation rule",
     );
   });
 
@@ -392,5 +393,90 @@ describe("aliveShouldAdvance — the nudge off the looping talking clip", () => 
     for (const key of ALIVE_POOL) {
       assert.equal(STARRA_CLIPS[key].loop, false, `${key} must hand over on ended`);
     }
+  });
+});
+
+/**
+ * BEHAVIOURAL, not a regex over the source. The previous round's face tests were
+ * all source-text matches, and none of them could have caught the carryover bug
+ * these specs pin: they would have passed against a counter that banked quiet
+ * time while gestures played and fired on the first inter-chunk gap.
+ *
+ * This drives the real accumulation rule and the real threshold together, the
+ * way the heartbeat does.
+ */
+describe("the quiet counter — the guard that keeps her from cutting mid-sentence", () => {
+  const Q = ALIVE_QUIET_TICKS_BEFORE_ADVANCE;
+
+  /** One heartbeat: update the counter, then ask whether to advance. */
+  function tick(
+    state: { quiet: number; playing: StarraClipKey | null },
+    speaking: boolean,
+    mode: "alive" | "still" = "alive",
+  ): boolean {
+    state.quiet = nextQuietTicks(state.quiet, mode, state.playing, speaking);
+    const advance = aliveShouldAdvance(mode, state.playing, state.quiet);
+    if (advance) state.quiet = 0;
+    return advance;
+  }
+
+  it("THE CARRYOVER BUG: quiet time on gestures must not bank up", () => {
+    const st = { quiet: 0, playing: "a_nod" as StarraClipKey | null };
+    // 30s of silence while gestures play — 15 heartbeats.
+    for (let i = 0; i < 15; i++) assert.equal(tick(st, false), false, "a gesture never advances");
+    assert.equal(st.quiet, 0, "a gesture tick must not accumulate anything");
+
+    // Now she starts talking and the talking clip comes up.
+    st.playing = ALIVE_SPEAKING_CLIP;
+    assert.equal(tick(st, true), false, "speaking: no advance");
+    // The very next heartbeat lands in an inter-chunk gap.
+    assert.equal(
+      tick(st, false),
+      false,
+      "ONE gap right after a long quiet stretch must NOT cut her off mid-reply",
+    );
+  });
+
+  it("rides out inter-chunk gaps across a whole chunked reply", () => {
+    const st = { quiet: 0, playing: ALIVE_SPEAKING_CLIP as StarraClipKey | null };
+    // Alternating: sound, sound, gap, sound, sound, gap... the shape of a
+    // 3-chunk reply sampled every 2s.
+    const busSpeaking = [true, true, false, true, true, false, true, true, false, true];
+    for (const speaking of busSpeaking) {
+      assert.equal(tick(st, speaking), false, "no cut anywhere inside her turn");
+    }
+  });
+
+  it("advances once she is genuinely, continuously done", () => {
+    const st = { quiet: 0, playing: ALIVE_SPEAKING_CLIP as StarraClipKey | null };
+    for (let i = 0; i < Q - 1; i++) {
+      assert.equal(tick(st, false), false, `still holding at ${i + 1} quiet tick(s)`);
+    }
+    assert.equal(tick(st, false), true, `advances on quiet tick ${Q}`);
+    assert.equal(st.quiet, 0, "and the counter resets behind it");
+  });
+
+  it("a single word restarts the whole count", () => {
+    const st = { quiet: 0, playing: ALIVE_SPEAKING_CLIP as StarraClipKey | null };
+    for (let i = 0; i < Q - 1; i++) tick(st, false);
+    assert.equal(tick(st, true), false, "she spoke again");
+    assert.equal(st.quiet, 0, "the run is broken, not merely paused");
+    for (let i = 0; i < Q - 1; i++) {
+      assert.equal(tick(st, false), false, "and it must earn the full run again");
+    }
+  });
+
+  it("still mode never accumulates and never advances", () => {
+    const st = { quiet: 0, playing: ALIVE_SPEAKING_CLIP as StarraClipKey | null };
+    for (let i = 0; i < 50; i++) {
+      assert.equal(tick(st, false, "still"), false);
+      assert.equal(st.quiet, 0, "still mode must not even count");
+    }
+  });
+
+  it("nothing scheduled yet cannot accumulate", () => {
+    const st = { quiet: 0, playing: null as StarraClipKey | null };
+    for (let i = 0; i < 10; i++) assert.equal(tick(st, false), false);
+    assert.equal(st.quiet, 0);
   });
 });

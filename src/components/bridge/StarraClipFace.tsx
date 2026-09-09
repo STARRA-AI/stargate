@@ -7,6 +7,7 @@ import {
   CONTINUOUS_BODY_CLIP,
   pickBodyClip,
   aliveShouldAdvance,
+  nextQuietTicks,
   ALIVE_POOL,
   ALIVE_SPEAKING_CLIP,
   type BodyMode,
@@ -686,9 +687,10 @@ export function StarraClipFace({
       // tick.
       // The counter, not a single read: bus.speaking drops to false in the gap
       // between every chunk of a chunked reply, so one quiet sample is not the
-      // end of her turn. See aliveShouldAdvance.
-      if (speakingRef.current) quietTicks = 0;
-      else quietTicks += 1;
+      // end of her turn. nextQuietTicks owns the accumulation rule — crucially
+      // it resets unless the TALKING CLIP is what is on screen, so quiet time
+      // spent on gestures cannot bank up and satisfy the guard in advance.
+      quietTicks = nextQuietTicks(quietTicks, bodyMode, playingKey, speakingRef.current);
       if (aliveShouldAdvance(bodyMode, playingKey, quietTicks)) {
         quietTicks = 0;
         scheduleNextAlive();

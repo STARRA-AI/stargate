@@ -212,10 +212,47 @@ export function pickBodyClip(
 
 /**
  * How many CONSECUTIVE quiet heartbeat ticks before alive mode leaves the
- * talking clip. At BODY_HEALTH_TICK_MS = 2000 that is ~4s of continuous
- * silence — see aliveShouldAdvance for why a single tick is not enough.
+ * talking clip.
+ *
+ * WHAT THIS ACTUALLY GUARANTEES, stated precisely because the first version of
+ * this comment overstated it: N samples 2000ms apart bound the observed silence
+ * at MORE THAN (N-1) x 2000ms, not N x 2000ms — the silence may have begun a
+ * millisecond before the first sample. At 3 that is >4s of continuous quiet,
+ * not 6s.
  */
-export const ALIVE_QUIET_TICKS_BEFORE_ADVANCE = 2;
+export const ALIVE_QUIET_TICKS_BEFORE_ADVANCE = 3;
+
+/**
+ * The quiet counter's next value. Pure so the ACCUMULATION RULE is unit
+ * testable — the bug this replaces was in the counting, not in the threshold.
+ *
+ * IT RESETS ON ANYTHING BUT "quiet, with the talking clip on screen". The first
+ * version incremented on every silent heartbeat no matter what was showing, so
+ * a long quiet stretch of gestures ran the counter up (30s of silence ≈ 15) and
+ * the guard was already satisfied before she opened her mouth. The moment she
+ * started speaking and the talking clip came up, the very first inter-chunk gap
+ * tripped it — reproducing the exact mid-sentence cut the hysteresis was added
+ * to prevent, only now disguised as a working guard.
+ *
+ * RESIDUAL, named rather than papered over: this infers "her turn is over" from
+ * audio truth, and speakStarraChunks fires every chunk's synthesis in parallel,
+ * so a slow /api/tts round-trip can leave a genuine gap mid-reply. A gap longer
+ * than the threshold window still cuts to a gesture early. That is self-
+ * correcting — when the gesture ends she is still speaking, so the scheduler
+ * picks the talking clip again — and it is a brief cosmetic glitch in an opt-in
+ * mode, not a stall.
+ */
+export function nextQuietTicks(
+  prev: number,
+  mode: BodyMode,
+  playingKey: StarraClipKey | null,
+  speaking: boolean,
+): number {
+  if (mode !== "alive") return 0;
+  if (playingKey !== ALIVE_SPEAKING_CLIP) return 0;
+  if (speaking) return 0;
+  return prev + 1;
+}
 
 /**
  * Does the alive scheduler need to be pushed off what it is currently showing?
