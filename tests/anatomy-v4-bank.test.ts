@@ -68,15 +68,17 @@ describe("v4 bank — the shipped visemes3/bank.json parses", () => {
     assert.ok(bank4, "public/avatar/visemes3/bank.json must parse as v4");
     assert.equal(bank4.version, 4);
     assert.equal(bank4.base, "/avatar/body/base_loop.mp4");
-    // 25 = closure + 24 distinct grid entries: FIVE roundness columns x FIVE
-    // openness rungs (2026-09-22 --full-range rebuild), minus the cells that
-    // resolved to a frame another cell already claimed.
+    // 24 = closure + 23 distinct grid entries: FIVE roundness columns x FIVE
+    // openness rungs (--full-range), minus the cells that resolved to a frame
+    // another cell already claimed. Cut 2026-09-22 from an InfiniteTalk render of
+    // her SPEAKING (561 frames, 457 pose-eligible, a true 0px closure), composited
+    // onto a base loop cut from an InfiniteTalk render of her LISTENING — the same
+    // portrait and model, so the two register at NCC 0.9938.
     //
-    // It was 16 — five roundness columns x THREE openness rungs — and that is
-    // why her mouth read as pasted on. The footage was never the limit: `e heavy`
-    // holds 34 pose-eligible frames at openness 0.6-0.8 and 7 more at 0.8-1.0,
-    // measured by the builder this session. v4 simply stopped ASKING at 0.50.
-    assert.equal(bank4.frames.length, 25);
+    // History: 16 entries (three openness rungs, ceiling 0.55) read as a pasted-on
+    // mouth; 25 came from widening the ladder on the old footage; 24 is the same
+    // ladder on footage where she is actually talking.
+    assert.equal(bank4.frames.length, 24);
     assert.ok(bank4.width > 0 && bank4.height > 0 && bank4.fps > 0);
   });
 
@@ -479,27 +481,33 @@ describe("v4 placement — the patch is centred under the mask and lands on its 
 // 19-36px ABOVE this baseline (solid mask alpha up to 17.3px above it, 266/266
 // frames) — the patch visibly cut into her nose.
 const NOSE_BASELINE_Y: readonly number[] = [
-  241, 241, 241, 241, 241, 240, 240, 240, 240, 239, 239, 239, 238, 238, 238, 237, 237, 236, 235, 234, 234, 233,
-  233, 232, 231, 231, 230, 229, 229, 228, 227, 226, 226, 226, 225, 224, 224, 223, 223, 222, 222, 222, 222, 222,
-  222, 222, 222, 222, 223, 223, 223, 223, 223, 223, 224, 224, 225, 225, 225, 226, 226, 226, 227, 228, 228, 228,
-  229, 229, 230, 230, 230, 231, 231, 231, 232, 233, 233, 233, 233, 233, 233, 234, 234, 234, 234, 234, 234, 234,
-  234, 233, 233, 233, 233, 232, 232, 232, 231, 231, 231, 230, 230, 230, 230, 229, 229, 229, 228, 228, 228, 228,
-  228, 228, 228, 228, 228, 228, 229, 229, 229, 230, 230, 230, 231, 231, 231, 232, 232, 234, 234, 234, 234, 235,
-  235, 235, 236, 236, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 237, 236, 236, 236, 236, 236,
-  236, 236, 235, 235, 235, 235, 235, 235, 235, 235, 235, 235, 234, 234, 234, 234, 234, 234, 234, 234, 234, 233,
-  233, 233, 233, 233, 233, 233, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 232, 233, 233, 233,
-  233, 234, 234, 234, 234, 234, 235, 235, 235, 235, 235, 236, 236, 236, 236, 237, 237, 237, 237, 238, 238, 238,
-  238, 238, 238, 239, 239, 239, 239, 239, 240, 240, 240, 240, 240, 240, 240, 240, 240, 241, 241, 241, 241, 241,
-  241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241, 241,
-  241, 241,
+  243, 243, 244, 244, 244, 244, 244, 244, 244, 244, 245, 245, 245, 245, 246, 246, 246, 246, 246, 247, 247, 247,
+  247, 247, 247, 247, 247, 246, 246, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 244, 244, 244, 244,
+  243, 243, 243, 243, 243, 243, 243, 243, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242,
+  242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 243, 243, 243, 244, 244, 245, 245, 245, 245, 245, 245, 244,
+  244, 244, 244, 244, 244, 244, 244, 244, 245, 245, 245, 244, 244, 244, 244, 244, 244, 244, 244, 244, 243, 243,
+  243, 243, 243, 243, 243, 243, 243, 243, 243, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 243, 243,
+  243, 243, 243, 243, 243, 243, 243, 243, 243, 243, 243, 244, 245, 245, 245, 246, 246, 246, 246, 245, 246, 246,
+  246, 246, 246, 246, 246, 246, 247, 247, 247, 247, 247, 247, 246, 246, 246, 246, 245, 245, 245, 245, 245, 245,
+  245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 244, 244, 244, 244,
+  243, 243, 243, 243, 243, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 241, 241, 241, 242, 242, 242, 242,
+  243, 243, 243, 243, 244, 244, 244, 244, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 244, 244, 244, 244,
+  244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 243, 243, 242, 242, 242, 242, 243,
+  243, 243,
 ];
-// The measured lip geometry (drift-relative, base_loop 552x720 coords): the
-// base's resting lips span y 242..284, x 247..305; the patches' OWN lips
-// (chroma-masked per PNG) span y 242..300, x 245..306. The box must hold all
-// of it, with feather room below.
-const LIP_TOP_MIN = 242;
-const PATCH_LIP_BOTTOM_MAX = 300;
-const PATCH_LIP_X = { min: 245, max: 306 };
+// The measured lip geometry (drift-relative, base_loop 552x720 coords),
+// MEASURED 2026-09-22 with the bank builder's own lip_mask (skin-luminance gated,
+// windowed, component-filtered — the detector that cut the bank; the alignment
+// tool's plain a* threshold over-segments this footage and was NOT used):
+//   base's resting lips   y 256..296 (top is 256 on all 266 frames), x 267..341
+//   patches' OWN lips     y 256..318,                                x 253..348
+// InfiniteTalk articulates wider than the old take (94px vs 61px across the
+// widest shape), which is why the box grew to 167x96: the mask's SOLID ellipse
+// must hold the corners and the lower lip of the open vowels, or they render
+// half-faded. The box must hold all of it, with feather room below.
+const LIP_TOP_MIN = 255;
+const PATCH_LIP_BOTTOM_MAX = 318;
+const PATCH_LIP_X = { min: 253, max: 348 };
 
 describe("v4 anatomy invariant — the patch clears her nose and holds her lips", () => {
   it("every entry shares ONE uniform baseBox (mask geometry cannot flicker)", () => {

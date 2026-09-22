@@ -155,8 +155,15 @@ assert N == len(DRIFT_X) == len(DRIFT_Y), "frame count vs drift table mismatch"
 # Frame-0 luminance profile (measured, this script's own probe): nostril dark mass
 # y 222..239 (min luminance 7 at y=234), BRIGHT philtrum band y 240..249 (p05
 # ~87-110), lip vermilion darkens from y 250. The windows sit on those structures.
-MX0, MX1 = 211, 344          # union of baseBox x-extents
-NOSE_X0, NOSE_X1 = 235, 325  # central band: nostrils, excluding cheek shadows
+# ★ RE-CENTRED 2026-09-22 for the InfiniteTalk base loop. The new base is cut at a
+# 9% larger face scale with her nose 22px right of the old spot (cut-idle-base.py
+# --k 0.80: nose lands at 295.6,213.5 vs the shipped 273.5,213.5) and the uniform
+# baseBox moved with her to (234,248,131,78). With the OLD windows the lip box's
+# right edge pinned at 343 = MX1-1 on every entry — the window was clipping her
+# lips, not measuring them. All x windows shift +22; the lip ROI top follows the
+# box top (248) and the nostril band is unchanged in y (baseline measured 241..247).
+MX0, MX1 = 215, 384          # union of baseBox x-extents (216..382; box grew to 167x96 for the wider InfiniteTalk mouth)
+NOSE_X0, NOSE_X1 = 257, 347  # central band: nostrils, excluding cheek shadows
 NOSE_Y0, NOSE_Y1 = 208, 248  # frame-0 coords; rides driftY per frame
 
 
@@ -191,7 +198,7 @@ def lip_box(img, dy: int):
     (build-viseme-bank-3.py lip_mask), on the mouth region of the base frame.
     The ROI top starts in the bright philtrum band (above the vermilion, below
     the nostril shadows) and rides driftY like the nose window."""
-    y0, y1, x0, x1 = 242 + dy, 320 + dy, MX0, MX1
+    y0, y1, x0, x1 = 248 + dy, 344 + dy, MX0, MX1   # box top 248, box bottom 344 (167x96 box)
     roi = img[y0:y1, x0:x1]
     lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB).astype(np.float32)
     A = lab[:, :, 1]

@@ -151,6 +151,36 @@ def arg(name, dflt):
 OUT_DIR = os.path.abspath(os.path.join(
     ROOT, arg("--out", "public/avatar/visemes3" if V4 else "public/avatar/visemes2")))
 
+# ★ NEW SOURCE FOOTAGE (2026-09-22). Classic set the bar at the InfiniteTalk clips,
+# so the bank is now cut from an InfiniteTalk render of her SPEAKING (real
+# articulation) and composited onto a base loop cut from an InfiniteTalk render of
+# her LISTENING. Same portrait (ANGLE 4), same model, same lighting family, so the
+# nose-template registration between the two is tight by construction.
+#
+#   --src PATH          source footage (default: e heavy)
+#   --base PATH         composite target for --v4 (default: public/avatar/body/base_loop.mp4)
+#   --ref-nose x,y,w,h  NOSE box on --src frame 0   (default: e heavy's 330,300,100,85)
+#   --ref-mouth x,y,w,h MOUTH box on --src frame 0  (default: e heavy's 288,358,196,140)
+#   --src-label TEXT    provenance string written into bank.json
+#
+# The measurement itself is unchanged: track() resamples the mouth ROI to the
+# reference MOUTH size (196x140) whatever the source scale, so every constant
+# below (CX, CY, WIN*, COL_HALF, SHUT_FLOOR) still means what it meant. The ref
+# boxes for the speaking render were derived by matching e heavy's nose template
+# into its frame 0 (scale 0.850, centre 447.5,339.0, NCC 0.81 — scripts/
+# measure-speaking-render.py) and carrying both boxes through that transform.
+SRC_OVERRIDE = arg("--src", None)
+BASE_OVERRIDE = arg("--base", None)
+SRC_LABEL = arg("--src-label", None)
+def _box(flag, dflt):
+    v = arg(flag, None)
+    if v is None:
+        return dflt
+    parts = [int(round(float(t))) for t in v.split(",")]
+    if len(parts) != 4:
+        sys.exit(f"refusing: {flag} wants x,y,w,h")
+    return tuple(parts)
+
 # The public URL the bank's `file` fields point at. It MUST follow --out: it was
 # hardcoded to "/avatar/visemes3/", so building a candidate bank anywhere else
 # wrote the PNGs to the new directory and then told the runtime to load them from
@@ -164,7 +194,11 @@ if not OUT_DIR.startswith(ROOT + os.sep):
 for bad in ("public/avatar/clips", "public/avatar/visemes/"):
     if bad in (OUT_DIR.replace("\\", "/") + "/"):
         sys.exit(f"refusing: --out must never point into {bad} (read-only / live)")
-if not os.path.exists(SRC_E):
+if SRC_OVERRIDE:
+    SRC_E = os.path.abspath(SRC_OVERRIDE)
+    if not os.path.exists(SRC_E):
+        sys.exit(f"refusing: --src not found: {SRC_E}")
+elif not os.path.exists(SRC_E):
     for cand in (SRC_E_LOCAL, SRC_E_RECOVERY):
         if os.path.exists(cand):
             SRC_E = cand
@@ -176,10 +210,14 @@ if not os.path.exists(SRC_E):
         )
 
 # ── reference geometry, MEASURED on e heavy frame 0 (full-frame px) ────────────
-W, H = 768, 1168
-NOSE = (330, 300, 100, 85)
+NOSE = _box("--ref-nose", (330, 300, 100, 85))
 NCX, NCY = NOSE[0] + NOSE[2] / 2.0, NOSE[1] + NOSE[3] / 2.0
-MOUTH = (288, 358, 196, 140)
+MOUTH = _box("--ref-mouth", (288, 358, 196, 140))
+# The MEASUREMENT ROI stays 196x140 (see track(): every mouth crop is resampled
+# to this), so the window constants below hold for any source.
+MOUTH_ROI = (196, 140)
+# Frame size is read from the source itself when --src is given.
+W, H = (768, 1168)
 IOD = 132.0          # measured interocular distance (iris centres 317,290 / 449,288)
 FACE_W = 237.0       # measured lit-face cheek-to-cheek at y=310..330
 SCALES = np.arange(0.84, 1.41, 0.02)
@@ -354,8 +392,8 @@ def track(path, tpl):
         xi = max(0, min(int(round(x)), w - int(round(bw))))
         yi = max(0, min(int(round(y)), h - int(round(bh))))
         c = fr[yi:yi + int(round(bh)), xi:xi + int(round(bw))]
-        mouths.append(cv2.resize(c, (MOUTH[2], MOUTH[3]),
-                                 interpolation=cv2.INTER_AREA if bw > MOUTH[2]
+        mouths.append(cv2.resize(c, MOUTH_ROI,
+                                 interpolation=cv2.INTER_AREA if bw > MOUTH_ROI[0]
                                  else cv2.INTER_CUBIC))
     return np.array(out, float), np.array(mouths, np.uint8)
 
@@ -475,8 +513,15 @@ def touching_frac(lip):
 # ══════════════════════════════════════════════════════════════════════════════
 vw, vh, vfps, vnb, vdur = probe(SRC_E)
 print(f"source {SRC_E}\n  {vw}x{vh} @ {vfps}fps  nb_frames={vnb}  {vdur:.4f}s")
-if (vw, vh) != (W, H):
+if SRC_OVERRIDE:
+    W, H = vw, vh
+    FPS = float(vfps)
+elif (vw, vh) != (W, H):
     sys.exit(f"refusing: expected {W}x{H}, got {vw}x{vh}")
+if BASE_OVERRIDE:
+    BASE_LOOP = os.path.abspath(BASE_OVERRIDE)
+    if not os.path.exists(BASE_LOOP):
+        sys.exit(f"refusing: --base not found: {BASE_LOOP}")
 
 def first_frame(path, w, h):
     """One frame, without leaving ffmpeg writing into a closed pipe (abandoning the
@@ -615,6 +660,14 @@ def label_for(o, r):
 # toward 0.5, so with only 3 columns a short "oo" (smoothed r~0.7) fell BETWEEN
 # neutral and pucker. Intermediate real frames give it a real target.
 V4_BOX = (212, 242, 131, 78)
+# --v4-box x,y,w,h (2026-09-22): the base loop is now cut from an InfiniteTalk
+# render at a 9% larger face scale with her nose 22px right of the old spot, so
+# the uniform box moves with her: measured nose baseline 241..247 (drift-relative
+# 242..244) -> y=248 clears every frame; x follows the nose (+22) -> 234. Passed
+# explicitly on the command line so the number is in the build log and the
+# commit, never inferred.
+if arg("--v4-box", None):
+    V4_BOX = _box("--v4-box", V4_BOX)
 V4_ROUND_COLS = [("spread", 0.05), ("semi-spread", 0.275), ("neutral", 0.50),
                  ("semi-round", 0.725), ("rounded", 0.95)]
 
@@ -643,7 +696,8 @@ V4_CEILING = 1.0 if FULL_RANGE else 0.55
 
 def v4_rebuild():
     bx, by, bw4, bh4 = V4_BOX
-    base0 = first_frame(BASE_LOOP, 552, 720)
+    bwid, bhei, *_ = probe(BASE_LOOP)
+    base0 = first_frame(BASE_LOOP, bwid, bhei)
     base_gray = cv2.cvtColor(base0, cv2.COLOR_BGR2GRAY)
 
     # ── the ONE rigid mapping: e-heavy nose template into base frame 0 ────────
@@ -732,8 +786,8 @@ def v4_rebuild():
                  openness=round(float(openness[f]), 4),
                  roundness=round(float(roundness[f]), 4),
                  sourceFrame=int(f),
-                 sourceClip="e heavy.mp4 (768x1168 @24fps, 361 frames; via the "
-                            "bit-exact FFV1 recovery)",
+                 sourceClip=(SRC_LABEL or "e heavy.mp4 (768x1168 @24fps, 361 frames; via the "
+                                          "bit-exact FFV1 recovery)"),
                  poseConfidence=round(float(conf[f]), 4), label=label,
                  aperturePx=round(float(hgt[f]), 1), widthPx=round(float(wid[f]), 1),
                  lipsTouchingFrac=round(float(touch[f]), 3),
@@ -777,7 +831,8 @@ def v4_rebuild():
         version=4,
         builder="scripts/build-viseme-bank-3.py --v4",
         source="/avatar/body/base_loop.mp4",
-        sourceFootage="e heavy.mp4 (768x1168 @24fps, 361 frames) via bit-exact "
+        sourceFootage=(SRC_LABEL + " (the SAME InfiniteTalk portrait family as the base loop)") if SRC_LABEL else
+                      "e heavy.mp4 (768x1168 @24fps, 361 frames) via bit-exact "
                       "FFV1 recovery — the SAME take the base loop derives from",
         width=bw4, height=bh4, fps=FPS,
         poseFloor=POSE_FLOOR,
@@ -972,6 +1027,9 @@ def cut(name, a, b):
     return dst
 
 
+if SRC_OVERRIDE:
+    print("\n  STANCE CUTS skipped — CUTS are frame ranges measured on e heavy, not on --src.")
+    sys.exit(0)
 print("\n  STANCE CUTS (frame-exact select, re-encode -crf 16, -an):")
 made = {}
 for nm, (a, b) in CUTS.items():

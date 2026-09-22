@@ -29,7 +29,7 @@ BASE_W, BASE_H = 552, 720
 
 # The face window each tile shows: mouth box (212,242,131,78) plus nose above and
 # chin below, so a patch that cuts into her nose is visible rather than cropped out.
-CROP = (176, 168, 200, 216)  # x, y, w, h in base_loop pixels
+CROP = (190, 168, 240, 216)  # x, y, w, h in base_loop pixels (re-centred 2026-09-22 for the InfiniteTalk base: nose at x~296, box 216..383)
 TILE_SCALE = 1.6
 LABEL_H = 34
 COLS = 5
