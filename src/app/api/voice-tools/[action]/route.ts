@@ -20,12 +20,15 @@
  * takes STARRA_MCP_WRITE_TOKEN. A holder of the read key can look her up; only
  * the write key can change what she believes. See src/lib/api/public-auth.ts.
  *
- * WRITES ARE DELIBERATELY LIMITED. remember + note + funding-status. Nothing
- * here can delete anything, and nothing can read the store wholesale.
+ * WRITES ARE DELIBERATELY LIMITED. remember + note + funding-status + trade.
+ * Nothing here can delete anything, and nothing can read the store wholesale —
+ * and nothing here can START OR STOP his trading bot. `dragon` reads its state;
+ * engage/disengage need his deck cookie and are not reachable from this route.
  */
 
 import { getMemory, recordExchange } from "@/lib/memory/store";
 import {
+  spokenDragon,
   spokenPositions,
   spokenShards,
   spokenSignals,
@@ -166,6 +169,19 @@ export async function GET(
       case "trade":
         return say(await spokenTrade(url.searchParams.get("live") === "true"));
 
+      // `dragon` is a READ and stays one. It answers "what is his BOT doing" —
+      // engaged or stopped, which category, paper or live, what it has made —
+      // which is a different question from `positions`, and one she previously
+      // could not answer on a call at all.
+      //
+      // ENGAGE/DISENGAGE ARE DELIBERATELY ABSENT FROM THIS ROUTE. xAI's servers
+      // reach this file from the public internet; starting or stopping his
+      // trading bot needs his DECK COOKIE, the same bar /api/dragon/control
+      // already sets. The control verbs live in the chat lane only — see the
+      // header on the Dragon section of lib/tools/trade-voice.ts.
+      case "dragon":
+        return say(await spokenDragon());
+
       case "funding_status": {
         const name = url.searchParams.get("name") ?? "";
         const status = url.searchParams.get("status") ?? "";
@@ -175,7 +191,7 @@ export async function GET(
 
       default:
         return say(
-          "I don't know that one. I can recall something, remember something, take a note, or move a funding lead.",
+          "I don't know that one. I can recall something, remember something, take a note, check the dragon, or move a funding lead.",
         );
     }
   } catch (err) {
