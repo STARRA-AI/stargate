@@ -25,9 +25,8 @@ import {
   audioOutputDelayMs,
   bodyBoxAt,
   bodyFrameAt,
-  bodyPatchConfidence,
-  SPEAK_CONF_FLOOR,
-  SPEAK_CONF_FULL,
+  bodyPatchRawConfidence,
+  createSpeakGate,
   type BodyKind,
   channelMeans,
   containRect,
@@ -193,7 +192,8 @@ export const BODY_HEALTH_TICK_MS = 2000;
 /** How long a new mouth shape fades in over the previous one (v4 draw). */
 export const MOUTH_BLEND_MS = 80;
 /** Minimum time the speaking-body patch gate holds a state before it may switch again. */
-export const GATE_DWELL_MS = 500;
+// The speaking-body gate itself lives in viseme-sync.ts (createSpeakGate,
+// GATE_OFF_DEBOUNCE_MS, GATE_CLEARLY_TURNED) so it is unit-tested on the table.
 export const BODY_STUCK_TICKS = 2;
 
 /**
@@ -561,6 +561,10 @@ export function StarraClipFace({
       }
       const playingEl = back; // this element will carry this clip
       const go = () => {
+        // ONE-SHOT. Left armed, a later canplay on this layer (a stall that
+        // recovers while it loops hidden) would fade in whichever layer is
+        // hidden — an unrequested body switch. Disarm before anything else.
+        playingEl.oncanplay = null;
         if (disposed) return;
         void playingEl.play().catch(() => {});
         crossfadeToBack();
@@ -799,10 +803,12 @@ export function StarraClipFace({
         const now = Date.now();
         if (speaking) {
           quietSince = 0;
-          if (!wantSpeak) {
-            wantSpeak = true;
-            if (playingKey !== SPEAKING_BODY_CLIP) play(SPEAKING_BODY_CLIP);
-          }
+          wantSpeak = true;
+          // Re-issued on EVERY speaking tick, not once per reply: a rolled-back
+          // crossfade restores playingKey to the listening body, and a once-
+          // only switch left her listening for the whole reply. play() advances
+          // playingKey synchronously, so an in-flight switch is never doubled.
+          if (playingKey !== SPEAKING_BODY_CLIP) play(SPEAKING_BODY_CLIP);
           return;
         }
         if (wantSpeak) {
@@ -810,9 +816,11 @@ export function StarraClipFace({
           if (now - quietSince >= SPEAKING_BODY_HOLD_MS) {
             wantSpeak = false;
             quietSince = 0;
-            if (playingKey !== CONTINUOUS_BODY_CLIP) play(CONTINUOUS_BODY_CLIP);
           }
+          return;
         }
+        // Quiet and past the hold: the listening body, re-issued the same way.
+        if (playingKey !== CONTINUOUS_BODY_CLIP) play(CONTINUOUS_BODY_CLIP);
       }, SPEAKING_BODY_POLL_MS);
     }
 
@@ -853,9 +861,11 @@ export function StarraClipFace({
       pre = document.createElement("video");
       pre.preload = "auto";
       pre.muted = true;
-      // Prime the CONTINUOUS BODY, not the legacy talking clip — the body is what
-      // actually plays now, and it is the larger file, so warming it matters more.
-      pre.src = STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file;
+      // Prime the SPEAKING body. The listening body is already loading on a
+      // live layer (startContinuousBody), so warming it here bought nothing —
+      // and speak_loop.mp4 (2.67MB) was fetched on demand at her FIRST WORD,
+      // which is exactly the canplay wait this effect exists to remove.
+      pre.src = STARRA_CLIPS[SPEAKING_BODY_CLIP].file;
       pre.load();
     } catch {
       pre = null; // preloading is a nicety; never let it break the face
@@ -1007,9 +1017,7 @@ export function StarraClipFace({
     let prevPickId: string | null = null;
     let prevPick: HTMLImageElement | null = null;
     let pickChangedAt = 0;
-    let smoothAlpha = 1;
-    let gateOn = true;
-    let gateChangedAt = 0;
+    const speakGate = createSpeakGate();
     let baseMeansAt = 0;
     let toneOff = false;
 
@@ -1233,36 +1241,21 @@ export function StarraClipFace({
           // On the speaking body a turned head (low tracker confidence) fades the
           // patch out and lets her OWN talking mouth show — real footage — instead
           // of a translated patch on a rotated face. The listening body is 1.
-          // HYSTERESIS, then a SHORT dissolve. The gate turns ON only when the
-          // frame's confidence reaches SPEAK_CONF_FULL and OFF only when it drops
-          // below SPEAK_CONF_FLOOR, so a track hovering at the floor cannot flicker
-          // it. The switch itself dissolves in ~3 ticks (~50ms at 60Hz) — a half-
-          // blend of two mouths HELD is a blur (seen in the first QC sheet, frames
-          // 5 and 6 at alpha 0.50); a 50ms dissolve between two speaking mouths is
-          // an edit, not a blur.
-          const frameConf = bodyPatchConfidence(bodyKind, bodyFrame);
-          // ...and a MINIMUM DWELL. Simulated over the shipped speaking loop, the
-          // bare hysteresis still switched 16 times in 11s — one every 0.7s — as
-          // the track hovered around the floor. A switch now holds for at least
-          // GATE_DWELL_MS unless her head has CLEARLY turned (confidence below the
-          // floor by a margin), which is the one case where a stale patch would
-          // sit on a rotated face.
-          const rawConf = bodyKind === "speak" ? SPEAK_CONF_FLOOR + frameConf * (SPEAK_CONF_FULL - SPEAK_CONF_FLOOR) : 1;
-          if (bodyKind === "base") {
-            gateOn = true;
-          } else {
-            const wantOn = frameConf >= 1 ? true : frameConf <= 0 ? false : gateOn;
-            const dwellOver = now - gateChangedAt >= GATE_DWELL_MS;
-            const clearlyTurned = rawConf <= SPEAK_CONF_FLOOR - 0.02;
-            if (wantOn !== gateOn && (dwellOver || (!wantOn && clearlyTurned))) {
-              gateOn = wantOn;
-              gateChangedAt = now;
-            }
-          }
-          const targetAlpha = gateOn ? 1 : 0;
-          smoothAlpha += (targetAlpha - smoothAlpha) * 0.6;
-          if (Math.abs(targetAlpha - smoothAlpha) < 0.05) smoothAlpha = targetAlpha;
-          const bodyAlpha = smoothAlpha;
+          // THE GATE is a pure state machine (createSpeakGate, viseme-sync.ts —
+          // unit-tested on the shipped table). It reads the tracker's RAW
+          // confidence: OFF only after the track has been below the floor for
+          // GATE_OFF_DEBOUNCE_MS (a 2-5 frame nod is noise, not a turn) or at
+          // once when she has CLEARLY turned (<= GATE_CLEARLY_TURNED); back ON
+          // the moment the track is at FULL again. The old symmetric 500ms
+          // dwell hid the patch on a FRONTAL face 7.3% of the time (simulated
+          // over the shipped table), and its "clearly turned" escape compared
+          // a value clamped to [0.93, 0.95] against 0.91 — dead code.
+          // The switch is a hard target; the canvas's 50ms CSS transition is
+          // the ONLY dissolve. (A per-tick JS ramp under the old 180ms CSS
+          // transition was a ~176ms crossfade with ~77ms in the half-blend
+          // band — the blur Classic saw.)
+          const gateOn = bodyKind === "base" ? true : speakGate.step(bodyPatchRawConfidence(bodyKind, bodyFrame), now);
+          const bodyAlpha = gateOn ? 1 : 0;
           if (bodyAlpha <= 0.05) return hide();
           const place = patchPlacement(box, canvas.width, canvas.height);
           if (!place) return hide();
@@ -1534,9 +1527,11 @@ export function StarraClipFace({
           opacity: 0,
           pointerEvents: "none",
           transformOrigin: "0 0",
-          // Soft-fade every show/hide (stall gate, blend gates, pose fade) —
-          // an opacity POP is exactly the flicker Classic filmed.
-          transition: "opacity 180ms ease",
+          // The ONE dissolve for every show/hide, including the speaking-body
+          // gate: 50ms — an edit, not a blur. It was 180ms ease, which sat under
+          // a per-tick JS ramp and stretched every gate switch to ~176ms with
+          // ~77ms in the half-blend band.
+          transition: "opacity 50ms linear",
           WebkitMaskImage: patchMask,
           maskImage: patchMask,
         }}

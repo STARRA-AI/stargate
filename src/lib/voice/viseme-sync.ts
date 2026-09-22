@@ -1280,6 +1280,77 @@ export function bodyPatchConfidence(kind: BodyKind, frameIndex: number): number 
   return (c - SPEAK_CONF_FLOOR) / (SPEAK_CONF_FULL - SPEAK_CONF_FLOOR);
 }
 
+/**
+ * The tracker's RAW per-frame confidence for the body on screen (SPEAK_CONF as
+ * measured, not the 0..1 ramp). The listening body is frontal throughout: 1.
+ * The gate needs the raw value: "clearly turned" lives BELOW the floor, which
+ * the ramp clamps away.
+ */
+export function bodyPatchRawConfidence(kind: BodyKind, frameIndex: number): number {
+  if (kind === "base") return 1;
+  const n = SPEAK_CONF.length;
+  if (n === 0) return 1;
+  const c = SPEAK_CONF[clampIndex(n, frameIndex)];
+  return Number.isFinite(c) ? c : 1;
+}
+
+/**
+ * THE SPEAKING-BODY GATE — decides whether the driven mouth patch is shown on
+ * the speaking body, or hidden so her own filmed talking mouth shows.
+ *
+ * OFF only after the track has been at or below SPEAK_CONF_FLOOR for
+ * GATE_OFF_DEBOUNCE_MS (a 2-5 frame nod is tracker noise, not a turn), or at
+ * once when she has CLEARLY turned (<= GATE_CLEARLY_TURNED). Back ON the
+ * moment the track is at SPEAK_CONF_FULL again — no dwell: a hidden patch on a
+ * frontal face is lips that do not match her voice. Between floor and full it
+ * holds. Simulated at 60Hz over the shipped table (tests/speaking-body.test.ts):
+ * 6 switches per 11s loop, hidden-while-frontal 0.0%, shown-while-turned 3.6%.
+ * The previous symmetric 500ms dwell measured 9.7 switches, hidden-while-
+ * frontal 7.3%, and its "clearly turned" escape could never fire.
+ */
+export const GATE_OFF_DEBOUNCE_MS = 120;
+export const GATE_CLEARLY_TURNED = 0.91;
+
+export interface SpeakGate {
+  /** Feed one tick; returns whether the patch is shown. */
+  step(rawConf: number, nowMs: number): boolean;
+  readonly on: boolean;
+}
+
+export function createSpeakGate(opts?: {
+  offDebounceMs?: number;
+  clearlyTurned?: number;
+  full?: number;
+  floor?: number;
+}): SpeakGate {
+  const offMs = opts?.offDebounceMs ?? GATE_OFF_DEBOUNCE_MS;
+  const turned = opts?.clearlyTurned ?? GATE_CLEARLY_TURNED;
+  const full = opts?.full ?? SPEAK_CONF_FULL;
+  const floor = opts?.floor ?? SPEAK_CONF_FLOOR;
+  let on = true;
+  let lowSince: number | null = null;
+  return {
+    get on() {
+      return on;
+    },
+    step(rawConf, nowMs) {
+      // A non-finite confidence means "show it" — never a hidden mouth on NaN.
+      const c = Number.isFinite(rawConf) ? rawConf : 1;
+      if (c <= floor) {
+        if (lowSince === null) lowSince = nowMs;
+      } else {
+        lowSince = null;
+      }
+      if (on) {
+        if (lowSince !== null && (nowMs - lowSince >= offMs || c <= turned)) on = false;
+      } else if (c >= full) {
+        on = true;
+      }
+      return on;
+    },
+  };
+}
+
 /** An entry's paste box, moved onto the frame of whichever body is on screen. */
 export function bodyBoxAt(kind: BodyKind, box: VisemeBaseBox, frameIndex: number): VisemeBaseBox {
   const d = bodyDriftAt(kind, frameIndex);
@@ -1735,7 +1806,7 @@ let patchAssetsPromise: Promise<MouthPatchAssets | null> | null = null;
  */
 export function loadMouthPatchAssets(): Promise<MouthPatchAssets | null> {
   if (patchAssetsPromise) return patchAssetsPromise;
-  patchAssetsPromise = (async (): Promise<MouthPatchAssets | null> => {
+  const flight = (async (): Promise<MouthPatchAssets | null> => {
     try {
       if (typeof fetch !== "function" || typeof Image === "undefined") return null;
       try {
@@ -1766,7 +1837,16 @@ export function loadMouthPatchAssets(): Promise<MouthPatchAssets | null> {
       return null;
     }
   })();
-  return patchAssetsPromise;
+  patchAssetsPromise = flight;
+  // A NULL IS NOT MEMOIZED. One transient failure at call open (deck mid-
+  // restart, an expired session's login HTML where bank.json should be, a
+  // network blip) used to disable the composited mouth for every later call
+  // on the page. A success stays cached for the page; a failure retries next
+  // time someone asks.
+  void flight.then((r) => {
+    if (r === null && patchAssetsPromise === flight) patchAssetsPromise = null;
+  });
+  return flight;
 }
 
 /**

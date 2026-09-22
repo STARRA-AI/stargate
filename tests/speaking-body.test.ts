@@ -23,9 +23,13 @@ import {
   baseBoxAt,
   baseDriftAt,
   bodyBoxAt,
+  GATE_CLEARLY_TURNED,
+  GATE_OFF_DEBOUNCE_MS,
   bodyDriftAt,
   bodyFrameAt,
   bodyPatchConfidence,
+  bodyPatchRawConfidence,
+  createSpeakGate,
   frameIndexAt,
 } from "../src/lib/voice/viseme-sync";
 import {
@@ -169,11 +173,10 @@ describe("StarraClipFace uses both bodies (source pins — the wiring has no oth
   });
   it("picks the drift table by the body on screen and gates the patch by confidence", () => {
     assert.match(face, /const box = bodyBoxAt\(bodyKind, pick\.baseBox, bodyFrame\)/);
-    assert.match(face, /const frameConf = bodyPatchConfidence\(bodyKind, bodyFrame\)/);
-    assert.match(face, /const wantOn = frameConf >= 1 \? true : frameConf <= 0 \? false : gateOn;/, "hysteresis: opens at FULL, closes below FLOOR, otherwise holds");
-    assert.match(face, /export const GATE_DWELL_MS = 500;/);
-    assert.match(face, /dwellOver \|\| \(!wantOn && clearlyTurned\)/, "a switch must wait out the dwell unless her head clearly turned");
-    assert.match(face, /smoothAlpha \+= \(targetAlpha - smoothAlpha\) \* 0\.6/, "the switch dissolves in a few ticks — a held half-blend is a blur");
+    assert.match(face, /const speakGate = createSpeakGate\(\);/);
+    assert.match(face, /speakGate\.step\(bodyPatchRawConfidence\(bodyKind, bodyFrame\), now\)/, "the gate reads the RAW confidence — clearly-turned lives below the floor");
+    assert.match(face, /const bodyAlpha = gateOn \? 1 : 0;/, "a hard target: the 50ms CSS transition is the only dissolve");
+    assert.match(face, /transition: "opacity 50ms linear",/, "a per-tick JS ramp under a 180ms CSS transition was a ~176ms blur");
     assert.match(face, /canvas\.style\.opacity = String\(bodyAlpha\)/);
     assert.ok(!/video\.getAttribute\("src"\) !== STARRA_CLIPS\[CONTINUOUS_BODY_CLIP\]\.file\) \{\s*return hide\(\);/.test(face),
       "the old single-body guard would hide the patch on the speaking body");
@@ -216,5 +219,78 @@ describe("the body frame index runs at the BODY's rate, never the bank's", () =>
   it("StarraClipFace indexes the body with bodyFrameAt, not with the bank's fps (source pin)", () => {
     assert.match(face, /const bodyFrame = bodyFrameAt\(video\.currentTime\);/);
     assert.ok(!/frameIndexAt\(video\.currentTime, b4\.fps/.test(face), "b4.fps must never drive the body frame index");
+  });
+});
+
+describe("the speaking gate — a pure state machine, run on the shipped table", () => {
+  const FULL = SPEAK_CONF_FULL;
+  const FLOOR = SPEAK_CONF_FLOOR;
+  it("starts shown, and a short dip below the floor is noise, not a turn", () => {
+    const g = createSpeakGate();
+    assert.equal(g.step(FULL, 0), true);
+    assert.equal(g.step(FLOOR, 10), true);
+    assert.equal(g.step(FLOOR, GATE_OFF_DEBOUNCE_MS - 1), true, "still shown just under the debounce");
+    assert.equal(g.step(FULL, GATE_OFF_DEBOUNCE_MS + 10), true, "the dip ended: never hidden");
+  });
+  it("hides after the debounce, or at once when she has clearly turned", () => {
+    const g = createSpeakGate();
+    g.step(FLOOR, 0);
+    assert.equal(g.step(FLOOR, GATE_OFF_DEBOUNCE_MS), false);
+    const h = createSpeakGate();
+    assert.equal(h.step(GATE_CLEARLY_TURNED, 0), false, "no debounce on a clear turn");
+  });
+  it("comes back the moment the track is at FULL — no dwell on a frontal face", () => {
+    const g = createSpeakGate();
+    g.step(GATE_CLEARLY_TURNED, 0);
+    assert.equal(g.on, false);
+    assert.equal(g.step((FULL + FLOOR) / 2, 5), false, "the band holds the last state");
+    assert.equal(g.step(FULL, 6), true);
+  });
+  it("a non-finite confidence shows the mouth, never hides it", () => {
+    const g = createSpeakGate();
+    assert.equal(g.step(Number.NaN, 0), true);
+  });
+  it("over the shipped table at 60Hz: never hidden while she is frontal, few switches per loop", () => {
+    const g = createSpeakGate();
+    const HZ = 60;
+    const LOOPS = 3;
+    const loopSec = BASE_LOOP_FRAMES / BASE_LOOP_FPS;
+    let switches = 0;
+    let hiddenWhileFrontal = 0;
+    let shownWhileTurned = 0;
+    let prev = true;
+    const ticks = Math.floor(loopSec * HZ * LOOPS);
+    for (let t = 0; t < ticks; t++) {
+      const sec = t / HZ;
+      const frame = bodyFrameAt(sec % loopSec);
+      const raw = bodyPatchRawConfidence("speak", frame);
+      const on = g.step(raw, (t * 1000) / HZ);
+      if (on !== prev) switches++;
+      prev = on;
+      if (!on && raw >= FULL) hiddenWhileFrontal++;
+      if (on && raw <= FLOOR) shownWhileTurned++;
+    }
+    assert.equal(hiddenWhileFrontal, 0, "a hidden patch on a frontal face is lips that do not match her voice");
+    assert.ok(switches / LOOPS <= 8, `switches per loop: ${switches / LOOPS}`);
+    assert.ok(shownWhileTurned / ticks < 0.05, `shown-while-turned: ${((shownWhileTurned / ticks) * 100).toFixed(1)}%`);
+  });
+  it("the listening body is always 1 and the speaking body's raw value is the measured table", () => {
+    assert.equal(bodyPatchRawConfidence("base", 100), 1);
+    assert.ok(bodyPatchRawConfidence("speak", 0) <= 1 && bodyPatchRawConfidence("speak", 0) > 0);
+    assert.equal(bodyPatchRawConfidence("speak", 99999), bodyPatchRawConfidence("speak", BASE_LOOP_FRAMES - 1));
+  });
+});
+
+describe("the body switch survives a rollback, primes the right clip, and never crossfades unasked", () => {
+  it("re-issues the switch on every tick of speech and the return on every quiet tick (source pins)", () => {
+    assert.match(face, /wantSpeak = true;\s*\/\/ Re-issued on EVERY speaking tick/);
+    assert.match(face, /\/\/ Quiet and past the hold: the listening body, re-issued the same way\.\s*if \(playingKey !== CONTINUOUS_BODY_CLIP\) play\(CONTINUOUS_BODY_CLIP\);/);
+  });
+  it("primes speak_loop.mp4 at call open, not the body that is already loading", () => {
+    assert.match(face, /pre\.src = STARRA_CLIPS\[SPEAKING_BODY_CLIP\]\.file;/);
+    assert.ok(!/pre\.src = STARRA_CLIPS\[CONTINUOUS_BODY_CLIP\]\.file;/.test(face));
+  });
+  it("the canplay handler is one-shot", () => {
+    assert.match(face, /const go = \(\) => \{[^}]*playingEl\.oncanplay = null;/);
   });
 });

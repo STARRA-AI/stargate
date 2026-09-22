@@ -10,16 +10,18 @@ const nextConfig: NextConfig = {
   // and `npm run deck:fast` can run at the same time without touching each
   // other. Unset (the default) keeps plain `.next`, so dev is unchanged.
   distDir: process.env.STARRA_DIST || ".next",
-  // CACHING: her media (clips, viseme PNGs, brand art) revalidates hourly
-  // instead of on every deck load. NOT immutable on purpose — these files are
-  // replaced in place (the viseme bank was rebuilt tonight under the same
-  // names); a year-long immutable would serve stale mouths.
+  // CACHING: her face assets are replaced IN PLACE under fixed names (both
+  // body loops, the bank and its PNGs were re-cut three times on 2026-09-22)
+  // while the JS that carries their geometry is rehashed every build — so a
+  // client that cached a body for an hour composited the NEW bank onto an OLD
+  // body. /avatar/* therefore revalidates on every load (a 304 when unchanged);
+  // brand art keeps its daily window.
   async headers() {
     return [
       {
         source: "/avatar/:path*",
         headers: [
-          { key: "Cache-Control", value: "public, max-age=3600, must-revalidate" },
+          { key: "Cache-Control", value: "public, max-age=0, must-revalidate" },
         ],
       },
       {

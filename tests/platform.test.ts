@@ -84,7 +84,12 @@ describe("caching — media revalidates, never immutable", () => {
   it("avatar + brand media get bounded cache headers", () => {
     const cfg = read("next.config.ts");
     assert.match(cfg, /\/avatar\/:path\*/);
-    assert.match(cfg, /max-age=3600, must-revalidate/);
+    // /avatar/* is replaced IN PLACE under fixed names while the JS that carries
+    // its geometry is rehashed per build, so it revalidates on EVERY load (a 304
+    // when unchanged) — an hour of cache composited a new bank onto an old body
+    // (2026-09-22). Brand art keeps its daily window.
+    assert.match(cfg, /source: "\/avatar\/:path\*",\s*headers: \[\s*\{ key: "Cache-Control", value: "public, max-age=0, must-revalidate" \}/);
+    assert.match(cfg, /source: "\/brand\/:path\*",\s*headers: \[\s*\{ key: "Cache-Control", value: "public, max-age=86400, must-revalidate" \}/);
     // Comments stripped: the doc comment may EXPLAIN why immutable is banned;
     // the header VALUES may not carry it.
     const codeOnly = cfg
