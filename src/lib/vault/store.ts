@@ -2,6 +2,7 @@ import { promises as fs } from "fs";
 import path from "path";
 import { redact } from "@/lib/security/redact";
 import { fenceUntrusted } from "@/lib/security/fencing";
+import { docxToText, officeKind, xlsxToText } from "@/lib/vault/office";
 
 export type VaultDoc = {
   id: string;
@@ -46,6 +47,35 @@ export async function saveVault(store: VaultStore) {
   return store;
 }
 
+/**
+ * Decode as utf8, but refuse to store the result if it is plainly not text.
+ * Returning an honest sentence beats storing mojibake she will read back as
+ * fact — the failure mode that let .docx look like it worked for two months.
+ */
+function decodeOrRefuse(buffer: Buffer, name: string): string {
+  const decoded = buffer.toString("utf8");
+  if (!looksBinary(decoded)) return decoded;
+  return `[Stored: ${name}. It is not text, so nothing was extracted — send PDF, TXT, MD, CSV, DOCX or XLSX.]`;
+}
+
+/**
+ * Is this utf8 decode actually text? Decoding binary yields U+FFFD replacement
+ * characters and NULs in quantity; real text, including heavily accented or CJK
+ * text, yields effectively none. The threshold is deliberately loose — one
+ * stray replacement char in a long file is a bad byte, not a binary.
+ */
+export function looksBinary(decoded: string): boolean {
+  if (decoded.length === 0) return false;
+  const sample = decoded.slice(0, 8192);
+  let bad = 0;
+  for (const ch of sample) {
+    const c = ch.codePointAt(0)!;
+    // U+FFFD, NUL, and C0 controls that no text file uses (tab/LF/CR excluded).
+    if (c === 0xfffd || c === 0x00 || (c < 0x09) || (c > 0x0d && c < 0x20)) bad++;
+  }
+  return bad / [...sample].length > 0.05;
+}
+
 function extractFacts(text: string): string[] {
   const lines = text
     .split(/\r?\n/)
@@ -66,13 +96,17 @@ export async function ingestTextFile(
   await ensure();
   let text = "";
   const lower = name.toLowerCase();
+  const office = officeKind(name);
   if (
     mime.startsWith("text/") ||
     lower.endsWith(".md") ||
     lower.endsWith(".txt") ||
     lower.endsWith(".csv")
   ) {
-    text = buffer.toString("utf8");
+    // Guarded even here. MEASURED 2026-09-22: a PNG renamed to notes.txt takes
+    // this branch (the name AND the mime both say text) and stored 12,032 chars
+    // of mojibake as her facts. The name is a claim, not a fact.
+    text = decodeOrRefuse(buffer, name);
   } else if (lower.endsWith(".pdf")) {
     try {
       const mod = await import("pdf-parse");
@@ -84,11 +118,29 @@ export async function ingestTextFile(
     } catch {
       text = `[PDF stored: ${name}. Text extraction unavailable — re-upload as TXT/MD if needed.]`;
     }
+  } else if (office !== null) {
+    // .docx / .xlsx are ZIP containers. They used to fall through to the utf8
+    // `else` below, which stored compressed bytes as her facts while the Vault
+    // page's accept list advertised both — 200 OK with garbage inside it.
+    try {
+      text = office === "docx" ? await docxToText(buffer) : await xlsxToText(buffer);
+      if (!text.trim()) {
+        text = `[${office.toUpperCase()} stored: ${name}. It parsed but held no readable text — if it is mostly images, export it as PDF.]`;
+      }
+    } catch {
+      text = `[${office.toUpperCase()} stored: ${name}. The archive could not be read — re-save it from the app, or export as PDF/TXT.]`;
+    }
   } else {
-    text = buffer.toString("utf8");
+    // Unknown extension. utf8 is RIGHT for his code and config (.ts, .json,
+    // .yml, .log carry no text/* mime but are plain text) and WRONG for a
+    // binary, so the result is checked rather than trusted.
+    text = decodeOrRefuse(buffer, name);
   }
 
-  const id = `doc-${Date.now()}`;
+  // ★ Date.now() ALONE COLLIDES. Two uploads in the same millisecond produced
+  // the same id AND the same raw filename, so one silently overwrote the other's
+  // file while both rows stayed in the store. The suffix makes the pair unique.
+  const id = `doc-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const filePath = path.join(UPLOAD_DIR, `${id}-${name.replace(/[^\w.-]/g, "_")}`);
   await fs.writeFile(filePath, buffer);
 

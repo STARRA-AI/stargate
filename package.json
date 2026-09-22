@@ -46,6 +46,7 @@
     "@simplewebauthn/server": "^13.3.2",
     "animejs": "^4.5.0",
     "docx": "9.7.1",
+    "jszip": "^3.10.1",
     "next": "15.5.20",
     "onnxruntime-web": "^1.27.0",
     "pdf-parse": "^2.4.5",

@@ -60,7 +60,11 @@ export default function VaultPage() {
           <input
             type="file"
             name="file"
-            accept=".pdf,.md,.txt,.docx,.xlsx,text/*"
+            /* Every entry here is a format ingestTextFile actually reads:
+               text/* + md/txt/csv as utf8, pdf via pdf-parse, docx/xlsx via
+               lib/vault/office.ts. It advertised .docx/.xlsx for two months
+               before either worked — keep this list and that branch in step. */
+            accept=".pdf,.md,.txt,.csv,.docx,.xlsx,text/*"
             required
             className="font-[family-name:var(--font-mono)] text-xs text-[var(--chrome)]"
           />
