@@ -125,6 +125,18 @@ def main():
                          "size (0.625/anchor). InfiniteTalk composes her right of centre, so at that "
                          "size the crop overruns the frame by ~58px; k=0.80 (a 9%% zoom) fits with the "
                          "nose 19px off-centre instead of 43.")
+    ap.add_argument("--out-size", default=None,
+                    help="WxH of the base (default 552x720). With --fit full the WHOLE render frame is "
+                         "scaled into it: 768x1168 -> 552x840 keeps her waist-up, letterboxed by the "
+                         "stage's object-fit: contain over her own blurred backdrop.")
+    ap.add_argument("--fit", choices=["anchor", "full"], default="anchor",
+                    help="anchor = crop so the nose lands where the shipped base had it (default); "
+                         "full = no crop, the entire waist-up frame scaled to --out-size (Classic: "
+                         "'WE WANT HER FROM THE WAIST UP', 2026-09-22).")
+    ap.add_argument("--window-by", choices=["seam", "calm", "frontal"], default="seam",
+                    help="seam = the window whose wrap is closest (default, for idle footage); "
+                         "calm = the window with the least head motion, then seam — for a SPEAKING "
+                         "render, where the calmest 11s makes the steadiest talking body.")
     ap.add_argument("--seam-blend", type=int, default=0,
                     help="dissolve the last N output frames into the first N so the loop wrap has no "
                          "step. Drift and baseline are measured AFTER the blend, so the tables stay true.")
@@ -147,14 +159,42 @@ def main():
     g0 = cv2.cvtColor(frames[0], cv2.COLOR_BGR2GRAY)
     ncc, cx, cy, s = match_scaled(g0, tpl, np.arange(0.60, 1.61, 0.05))
     ncc, cx, cy, s = match_scaled(g0, tpl, np.arange(max(0.3, s - 0.08), s + 0.081, 0.01))
-    k = a.k if a.k else BASE_NOSE_SCALE / s        # render px -> base px
-    cw, ch = BASE_W / k, BASE_H / k               # crop size in render px
-    cx0 = cx - BASE_NOSE_CENTRE[0] / k
-    cy0 = cy - BASE_NOSE_CENTRE[1] / k
+    global BASE_W, BASE_H, NOSE_X0, NOSE_X1, NOSE_Y0, NOSE_Y1
+    if a.out_size:
+        BASE_W, BASE_H = (int(t) for t in a.out_size.lower().split("x"))
+    if a.fit == "full":
+        # the whole frame, uniformly scaled: k is fixed by the width, the height
+        # follows (768x1168 -> 552x840 keeps the render's aspect to 1px)
+        k = BASE_W / w
+        if abs(h * k - BASE_H) > 1.0:
+            sys.exit(f"refusing: --fit full needs --out-size with the render's aspect "
+                     f"({w}x{h} -> {BASE_W}x{round(h * k)}), got {BASE_W}x{BASE_H}")
+        cw, ch = float(w), float(h)
+        cx0 = cy0 = 0.0
+    else:
+        k = a.k if a.k else BASE_NOSE_SCALE / s    # render px -> base px
+        cw, ch = BASE_W / k, BASE_H / k           # crop size in render px
+        cx0 = cx - BASE_NOSE_CENTRE[0] / k
+        cy0 = cy - BASE_NOSE_CENTRE[1] / k
     # clamp to the frame; report how far the nose lands from the shipped spot
     cx0c = min(max(0.0, cx0), w - cw)
     cy0c = min(max(0.0, cy0), h - ch)
     nose_base = ((cx - cx0c) * k, (cy - cy0c) * k)
+    # The nostril window rides the MEASURED nose. The shipped constants were
+    # (235..325, 208..248) around a nose at (273.5, 213.5): x -38.5..+51.5,
+    # y -5.5..+34.5. Same offsets, new centre, so the baseline method is identical.
+    # ...and SCALE with the face: those offsets were measured at k=0.625. At a
+    # larger face the nostril mass extends further and a fixed-size window clips
+    # it — measured 2026-09-22: half the frames returned exactly the window's
+    # bottom edge (278) before this line existed.
+    fs = k / BASE_NOSE_SCALE
+    NOSE_X0, NOSE_X1 = int(round(nose_base[0] - 38.5 * fs)), int(round(nose_base[0] + 51.5 * fs))
+    # The window BOTTOM stops well above the lip crease: with +34.5*fs it reached
+    # y=283 on the full-frame base and the "baseline" came back as the upper lip's
+    # dark line (ruler check 2026-09-22: nostrils end ~271, lip line ~283). +26*fs
+    # ends at ~274 — below every nostril, 9px above the lip.
+    NOSE_Y0, NOSE_Y1 = int(round(nose_base[1] - 5.5 * fs)), int(round(nose_base[1] + 26.0 * fs))
+    print(f"  NOSTRIL WINDOW (follows the nose): x {NOSE_X0}..{NOSE_X1}  y {NOSE_Y0}..{NOSE_Y1} (+driftY)")
     print(f"  ANCHOR e-heavy nose: scale {s:.3f} centre ({cx:.1f},{cy:.1f}) NCC {ncc:.4f}")
     print(f"  CROP render px: x={cx0c:.1f} y={cy0c:.1f} w={cw:.1f} h={ch:.1f} (k={k:.4f}); "
           f"clamped by ({cx0c - cx0:+.1f},{cy0c - cy0:+.1f}) -> nose lands at "
@@ -183,12 +223,63 @@ def main():
                         interpolation=cv2.INTER_AREA).astype(np.float32) for j in src_idx]
     # choose the window start so the raw wrap (frame need-1 -> frame 0 of the window)
     # is already as close as possible before any blending
+    # per-source-frame head motion (render px), for --window-by calm
+    motion = None
+    frontal = None
+    if a.window_by == "frontal":
+        # per-source-frame multi-scale NCC of the render's own frame-0 nose; the
+        # window that keeps the most frames above the pose floor wins.
+        nx, ny = int(round(cx - tpl.shape[1] * s / 2)), int(round(cy - tpl.shape[0] * s / 2))
+        nw_, nh_ = int(round(tpl.shape[1] * s)), int(round(tpl.shape[0] * s))
+        own0 = g0[ny:ny + nh_, nx:nx + nw_]
+        scs = {round(float(sc), 2): cv2.resize(own0, (max(8, int(round(nw_ * sc))), max(8, int(round(nh_ * sc)))),
+                                               interpolation=cv2.INTER_AREA if sc < 1 else cv2.INTER_CUBIC)
+               for sc in np.arange(0.92, 1.081, 0.02)}
+        conf_all = []
+        for fr in frames:
+            g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+            x0_, y0_ = max(0, nx - 80), max(0, ny - 80)
+            win_ = g[y0_:min(h, ny + nh_ + 80), x0_:min(w, nx + nw_ + 80)]
+            bm = -2.0
+            for t in scs.values():
+                if win_.shape[0] < t.shape[0] or win_.shape[1] < t.shape[1]:
+                    continue
+                bm = max(bm, float(cv2.minMaxLoc(cv2.matchTemplate(win_, t, cv2.TM_CCOEFF_NORMED))[1]))
+            conf_all.append(bm)
+        frontal = [conf_all[j] for j in src_idx]
+    if a.window_by == "calm":
+        nx, ny = int(round(cx - tpl.shape[1] * s / 2)), int(round(cy - tpl.shape[0] * s / 2))
+        nw_, nh_ = int(round(tpl.shape[1] * s)), int(round(tpl.shape[0] * s))
+        own0 = g0[ny:ny + nh_, nx:nx + nw_]
+        trk = []
+        for fr in frames:
+            g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
+            x0_, y0_ = max(0, nx - 80), max(0, ny - 80)
+            r = cv2.matchTemplate(g[y0_:min(h, ny + nh_ + 80), x0_:min(w, nx + nw_ + 80)], own0, cv2.TM_CCOEFF_NORMED)
+            _, mx, _, ml = cv2.minMaxLoc(r)
+            trk.append(((x0_ + ml[0]) - nx, (y0_ + ml[1]) - ny))
+        motion = [trk[j] for j in src_idx]
     best = None
     for st in range(0, n_out_total - need + 1):
         seam = float(np.mean(np.abs(small[st + need - 1] - small[st])))
-        if best is None or seam < best[0]:
-            best = (seam, st)
-    seam, st = best
+        if frontal is not None:
+            below = sum(1 for c in frontal[st:st + need] if c < 0.93)
+            score = below * 10.0 + seam
+        elif motion is not None:
+            xs = [m[0] for m in motion[st:st + need]]; ys = [m[1] for m in motion[st:st + need]]
+            rng = (max(xs) - min(xs)) + (max(ys) - min(ys))
+            score = rng * 1.0 + seam * 0.5
+        else:
+            score = seam
+        if best is None or score < best[0]:
+            best = (score, st, seam)
+    _, st, seam = best
+    if motion is not None:
+        xs = [m[0] for m in motion[st:st + need]]; ys = [m[1] for m in motion[st:st + need]]
+        print(f"  CALM WINDOW: head range dx {min(xs)}..{max(xs)} dy {min(ys)}..{max(ys)} render px over the window")
+    if frontal is not None:
+        below = sum(1 for c in frontal[st:st + need] if c < 0.93)
+        print(f"  FRONTAL WINDOW: {need - below}/{need} source frames at NCC >= 0.93 (multi-scale, vs render frame 0)")
     win = src_idx[st:st + need]                       # need frames
     print(f"  WINDOW: {need} frames from out {st} (src {win[0]}..{win[-1]}), raw wrap seam mean|d| {seam:.2f}")
     win_base = [to_base(frames[j]) for j in win]
@@ -209,15 +300,32 @@ def main():
     nw, nh = int(round(EH_NOSE[2] * BASE_NOSE_SCALE)), int(round(EH_NOSE[3] * BASE_NOSE_SCALE))
     nx0, ny0 = int(round(nose_base[0] - nw / 2)), int(round(nose_base[1] - nh / 2))
     own = gb0[ny0:ny0 + nh, nx0:nx0 + nw]
-    pad = 40
+    # MULTI-SCALE, like the bank builder's tracker: a talking head zooms slightly
+    # as it nods, and a single-scale match reads that as lost confidence. Measured
+    # on the speaking render 2026-09-22: single-scale left 145/266 frames under
+    # the 0.93 pose floor; the builder's scale-searching tracker rated 81% of the
+    # same footage frontal. Offsets are still reported at the frame-0 scale.
+    pad = 60
+    own_scales = {round(float(sc), 2): cv2.resize(own, (max(8, int(round(nw * sc))), max(8, int(round(nh * sc)))),
+                                                   interpolation=cv2.INTER_AREA if sc < 1 else cv2.INTER_CUBIC)
+                  for sc in np.arange(0.92, 1.081, 0.02)}
     dx, dy, dn = [], [], []
     for fr in base:
         g = cv2.cvtColor(fr, cv2.COLOR_BGR2GRAY)
         x0, y0 = max(0, nx0 - pad), max(0, ny0 - pad)
         x1, y1 = min(BASE_W, nx0 + nw + pad), min(BASE_H, ny0 + nh + pad)
-        r = cv2.matchTemplate(g[y0:y1, x0:x1], own, cv2.TM_CCOEFF_NORMED)
-        _, mx, _, ml = cv2.minMaxLoc(r)
-        dx.append(int((x0 + ml[0]) - nx0)); dy.append(int((y0 + ml[1]) - ny0)); dn.append(float(mx))
+        win = g[y0:y1, x0:x1]
+        bestm = (-2.0, 0, 0)
+        for sc, t in own_scales.items():
+            if win.shape[0] < t.shape[0] or win.shape[1] < t.shape[1]:
+                continue
+            r = cv2.matchTemplate(win, t, cv2.TM_CCOEFF_NORMED)
+            _, mx, _, ml = cv2.minMaxLoc(r)
+            if mx > bestm[0]:
+                # centre-based offset so a scaled template reports the same nose centre
+                bestm = (float(mx), int(round(x0 + ml[0] + t.shape[1] / 2 - (nx0 + nw / 2))),
+                         int(round(y0 + ml[1] + t.shape[0] / 2 - (ny0 + nh / 2))))
+        dn.append(bestm[0]); dx.append(bestm[1]); dy.append(bestm[2])
     # Inside the dissolve the frame is a blend of two heads (tail ~+7px, head ~0px),
     # so the template match snaps to whichever dominates and quantises 2px steps.
     # The blended mouth's centroid moves LINEARLY across a cross-fade, so a linear
@@ -249,6 +357,8 @@ def main():
         window=dict(out_start=st, out_total=n_out_total, src_first=win[0], src_last=win[-1], seam=seam),
         drift_x=dx, drift_y=dy, drift_ncc=[round(v, 4) for v in dn],
         nose_baseline_y=[None if np.isnan(v) else int(round(v)) for v in nb_y],
+        nostril_window=dict(x0=NOSE_X0, x1=NOSE_X1, y0=NOSE_Y0, y1=NOSE_Y1),
+        fit=a.fit,
         out=dict(width=BASE_W, height=BASE_H, fps=BASE_FPS, frames=BASE_FRAMES),
     )
     os.makedirs(a.out, exist_ok=True)

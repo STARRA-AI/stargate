@@ -5,6 +5,9 @@ import {
   STARRA_CLIPS,
   SPEAKING_CLIP,
   CONTINUOUS_BODY_CLIP,
+  SPEAKING_BODY_CLIP,
+  SPEAKING_BODY_HOLD_MS,
+  SPEAKING_BODY_POLL_MS,
   pickBodyClip,
   aliveShouldAdvance,
   nextQuietTicks,
@@ -21,7 +24,9 @@ import {
   anchorAt,
   applyToneOffsets,
   audioOutputDelayMs,
-  baseBoxAt,
+  bodyBoxAt,
+  bodyPatchConfidence,
+  type BodyKind,
   channelMeans,
   containRect,
   createCrossfadeGate,
@@ -183,6 +188,8 @@ export const MIN_BODY_RETRY_GAP_MS = 1500;
  * was permanent for the rest of the call, with nothing watching.
  */
 export const BODY_HEALTH_TICK_MS = 2000;
+/** How long a new mouth shape fades in over the previous one (v4 draw). */
+export const MOUTH_BLEND_MS = 80;
 export const BODY_STUCK_TICKS = 2;
 
 /**
@@ -380,7 +387,10 @@ export function StarraClipFace({
     const aliveFiles = new Set<string>(
       bodyMode === "alive"
         ? [...ALIVE_POOL, ALIVE_SPEAKING_CLIP].map((k) => STARRA_CLIPS[k].file)
-        : [],
+        : // STILL MODE HAS TWO BODIES (2026-09-22): the listening loop and the
+          // speaking loop, swapped on her speech state. Either is a legitimate
+          // landed layer, otherwise the crossfade rollback would undo every switch.
+          [CONTINUOUS_BODY_CLIP, SPEAKING_BODY_CLIP].map((k) => STARRA_CLIPS[k].file),
     );
     const layerLanded = (el: HTMLVideoElement): boolean => {
       const src = el.getAttribute("src");
@@ -768,10 +778,45 @@ export function StarraClipFace({
       }
     };
 
+    // ── THE SPEAKING BODY SWITCH (still mode) ────────────────────────────────
+    // Her voice starts -> crossfade to speak_loop (jaw, cheeks, brows, nods: the
+    // whole face talks). Her voice stops -> hold SPEAKING_BODY_HOLD_MS so a breath
+    // between sentences does not flick her back, then crossfade to base_loop.
+    // Polled at SPEAKING_BODY_POLL_MS: the 2s body heartbeat is far too slow for
+    // speech onset. Both switches go through the SAME play()/crossfade gate the
+    // alive scheduler uses, so a failed load rolls back exactly as before.
+    let speakPoll = 0;
+    let quietSince = 0;
+    let wantSpeak = false;
+    if (bodyMode !== "alive") {
+      speakPoll = window.setInterval(() => {
+        if (disposed) return;
+        const speaking = speakingRef.current;
+        const now = Date.now();
+        if (speaking) {
+          quietSince = 0;
+          if (!wantSpeak) {
+            wantSpeak = true;
+            if (playingKey !== SPEAKING_BODY_CLIP) play(SPEAKING_BODY_CLIP);
+          }
+          return;
+        }
+        if (wantSpeak) {
+          if (!quietSince) quietSince = now;
+          if (now - quietSince >= SPEAKING_BODY_HOLD_MS) {
+            wantSpeak = false;
+            quietSince = 0;
+            if (playingKey !== CONTINUOUS_BODY_CLIP) play(CONTINUOUS_BODY_CLIP);
+          }
+        }
+      }, SPEAKING_BODY_POLL_MS);
+    }
+
     startContinuousBody();
 
     return () => {
       disposed = true;
+      window.clearInterval(speakPoll);
       window.clearTimeout(fadeTimer);
       window.clearInterval(bodyWatchdog);
       bodyWatchdog = 0;
@@ -953,6 +998,12 @@ export function StarraClipFace({
     >();
     let probe: { canvas: HTMLCanvasElement; ctx: CanvasRenderingContext2D } | null = null;
     let baseMeans: [number, number, number] | null = null;
+    // mouth crossfade state (see the v4 draw)
+    let lastPickId: string | null = null;
+    let prevPickId: string | null = null;
+    let prevPick: HTMLImageElement | null = null;
+    let pickChangedAt = 0;
+    let smoothAlpha = 1;
     let baseMeansAt = 0;
     let toneOff = false;
 
@@ -1140,9 +1191,15 @@ export function StarraClipFace({
           // Paint ONLY over the clip every baseBox was measured against. Painting
           // a bank onto the wrong clip is exactly the "stuck-on mouth" defect, so
           // this gate is load-bearing.
-          if (video.getAttribute("src") !== STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file) {
-            return hide();
-          }
+          // WHICH BODY IS SHOWING decides the drift table and the confidence gate.
+          const shownSrc = video.getAttribute("src");
+          const bodyKind: BodyKind | null =
+            shownSrc === STARRA_CLIPS[CONTINUOUS_BODY_CLIP].file
+              ? "base"
+              : shownSrc === STARRA_CLIPS[SPEAKING_BODY_CLIP].file
+                ? "speak"
+                : null;
+          if (bodyKind === null) return hide();
           // The ceiling is enforced INSIDE pickVisemeFrame4: openness above the
           // bank's 0.55 clamps to the top of the real ladder instead of asking for
           // a gape that was deliberately dropped for reading as a shout.
@@ -1162,10 +1219,18 @@ export function StarraClipFace({
           // later in the loop (mean |dy| 6.0px; 56/266 frames >= 10px), which I
           // composited and LOOKED at — the mouth sits visibly low. baseBoxAt adds
           // the measured rigid head drift, and is the identity at frame 0.
-          const box = baseBoxAt(
-            pick.baseBox,
-            frameIndexAt(video.currentTime, b4.fps, BASE_LOOP_FRAMES),
-          );
+          const bodyFrame = frameIndexAt(video.currentTime, b4.fps, BASE_LOOP_FRAMES);
+          const box = bodyBoxAt(bodyKind, pick.baseBox, bodyFrame);
+          // On the speaking body a turned head (low tracker confidence) fades the
+          // patch out and lets her OWN talking mouth show — real footage — instead
+          // of a translated patch on a rotated face. The listening body is 1.
+          // Eased over a few ticks so neighbouring frames straddling the floor
+          // cannot flicker the patch; snaps to 0/1 once within 0.02.
+          const targetAlpha = bodyPatchConfidence(bodyKind, bodyFrame);
+          smoothAlpha += (targetAlpha - smoothAlpha) * 0.35;
+          if (Math.abs(targetAlpha - smoothAlpha) < 0.02) smoothAlpha = targetAlpha;
+          const bodyAlpha = smoothAlpha;
+          if (bodyAlpha <= 0.02) return hide();
           const place = patchPlacement(box, canvas.width, canvas.height);
           if (!place) return hide();
           if (!toneOff && now - baseMeansAt >= TONE_RESAMPLE_MS && insideVideo(box, video)) {
@@ -1180,7 +1245,29 @@ export function StarraClipFace({
           // Centred in the shared canvas (see patchPlacement). The rebuilt bank's
           // boxes are uniform, so this is the identity today; it stays for any
           // future mixed-size bank.
-          draw2d.drawImage(src ?? img, place.drawX, place.drawY);
+          // A CONTINUOUS MOUTH: a new shape is blended in over the previous one for
+          // MOUTH_BLEND_MS instead of snapping, so 24 real shapes read as motion
+          // rather than a slideshow. Previous at full alpha, new on top rising.
+          if (pick.id !== lastPickId) {
+            prevPick = lastPickId ? (patch.images.get(lastPickId) ?? null) : null;
+            prevPickId = lastPickId;
+            lastPickId = pick.id;
+            pickChangedAt = now;
+          }
+          const blend = Math.min(1, (now - pickChangedAt) / MOUTH_BLEND_MS);
+          if (
+            prevPick && prevPickId && blend < 1 && prevPick.complete &&
+            prevPick.naturalWidth === box.w && prevPick.naturalHeight === box.h
+          ) {
+            const prevSrc = tonedPatch(prevPickId, prevPick, box.w, box.h);
+            draw2d.globalAlpha = 1;
+            draw2d.drawImage(prevSrc ?? prevPick, place.drawX, place.drawY);
+            draw2d.globalAlpha = blend;
+            draw2d.drawImage(src ?? img, place.drawX, place.drawY);
+            draw2d.globalAlpha = 1;
+          } else {
+            draw2d.drawImage(src ?? img, place.drawX, place.drawY);
+          }
           canvas.style.transform =
             `translate(${rect.left + place.originX * rect.scale}px, ` +
             `${rect.top + place.originY * rect.scale}px) scale(${rect.scale})`;
@@ -1203,7 +1290,7 @@ export function StarraClipFace({
           // to patch. The fix is not code — it is FOOTAGE GENERATED AS ONE
           // CONTINUOUS TAKE that already contains the gestures, so the body never
           // has to blend between two clips at all.
-          canvas.style.opacity = "1";
+          canvas.style.opacity = String(bodyAlpha);
           return;
         }
 

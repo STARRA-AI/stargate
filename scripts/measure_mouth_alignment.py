@@ -162,9 +162,13 @@ assert N == len(DRIFT_X) == len(DRIFT_Y), "frame count vs drift table mismatch"
 # right edge pinned at 343 = MX1-1 on every entry — the window was clipping her
 # lips, not measuring them. All x windows shift +22; the lip ROI top follows the
 # box top (248) and the nostril band is unchanged in y (baseline measured 241..247).
-MX0, MX1 = 215, 384          # union of baseBox x-extents (216..382; box grew to 167x96 for the wider InfiniteTalk mouth)
-NOSE_X0, NOSE_X1 = 257, 347  # central band: nostrils, excluding cheek shadows
-NOSE_Y0, NOSE_Y1 = 208, 248  # frame-0 coords; rides driftY per frame
+# ★ FULL-FRAME BASE 2026-09-22 (Classic: "WE WANT HER FROM THE WAIST UP"): base_loop
+# is now the whole 768x1168 render scaled to 552x840; nose at (321.6,243.7); box
+# (248,278,152,102). Windows follow: nostril band = cut-idle-base.py's scaled window
+# (x 277..381, y 237..274), lip ROI = the box.
+MX0, MX1 = 247, 401          # union of baseBox x-extents (248..400)
+NOSE_X0, NOSE_X1 = 277, 381  # central band: nostrils, excluding cheek shadows
+NOSE_Y0, NOSE_Y1 = 237, 274  # frame-0 coords; rides driftY per frame
 
 
 def nose_baseline(img, dy: int) -> float:
@@ -193,12 +197,19 @@ def nose_baseline(img, dy: int) -> float:
 A_COEF = 0.26  # the shipped lip-chroma coefficient, build-viseme-bank-3.py:159
 
 
+# ★ KNOWN LIMIT (2026-09-22): this plain a*-chroma lip detector OVER-SEGMENTS the
+# InfiniteTalk footage — it returns the ROI edges (top/left pinned to the window on
+# 266/266 frames) rather than her vermilion, so the LIP COVERAGE section below is
+# NOT trustworthy on the current base. The anatomy test's lip constants come from
+# the bank builder's lip_mask (skin-luminance gated, windowed, component-filtered),
+# measured in scripts/build-viseme-bank-3.py terms. The NOSE BASELINE section here
+# is still authoritative (rigid to 0px on the shipped base).
 def lip_box(img, dy: int):
     """Lip bbox + corners via the SHIPPED Lab a* chroma method
     (build-viseme-bank-3.py lip_mask), on the mouth region of the base frame.
     The ROI top starts in the bright philtrum band (above the vermilion, below
     the nostril shadows) and rides driftY like the nose window."""
-    y0, y1, x0, x1 = 248 + dy, 344 + dy, MX0, MX1   # box top 248, box bottom 344 (167x96 box)
+    y0, y1, x0, x1 = 278 + dy, 380 + dy, MX0, MX1   # box top 278, box bottom 380 (152x102 box)
     roi = img[y0:y1, x0:x1]
     lab = cv2.cvtColor(roi, cv2.COLOR_BGR2LAB).astype(np.float32)
     A = lab[:, :, 1]

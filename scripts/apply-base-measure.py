@@ -32,7 +32,7 @@ FRAMES = 266
 def fmt_rows(vals, per=22, indent="  "):
     rows = []
     for i in range(0, len(vals), per):
-        rows.append(indent + ", ".join(str(v) for v in vals[i:i + per]) + ",")
+        rows.append(indent + ", ".join((f"{v:.3f}" if isinstance(v, float) else str(v)) for v in vals[i:i + per]) + ",")
     return "\n".join(rows)
 
 
@@ -54,9 +54,37 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--measure", required=True)
     ap.add_argument("--write", action="store_true")
+    ap.add_argument("--target", choices=["base", "speak"], default="base",
+                    help="base = BASE_DRIFT_X/Y + the test's NOSE_BASELINE_Y (the listening body); "
+                         "speak = SPEAK_DRIFT_X/Y + SPEAK_CONF (the speaking body; its patch is "
+                         "confidence-gated, so the tracker's NCC ships with the offsets).")
     a = ap.parse_args()
     m = json.load(open(a.measure))
     dx, dy, nb = m["drift_x"], m["drift_y"], m["nose_baseline_y"]
+
+    if a.target == "speak":
+        conf = [round(float(c), 3) for c in m["drift_ncc"]]
+        for name, arr in (("drift_x", dx), ("drift_y", dy), ("drift_ncc", conf)):
+            if len(arr) != FRAMES:
+                sys.exit(f"refusing: {name} has {len(arr)} entries, need {FRAMES}")
+        if dx[0] != 0 or dy[0] != 0:
+            sys.exit(f"refusing: frame 0 drift must be (0,0), got ({dx[0]},{dy[0]})")
+        if any(not (0.0 <= c <= 1.0) for c in conf):
+            sys.exit("refusing: a confidence value is outside 0..1")
+        sync = open(SYNC, encoding="utf-8").read()
+        sync2, n1 = replace_array(sync, "SPEAK_DRIFT_X", dx, r"const SPEAK_DRIFT_X: readonly number\[\] = \[")
+        sync2, n2 = replace_array(sync2, "SPEAK_DRIFT_Y", dy, r"const SPEAK_DRIFT_Y: readonly number\[\] = \[")
+        sync2, n3 = replace_array(sync2, "SPEAK_CONF", conf, r"const SPEAK_CONF: readonly number\[\] = \[")
+        below = sum(1 for c in conf if c < 0.93)
+        print(f"SPEAK_DRIFT_X: {n1} -> {len(dx)} entries, range {min(dx)}..{max(dx)}")
+        print(f"SPEAK_DRIFT_Y: {n2} -> {len(dy)} entries, range {min(dy)}..{max(dy)}")
+        print(f"SPEAK_CONF   : {n3} -> {len(conf)} entries, {len(conf) - below}/{len(conf)} at >= 0.93 (patch shown), min {min(conf)}")
+        if not a.write:
+            print("(dry run — pass --write to rewrite viseme-sync.ts)")
+            return
+        open(SYNC, "w", encoding="utf-8").write(sync2)
+        print(f"wrote {os.path.relpath(SYNC, ROOT)}")
+        return
 
     for name, arr in (("drift_x", dx), ("drift_y", dy), ("nose_baseline_y", nb)):
         if len(arr) != FRAMES:

@@ -24,6 +24,11 @@ export const STARRA_CLIPS = {
   // MEASURED on the shipped file: 552x720, 24fps, 266 frames, 11.083333s, no
   // audio stream (`ffprobe` 2026-07-30). 266/24*1000 = 11083ms.
   body_base: { file: "/avatar/body/base_loop.mp4", durationMs: 11083, loop: true },
+  // THE SPEAKING BODY (2026-09-22). Cut from an InfiniteTalk render of her
+  // actually talking — jaw, cheeks, brows, nods — 552x840 @24fps, 266 frames,
+  // the same geometry as body_base so the mouth bank composites onto either.
+  // StarraClipFace crossfades to it while she speaks and back when she stops.
+  body_speak: { file: "/avatar/body/speak_loop.mp4", durationMs: 11083, loop: true },
   // Speaking: her talking clip loops while she produces audio (mouth moving).
   talking: { file: "/avatar/clips/talking.mp4", durationMs: 11800, loop: true },
   // Idle POOL members — each plays once, then the face crossfades to the next.
@@ -127,6 +132,13 @@ export const SPEAKING_CLIP: StarraClipKey = "talking";
  * backoff — never a switch to another clip (Classic's order, 2026-07-30).
  */
 export const CONTINUOUS_BODY_CLIP: StarraClipKey = "body_base";
+/** The body shown while she speaks (still mode). Same size, fps and length as body_base. */
+export const SPEAKING_BODY_CLIP: StarraClipKey = "body_speak";
+/** How long she keeps the speaking body after her voice stops, so a breath between
+ *  sentences does not flick her back to listening. */
+export const SPEAKING_BODY_HOLD_MS = 700;
+/** How often the speech state is polled for the body switch (the 2s heartbeat is too slow). */
+export const SPEAKING_BODY_POLL_MS = 120;
 
 /**
  * THE ALIVE POOL — she actually moves.

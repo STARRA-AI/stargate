@@ -25,11 +25,11 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BASE_LOOP = os.path.join(ROOT, "public/avatar/body/base_loop.mp4")
-BASE_W, BASE_H = 552, 720
+BASE_W, BASE_H = 552, 840   # full-frame waist-up base (2026-09-22); was 552x720
 
 # The face window each tile shows: mouth box (212,242,131,78) plus nose above and
 # chin below, so a patch that cuts into her nose is visible rather than cropped out.
-CROP = (190, 168, 240, 216)  # x, y, w, h in base_loop pixels (re-centred 2026-09-22 for the InfiniteTalk base: nose at x~296, box 216..383)
+CROP = (200, 200, 250, 230)  # x, y, w, h in base px: nose to chin around the 152x102 box at (248,278)
 TILE_SCALE = 1.6
 LABEL_H = 34
 COLS = 5

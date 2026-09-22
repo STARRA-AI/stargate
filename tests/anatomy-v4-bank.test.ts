@@ -481,33 +481,35 @@ describe("v4 placement — the patch is centred under the mask and lands on its 
 // 19-36px ABOVE this baseline (solid mask alpha up to 17.3px above it, 266/266
 // frames) — the patch visibly cut into her nose.
 const NOSE_BASELINE_Y: readonly number[] = [
-  243, 243, 244, 244, 244, 244, 244, 244, 244, 244, 245, 245, 245, 245, 246, 246, 246, 246, 246, 247, 247, 247,
-  247, 247, 247, 247, 247, 246, 246, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 244, 244, 244, 244,
-  243, 243, 243, 243, 243, 243, 243, 243, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242,
-  242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 243, 243, 243, 244, 244, 245, 245, 245, 245, 245, 245, 244,
-  244, 244, 244, 244, 244, 244, 244, 244, 245, 245, 245, 244, 244, 244, 244, 244, 244, 244, 244, 244, 243, 243,
-  243, 243, 243, 243, 243, 243, 243, 243, 243, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 243, 243,
-  243, 243, 243, 243, 243, 243, 243, 243, 243, 243, 243, 244, 245, 245, 245, 246, 246, 246, 246, 245, 246, 246,
-  246, 246, 246, 246, 246, 246, 247, 247, 247, 247, 247, 247, 246, 246, 246, 246, 245, 245, 245, 245, 245, 245,
-  245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 244, 244, 244, 244,
-  243, 243, 243, 243, 243, 242, 242, 242, 242, 242, 242, 242, 242, 242, 242, 241, 241, 241, 242, 242, 242, 242,
-  243, 243, 243, 243, 244, 244, 244, 244, 245, 245, 245, 245, 245, 245, 245, 245, 245, 245, 244, 244, 244, 244,
-  244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 244, 243, 243, 242, 242, 242, 242, 243,
-  243, 243,
+  274, 274, 274, 274, 274, 274, 274, 274, 275, 275, 275, 275, 275, 276, 276, 276, 276, 276, 277, 277, 277, 277,
+  277, 277, 277, 277, 277, 276, 276, 276, 275, 275, 276, 276, 276, 275, 275, 275, 275, 275, 275, 275, 274, 274,
+  274, 274, 274, 274, 274, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273,
+  273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 273, 274, 274, 274, 275, 275, 275, 275, 275, 275, 275, 275,
+  275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274,
+  274, 274, 273, 273, 273, 273, 273, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274,
+  274, 274, 273, 273, 273, 273, 273, 273, 274, 274, 274, 274, 275, 275, 275, 276, 276, 276, 276, 276, 276, 276,
+  276, 277, 277, 277, 277, 277, 277, 277, 277, 277, 277, 277, 276, 276, 276, 276, 276, 275, 275, 275, 275, 275,
+  275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 274, 274,
+  274, 274, 273, 273, 273, 273, 273, 273, 273, 273, 273, 272, 272, 272, 272, 272, 272, 272, 273, 273, 273, 274,
+  274, 274, 274, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 275, 274, 274,
+  274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274, 274,
+  274, 274,
 ];
 // The measured lip geometry (drift-relative, base_loop 552x720 coords),
 // MEASURED 2026-09-22 with the bank builder's own lip_mask (skin-luminance gated,
 // windowed, component-filtered — the detector that cut the bank; the alignment
 // tool's plain a* threshold over-segments this footage and was NOT used):
-//   base's resting lips   y 256..296 (top is 256 on all 266 frames), x 267..341
-//   patches' OWN lips     y 256..318,                                x 253..348
-// InfiniteTalk articulates wider than the old take (94px vs 61px across the
-// widest shape), which is why the box grew to 167x96: the mask's SOLID ellipse
-// must hold the corners and the lower lip of the open vowels, or they render
-// half-faded. The box must hold all of it, with feather room below.
-const LIP_TOP_MIN = 255;
-const PATCH_LIP_BOTTOM_MAX = 318;
-const PATCH_LIP_X = { min: 253, max: 348 };
+// FULL-FRAME BASE (2026-09-22, "WE WANT HER FROM THE WAIST UP"): the whole
+// 768x1168 render scaled to 552x840, nose at (321.6, 243.7):
+//   base's resting lips   y 288.. (top is 288 on all 266 frames),  x 295..360
+//   patches' OWN lips     y 288..353,                               x 284..364
+// InfiniteTalk articulates wider than the old take, which is why the box is
+// 152x102 at (248,278): the mask's SOLID ellipse must hold the corners and the
+// lower lip of the open vowels, or they render half-faded. The box must hold
+// all of it, with feather room below.
+const LIP_TOP_MIN = 287;
+const PATCH_LIP_BOTTOM_MAX = 353;
+const PATCH_LIP_X = { min: 284, max: 364 };
 
 describe("v4 anatomy invariant — the patch clears her nose and holds her lips", () => {
   it("every entry shares ONE uniform baseBox (mask geometry cannot flicker)", () => {

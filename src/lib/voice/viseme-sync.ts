@@ -1106,33 +1106,33 @@ export const BASE_LOOP_FPS = 24;
  * changes; baseBoxAt is then the identity.
  */
 const BASE_DRIFT_X: readonly number[] = [
-  0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4, 4,
-  5, 5, 5, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
-  3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4,
-  4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 5, 5, 6, 6, 7, 7, 7, 7, 8, 8, 8,
-  8, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7, 6, 5, 5, 4, 4, 3, 3, 3, 2, 2, 2,
+  0, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 4, 4,
+  4, 4, 4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+  3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 3, 3, 3, 3, 3, 3, 3, 3, 3,
+  3, 3, 3, 3, 3, 3, 3, 3, 3, 4, 4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7,
+  7, 7, 7, 7, 8, 8, 7, 7, 7, 6, 6, 6, 5, 4, 4, 3, 3, 2, 2, 2, 2, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1,
-  1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 3, 3, 4,
-  4, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 7, 7, 7, 6, 6, 6, 5, 5, 5, 4, 4,
-  4, 4, 4, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2,
-  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
-  2, 2, 3, 3, 3, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 7, 7, 7, 8, 8, 8, 8,
-  9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 9, 8, 8, 8, 8, 7, 6, 6, 5, 4, 3, 2,
-  2, 1,
+  1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 2, 2, 3, 3, 3,
+  4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 6, 6, 6, 6, 5, 5, 5, 4, 4, 4, 4,
+  4, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 2, 1, 1,
+  1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 2,
+  2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 5, 5, 5, 5, 6, 6, 6, 6, 7, 7, 7, 8,
+  8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 8, 7, 7, 7, 6, 6, 5, 4, 4, 3, 2,
+  1, 1,
 ];
 const BASE_DRIFT_Y: readonly number[] = [
-  0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 3, 4,
-  4, 4, 4, 4, 3, 2, 2, 2, 2, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-  0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-  -1, -1, -1, -1, -2, -2, -2, -1, -1, -1, -1, 0, 0, 0, 1, 1, 1, 2, 1, 1, 1, 1,
+  0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 1, 2, 2, 2, 2, 2, 3, 3, 3, 3,
+  3, 3, 3, 3, 3, 2, 2, 2, 1, 1, 2, 2, 2, 1, 1, 1, 1, 1, 1, 1, 0, 0,
+  0, 0, 0, 0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+  -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-  0, -1, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 1, 1, 2, 2, 2, 2, 2, 2, 2, 2,
-  3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1,
+  0, 0, -1, -1, -1, -1, -1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, -1, -1, -1, -1, -1, -1, 0, 0, 0, 0, 1, 1, 1, 2, 2, 2, 2, 2, 2, 2,
+  2, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 3, 2, 2, 2, 2, 2, 1, 1, 1, 1, 1,
   1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-  0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2, -2, -2, -2, -1, -1, -1, 0,
+  0, 0, -1, -1, -1, -1, -1, -1, -1, -1, -1, -2, -2, -2, -2, -2, -2, -2, -1, -1, -1, 0,
   0, 0, 0, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 0, 0,
-  0, 0, 0, 0, 1, 1, 1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+  0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
   0, 0,
 ];
 
@@ -1149,6 +1149,131 @@ export function baseDriftAt(frameIndex: number): { dx: number; dy: number } {
   if (!(i > 0)) i = 0;
   if (i >= n) i = n - 1;
   return { dx: BASE_DRIFT_X[i], dy: BASE_DRIFT_Y[i] };
+}
+
+/**
+ * THE SECOND BODY (2026-09-22). Classic's goal is a face that is alive like a
+ * person's. base_loop.mp4 is now cut from an InfiniteTalk render of her LISTENING
+ * (blinks, breath, small head motion); speak_loop.mp4 from a render of her
+ * SPEAKING (jaw, cheeks, brows, nods — the whole face talking). StarraClipFace
+ * crossfades between them on her speech state, and the mouth patch composites
+ * onto whichever is showing — so each body needs its own drift table.
+ *
+ * The speaking body moves for real (up to ~10px/frame on nods) and turns her
+ * head out of the frontal pose on a minority of frames. Translation follows nods
+ * correctly; it cannot follow rotation. So the speaking table also carries the
+ * tracker's per-frame CONFIDENCE, and the patch fades with it: below the pose
+ * floor her OWN talking mouth — real footage — shows through instead of a
+ * mis-registered patch. Measured on the shipped window: 206/266 frames at
+ * NCC >= 0.93 (multi-scale tracker), the rest are turns.
+ *
+ * Both tables are MEASURED by scripts/cut-idle-base.py and written by
+ * scripts/apply-base-measure.py; nothing here is typed by hand.
+ */
+export type BodyKind = "base" | "speak";
+
+const SPEAK_DRIFT_X: readonly number[] = [
+  0, 0, -2, -2, -2, -2, -3, -3, -3, -3, -2, -2, 1, 4, 6, 8, 10, 10, 8, 6, 5, 4,
+  4, 4, 4, 4, 4, 4, 4, 4, 4, 4, 5, 6, 6, 7, 7, 8, 9, 10, 12, 14, 16, 18,
+  18, 16, 14, 10, 8, 6, 6, 4, 4, 3, 2, 0, 0, -2, -4, -6, -6, -7, -8, -7, -6, -6,
+  -6, -6, -6, -6, -6, -6, -6, -6, -6, -4, -3, -1, 2, 4, 6, 10, 14, 16, 18, 18, 18, 18,
+  18, 18, 16, 14, 12, 10, 9, 8, 7, 7, 6, 5, 5, 5, 6, 8, 9, 9, 9, 8, 6, 5,
+  4, 2, 1, 0, 0, -2, -2, -2, -2, -2, -2, -2, -2, 0, 2, 4, 6, 8, 8, 10, 10, 12,
+  14, 14, 12, 8, 4, 1, 0, 0, 0, 0, 0, -1, -1, -2, -2, -2, -2, -2, -2, -1, 0, 4,
+  6, 6, 6, 8, 8, 8, 8, 6, 4, 4, 4, 3, 2, 2, 1, 0, 0, 0, 0, -1, 0, 1,
+  3, 5, 7, 7, 7, 5, 2, -1, -4, -6, -8, -8, -10, -10, -10, -10, -10, -10, -9, -8, -8, -7,
+  -6, -4, -3, -2, 0, 2, 2, 4, 4, 4, 2, 0, -1, -2, -2, -3, -2, -2, -2, -1, 0, 0,
+  2, 2, 2, 0, -1, -2, -2, -2, -2, -2, 0, 3, 6, 8, 4, 2, 0, 0, 0, 1, 2, 2,
+  3, 3, 2, 1, 0, -1, -1, -2, -2, -2, -2, -3, -3, -4, -4, -4, -3, -3, -2, -2, -2, -1,
+  -1, 0,
+];
+const SPEAK_DRIFT_Y: readonly number[] = [
+  0, -2, -2, -4, -4, -4, -5, -5, -5, -6, -8, -10, -12, -13, -14, -15, -15, -13, -12, -10, -8, -4,
+  -1, 1, 3, 3, 3, 3, 2, 0, -1, -3, -6, -10, -14, -18, -21, -24, -24, -25, -23, -20, -15, -16,
+  -18, -21, -23, -23, -23, -22, -21, -19, -16, -14, -12, -8, -4, 0, 2, 3, 2, 2, 2, 3, 4, 4,
+  4, 4, 4, 4, 4, 4, 4, 4, 3, 0, -3, -8, -13, -17, -22, -27, -31, -33, -35, -35, -34, -33,
+  -30, -27, -17, -12, -9, -8, -7, -7, -8, -10, -12, -14, -14, -16, -16, -17, -16, -14, -8, -2, 2, 6,
+  7, 8, 8, 8, 8, 8, 8, 8, 8, 8, 7, 6, 4, 2, -2, -8, -14, -19, -23, -26, -27, -27,
+  -26, -24, -21, -18, -12, -7, 0, 2, 4, 4, 4, 5, 5, 4, 4, 4, 3, 2, 2, 1, 1, -3,
+  -8, -13, -17, -19, -21, -22, -22, -21, -19, -17, -16, -13, -10, -8, -7, -6, -5, -4, -4, -4, -4, -5,
+  -7, -8, -10, -10, -8, -8, -6, -4, -2, 0, 5, 6, 8, 8, 8, 8, 8, 6, 6, 6, 4, 3,
+  1, 0, -2, -6, -10, -15, -19, -24, -26, -27, -28, -29, -28, -25, -22, -18, -15, -12, -10, -8, -6, -2,
+  0, 2, 2, 4, 4, 4, 4, 4, 4, 4, 2, -1, -7, -14, -22, -24, -22, -19, -16, -11, -7, -4,
+  0, 2, 3, 3, 3, 3, 2, 2, 2, 2, 2, 3, 3, 2, 2, 2, 2, 1, 1, 1, 1, 1,
+  0, 0,
+];
+/** Multi-scale nose-template NCC vs the speaking loop's frame 0, per frame. */
+const SPEAK_CONF: readonly number[] = [
+  1.000, 0.996, 0.994, 0.991, 0.988, 0.985, 0.986, 0.986, 0.983, 0.983, 0.979, 0.973, 0.959, 0.935, 0.918, 0.923, 0.929, 0.936, 0.943, 0.945, 0.951, 0.951,
+  0.954, 0.957, 0.958, 0.962, 0.972, 0.969, 0.968, 0.962, 0.961, 0.943, 0.940, 0.942, 0.935, 0.921, 0.909, 0.894, 0.885, 0.882, 0.888, 0.899, 0.911, 0.892,
+  0.884, 0.891, 0.894, 0.899, 0.906, 0.914, 0.926, 0.935, 0.938, 0.949, 0.956, 0.968, 0.977, 0.973, 0.969, 0.969, 0.969, 0.977, 0.981, 0.980, 0.980, 0.983,
+  0.983, 0.983, 0.983, 0.984, 0.983, 0.982, 0.981, 0.983, 0.982, 0.979, 0.965, 0.953, 0.944, 0.941, 0.923, 0.887, 0.846, 0.812, 0.798, 0.797, 0.806, 0.826,
+  0.851, 0.879, 0.926, 0.947, 0.956, 0.962, 0.964, 0.964, 0.962, 0.958, 0.955, 0.950, 0.947, 0.939, 0.939, 0.944, 0.943, 0.948, 0.956, 0.954, 0.957, 0.956,
+  0.954, 0.960, 0.963, 0.966, 0.970, 0.975, 0.977, 0.976, 0.975, 0.973, 0.973, 0.972, 0.973, 0.970, 0.959, 0.944, 0.923, 0.896, 0.871, 0.844, 0.836, 0.841,
+  0.856, 0.883, 0.915, 0.937, 0.953, 0.963, 0.975, 0.978, 0.978, 0.979, 0.977, 0.977, 0.977, 0.979, 0.979, 0.977, 0.976, 0.980, 0.982, 0.964, 0.951, 0.952,
+  0.950, 0.935, 0.916, 0.912, 0.909, 0.912, 0.914, 0.926, 0.927, 0.932, 0.945, 0.953, 0.959, 0.961, 0.964, 0.967, 0.967, 0.970, 0.970, 0.967, 0.965, 0.962,
+  0.953, 0.948, 0.950, 0.954, 0.956, 0.959, 0.959, 0.952, 0.963, 0.980, 0.981, 0.981, 0.980, 0.980, 0.978, 0.979, 0.978, 0.977, 0.976, 0.977, 0.974, 0.973,
+  0.973, 0.972, 0.955, 0.947, 0.940, 0.936, 0.918, 0.910, 0.901, 0.890, 0.886, 0.902, 0.906, 0.919, 0.934, 0.940, 0.947, 0.951, 0.958, 0.971, 0.977, 0.976,
+  0.978, 0.979, 0.979, 0.978, 0.977, 0.975, 0.978, 0.977, 0.976, 0.976, 0.977, 0.964, 0.940, 0.935, 0.919, 0.924, 0.938, 0.942, 0.948, 0.955, 0.965, 0.979,
+  0.982, 0.984, 0.983, 0.986, 0.984, 0.982, 0.982, 0.984, 0.985, 0.983, 0.983, 0.982, 0.979, 0.979, 0.976, 0.976, 0.955, 0.918, 0.859, 0.807, 0.884, 0.948,
+  0.982, 0.995,
+];
+
+/**
+ * Above FULL the patch is fully shown; at or below FLOOR it is hidden. The ramp is
+ * deliberately NARROW: composited at 50% on a tilted frame (confidence 0.92) the
+ * patch read as a translucent seam — looked at 2026-09-22 — so a frame is either
+ * her driven mouth or her own talking mouth, almost never a blend of the two. The
+ * floor is the pose floor the bank itself is gated on.
+ */
+export const SPEAK_CONF_FULL = 0.95;
+export const SPEAK_CONF_FLOOR = 0.93;
+
+function clampIndex(n: number, frameIndex: number): number {
+  if (Number.isNaN(frameIndex)) return 0;
+  let i = Math.floor(frameIndex);
+  if (!(i > 0)) i = 0;
+  if (i >= n) i = n - 1;
+  return i;
+}
+
+/** Mouth drift for either body. TOTAL, same clamping rules as baseDriftAt. */
+export function bodyDriftAt(kind: BodyKind, frameIndex: number): { dx: number; dy: number } {
+  if (kind === "base") return baseDriftAt(frameIndex);
+  const n = SPEAK_DRIFT_X.length;
+  if (n === 0 || n !== SPEAK_DRIFT_Y.length) return { dx: 0, dy: 0 };
+  const i = clampIndex(n, frameIndex);
+  return { dx: SPEAK_DRIFT_X[i], dy: SPEAK_DRIFT_Y[i] };
+}
+
+/**
+ * How much of the patch to show on this body frame, 0..1. The listening body is
+ * frontal on every frame (measured NCC >= 0.93 throughout), so it is always 1.
+ * The speaking body ramps between SPEAK_CONF_FLOOR and SPEAK_CONF_FULL. TOTAL:
+ * an empty table or a non-finite value means "show it" — never a NaN opacity.
+ */
+export function bodyPatchConfidence(kind: BodyKind, frameIndex: number): number {
+  if (kind === "base") return 1;
+  const n = SPEAK_CONF.length;
+  if (n === 0) return 1;
+  const c = SPEAK_CONF[clampIndex(n, frameIndex)];
+  if (!Number.isFinite(c)) return 1;
+  if (c >= SPEAK_CONF_FULL) return 1;
+  if (c <= SPEAK_CONF_FLOOR) return 0;
+  return (c - SPEAK_CONF_FLOOR) / (SPEAK_CONF_FULL - SPEAK_CONF_FLOOR);
+}
+
+/** An entry's paste box, moved onto the frame of whichever body is on screen. */
+export function bodyBoxAt(kind: BodyKind, box: VisemeBaseBox, frameIndex: number): VisemeBaseBox {
+  const d = bodyDriftAt(kind, frameIndex);
+  const x = box.x + d.dx;
+  const y = box.y + d.dy;
+  return {
+    x: Number.isFinite(x) ? x : box.x,
+    y: Number.isFinite(y) ? y : box.y,
+    w: box.w,
+    h: box.h,
+  };
 }
 
 /** An entry's paste box, moved onto the base frame actually on screen. */
