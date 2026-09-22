@@ -120,6 +120,12 @@ import numpy as np
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC_E = "/Users/work/Desktop/e heavy.mp4"
+# ★ THE MACHINE CHANGED (2026-09-22). Every path above was written on the old
+# box, whose home was /Users/work; this one is /Users/starrallc, so the script
+# exited "source footage not found" and could not be run at all. The original
+# 768x1168 / 24fps / 361-frame file is here, ffprobed and matching byte-for-byte
+# in shape to what `coverage.framesMeasured` in the shipped bank records.
+SRC_E_LOCAL = "/Users/starrallc/STARGATE/STARRA IS ALIVE!!!/e heavy.mp4"
 # The original was deleted from the Desktop by something outside the build
 # (documented in scripts/build-anatomy-assets.py); its exact pixels survive as a
 # bit-exact FFV1/RGB recovery (max abs diff 0 on read-back, per that file's
@@ -145,6 +151,13 @@ def arg(name, dflt):
 OUT_DIR = os.path.abspath(os.path.join(
     ROOT, arg("--out", "public/avatar/visemes3" if V4 else "public/avatar/visemes2")))
 
+# The public URL the bank's `file` fields point at. It MUST follow --out: it was
+# hardcoded to "/avatar/visemes3/", so building a candidate bank anywhere else
+# wrote the PNGs to the new directory and then told the runtime to load them from
+# the old one — a silently wrong bank that looks fine on disk.
+OUT_URL = "/" + os.path.relpath(
+    OUT_DIR, os.path.join(ROOT, "public")).replace(os.sep, "/")
+
 # ── safety rails ──────────────────────────────────────────────────────────────
 if not OUT_DIR.startswith(ROOT + os.sep):
     sys.exit(f"refusing: --out must stay inside the repo (got {OUT_DIR})")
@@ -152,10 +165,15 @@ for bad in ("public/avatar/clips", "public/avatar/visemes/"):
     if bad in (OUT_DIR.replace("\\", "/") + "/"):
         sys.exit(f"refusing: --out must never point into {bad} (read-only / live)")
 if not os.path.exists(SRC_E):
-    if os.path.exists(SRC_E_RECOVERY):
-        SRC_E = SRC_E_RECOVERY
+    for cand in (SRC_E_LOCAL, SRC_E_RECOVERY):
+        if os.path.exists(cand):
+            SRC_E = cand
+            break
     else:
-        sys.exit(f"refusing: source footage not found: {SRC_E} (and no recovery)")
+        sys.exit(
+            "refusing: source footage not found. Tried:\n  "
+            + "\n  ".join((SRC_E, SRC_E_LOCAL, SRC_E_RECOVERY))
+        )
 
 # ── reference geometry, MEASURED on e heavy frame 0 (full-frame px) ────────────
 W, H = 768, 1168
@@ -597,10 +615,30 @@ def label_for(o, r):
 # toward 0.5, so with only 3 columns a short "oo" (smoothed r~0.7) fell BETWEEN
 # neutral and pucker. Intermediate real frames give it a real target.
 V4_BOX = (212, 242, 131, 78)
-V4_OPEN_RUNGS = [0.00, 0.25, 0.50]
 V4_ROUND_COLS = [("spread", 0.05), ("semi-spread", 0.275), ("neutral", 0.50),
                  ("semi-round", 0.725), ("rounded", 0.95)]
-V4_CEILING = 0.55
+
+# ★ --full-range (2026-09-22): ask for the WHOLE openness ladder.
+#
+# The shipped v4 bank tops out at openness 0.524 and it was NOT because the
+# footage lacks open mouths. Measured this session on the same `e heavy` source:
+#   openness 0.6-0.8 : 34 frames (34 pose-eligible)
+#   openness 0.8-1.0 :  7 frames ( 7 pose-eligible)   max aperture 48px
+# The full OPEN_RUNGS grid resolves real frames at 0.738, 0.762, 0.952 and 1.000.
+# v4 simply never ASKED: V4_OPEN_RUNGS stopped at 0.50 and V4_CEILING dropped
+# anything above 0.55. And viseme-sync.ts:1268 clamps the RUNTIME request to that
+# same ceiling, so nearest-neighbour could never reach past half either.
+#
+# The 0.55 ceiling was not arbitrary — the clampOpenness docstring records that
+# wider entries "read as a SHOUT when composited (verified by eye)". But that
+# judgement predates THIS builder's fix: the v4 rebuild exists because every
+# earlier entry was registered individually and slid up into her nose. A patch
+# that was cutting into her nose would read wrong at any aperture. So the wide
+# range is built behind a flag, to a separate --out, and looked at before it
+# ships anywhere near her face.
+FULL_RANGE = "--full-range" in sys.argv
+V4_OPEN_RUNGS = [0.00, 0.25, 0.50, 0.75, 1.00] if FULL_RANGE else [0.00, 0.25, 0.50]
+V4_CEILING = 1.0 if FULL_RANGE else 0.55
 
 
 def v4_rebuild():
@@ -690,7 +728,7 @@ def v4_rebuild():
         fn = f"{ident}.png"
         if WRITE:
             cv2.imwrite(os.path.join(OUT_DIR, fn), crops[f])
-        e = dict(id=ident, file=f"/avatar/visemes3/{fn}",
+        e = dict(id=ident, file=f"{OUT_URL}/{fn}",
                  openness=round(float(openness[f]), 4),
                  roundness=round(float(roundness[f]), 4),
                  sourceFrame=int(f),

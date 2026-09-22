@@ -389,10 +389,18 @@ export function resetTextVisemes(): void {
 export const TEXT_VISEME_REF_OPENNESS = 0.4;
 
 /**
- * Ceiling on that factor. `a` is 0.9 nominal, i.e. 2.25x the reference — and
- * the bank tops out at 0.55 anyway (see viseme-sync's opennessCeiling), so an
- * unbounded factor only pushes every open vowel into the same clamped top
- * frame and flattens the very distinction this module exists to draw.
+ * Ceiling on that factor. `a` is 0.9 nominal, i.e. 2.25x the reference, so an
+ * unbounded factor would push every open vowel onto the same top frame and
+ * flatten the very distinction this module exists to draw.
+ *
+ * ★ THE SECOND HALF OF THIS COMMENT USED TO READ "and the bank tops out at 0.55
+ * anyway". IT NO LONGER DOES — the 2026-09-22 --full-range rebuild took the bank
+ * to openness 1.0 and viseme-sync's opennessCeiling with it. The 1.8 value is
+ * KEPT unchanged on purpose: at a typical envelope it now asks for ~0.72, which
+ * lands on a genuinely open real frame instead of the old clamped half-open one,
+ * and moving the bank and the gain in the same change would make it impossible
+ * to attribute what altered her mouth. Raise it only with the contact sheet
+ * (scripts/viseme-contact-sheet.py) open.
  */
 export const TEXT_VISEME_MAX_SHAPE_GAIN = 1.8;
 

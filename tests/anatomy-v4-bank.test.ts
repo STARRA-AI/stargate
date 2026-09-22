@@ -68,10 +68,15 @@ describe("v4 bank — the shipped visemes3/bank.json parses", () => {
     assert.ok(bank4, "public/avatar/visemes3/bank.json must parse as v4");
     assert.equal(bank4.version, 4);
     assert.equal(bank4.base, "/avatar/body/base_loop.mp4");
-    // 16 = closure + 15 grid entries: FIVE roundness columns x three openness
-    // rungs (2026-07-30 rebuild — intermediate rounding shapes so the smoothed
-    // audio roundness axis lands on real frames instead of jumping to a pucker).
-    assert.equal(bank4.frames.length, 16);
+    // 25 = closure + 24 distinct grid entries: FIVE roundness columns x FIVE
+    // openness rungs (2026-09-22 --full-range rebuild), minus the cells that
+    // resolved to a frame another cell already claimed.
+    //
+    // It was 16 — five roundness columns x THREE openness rungs — and that is
+    // why her mouth read as pasted on. The footage was never the limit: `e heavy`
+    // holds 34 pose-eligible frames at openness 0.6-0.8 and 7 more at 0.8-1.0,
+    // measured by the builder this session. v4 simply stopped ASKING at 0.50.
+    assert.equal(bank4.frames.length, 25);
     assert.ok(bank4.width > 0 && bank4.height > 0 && bank4.fps > 0);
   });
 
@@ -90,7 +95,14 @@ describe("v4 bank — the shipped visemes3/bank.json parses", () => {
 
   it("reads opennessCeiling and closedId from the FILE, not from a constant", () => {
     assert.ok(bank4);
-    assert.equal(bank4.opennessCeiling, 0.55);
+    // 1.0 since 2026-09-22. The old 0.55 was set because wide entries "read as a
+    // SHOUT when composited (verified by eye)" — but that judgement predates the
+    // v4 registration fix, when every patch was registered individually and slid
+    // up into her nose. Re-judged on a contact sheet after the fix
+    // (scripts/viseme-contact-sheet.py): the 0.76-1.00 entries read as ordinary
+    // open-mouth speech. The clamp was amputating half her range for a defect
+    // that had already been fixed elsewhere.
+    assert.equal(bank4.opennessCeiling, 1.0);
     // The PRESSED closure (aperture 2px, lips touching in 91% of centre-band
     // columns — the file's own provenance fields). The old bank pointed away
     // from m_closed because its per-entry registration floated the crop into
@@ -102,7 +114,7 @@ describe("v4 bank — the shipped visemes3/bank.json parses", () => {
     assert.equal(closed.openness, 0, "the closure must be genuinely shut");
   });
 
-  it("no shipped entry sits above the ceiling (the gape entries were dropped)", () => {
+  it("no shipped entry sits above the ceiling", () => {
     assert.ok(bank4);
     for (const f of bank4.frames) {
       assert.ok(
@@ -240,33 +252,40 @@ describe("v4 — openness clamps to the ceiling instead of overflowing the ladde
     assert.equal(clampOpenness(2, 5), 1); // a ceiling above 1 cannot lift openness past 1
   });
 
-  it("a FULL-VOLUME passage picks the top of the real ladder, never past it", () => {
+  it("a FULL-VOLUME passage now reaches the TOP of the real ladder", () => {
     assert.ok(bank4);
     const top = Math.max(...bank4.frames.map((f) => f.openness));
-    assert.equal(top, 0.5238); // m14 "ah", the widest kept entry (ceiling 0.55)
-    // The WIDEST openness tier in the shipped bank. It is a TIER, not a single
-    // frame, because this is a 2-D lookup: the weighted scan legitimately picks
-    // whichever 0.50+ entry is nearest in roundness. Demanding the exact max at
-    // every roundness would be demanding the roundness axis be ignored, which
-    // is the whole point of the 2-D bank.
-    const tier = 0.5;
+    assert.equal(top, 1, "the ladder must reach a fully open real frame");
+
+    // THE REGRESSION THIS REPLACES. This test used to assert `top === 0.5238`
+    // and that openness 1.0 and openness 0.55 resolve to the SAME frame —
+    // encoding the clamp as correct behaviour. It was the clamp that made her
+    // mouth look pasted on: nearest-neighbour could not reach past half however
+    // loud she got, because clampOpenness flattened the request first.
+    //
+    // The property that actually matters is that LOUDER OPENS HER MOUTH MORE,
+    // at every roundness, rather than saturating half way.
     for (const r of [0, 0.25, 0.5, 0.75, 1]) {
-      const p = pickVisemeFrame4(bank4, 1, r);
-      assert.ok(p, `no pick at roundness ${r}`);
+      const loud = pickVisemeFrame4(bank4, 1, r);
+      const mid = pickVisemeFrame4(bank4, 0.5, r);
+      assert.ok(loud && mid, `no pick at roundness ${r}`);
       assert.ok(
-        p.openness <= bank4.opennessCeiling,
-        `openness 1.0 selected ${p.id} at ${p.openness}, above the ${bank4.opennessCeiling} ceiling`,
+        loud.openness > mid.openness,
+        `at roundness ${r} a full-volume pick (${loud.id} @ ${loud.openness}) is not wider ` +
+          `than a half-volume pick (${mid.id} @ ${mid.openness})`,
       );
       assert.ok(
-        p.openness >= tier,
-        `openness 1.0 selected ${p.id} at ${p.openness} — not in the widest tier (>= ${tier})`,
+        loud.openness <= bank4.opennessCeiling,
+        `${loud.id} at ${loud.openness} exceeds the ${bank4.opennessCeiling} ceiling`,
       );
     }
-    // and a full-volume pick is never WIDER than a full-volume pick should be:
-    // openness 1.0 and openness 0.55 must resolve to the same frame, because the
-    // clamp has already flattened everything above the ceiling.
+
+    // Still never past the widest thing actually filmed. The ceiling is 1.0 now,
+    // but 1.0 is the footage's own maximum aperture (48px), not a synthesised
+    // gape — openness is normalised to that max by the builder.
     for (const r of [0, 0.5, 1]) {
-      assert.equal(pickVisemeFrame4(bank4, 1, r)?.id, pickVisemeFrame4(bank4, 0.55, r)?.id);
+      const p = pickVisemeFrame4(bank4, 1, r);
+      assert.ok(p && p.openness <= top);
     }
   });
 
