@@ -649,6 +649,56 @@ body.low-power .star-ring { animation: none; }
 .chip:active { transform: scale(0.98); }
 .chip:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; }
 
+/* ── console drop box (files -> her vault) ──
+   Sits between the chip row and the pill inside .composer-dock. Collapsed it is
+   one slim row; it only grows when there are files to report. Dark-only, deck
+   tokens, no new colors. */
+.drop-zone {
+  border: 1px dashed color-mix(in oklab, var(--purple) 55%, transparent);
+  border-radius: 10px;
+  background: rgba(9,4,18,0.38);
+  transition: border-color 0.16s ease-out, background 0.16s ease-out;
+}
+.drop-zone.armed {
+  border-style: solid;
+  border-color: var(--accent-glow);
+  background: color-mix(in oklab, var(--purple) 16%, rgba(9,4,18,0.38));
+}
+.drop-cta {
+  display: flex; align-items: center; justify-content: center; gap: 8px;
+  width: 100%; padding: 7px 10px;
+  background: none; border: none; cursor: pointer;
+  -webkit-tap-highlight-color: transparent;
+  color: var(--text-faint);
+  font-family: var(--display); font-size: 10px; font-weight: 700;
+  letter-spacing: 2px; text-transform: uppercase;
+  transition: color 0.16s ease-out;
+}
+.drop-cta svg { width: 13px; height: 13px; flex-shrink: 0; }
+.drop-zone:hover .drop-cta, .drop-zone.armed .drop-cta { color: var(--accent-glow); }
+.drop-cta:focus-visible { outline: 2px solid var(--accent-glow); outline-offset: 2px; border-radius: 9px; }
+
+.drop-rows {
+  list-style: none; margin: 0; padding: 0 10px 8px;
+  display: flex; flex-direction: column; gap: 4px;
+}
+.drop-row {
+  display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 2px 8px;
+  font-family: var(--mono); font-size: 11px; line-height: 1.35;
+}
+.drop-name {
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  color: var(--text-dim);
+}
+.drop-size { color: var(--text-faint); font-size: 10px; }
+.drop-detail { grid-column: 1 / -1; font-size: 10px; letter-spacing: 0.04em; }
+.drop-row.busy .drop-detail { color: var(--accent-glow); }
+.drop-row.done .drop-detail { color: var(--good); }
+.drop-row.fail .drop-detail { color: var(--bad); }
+
+/* On the phone the dock is already tight — keep the box, drop the label size. */
+.mobile-console .drop-cta { font-size: 9px; letter-spacing: 1.5px; padding: 6px 8px; }
+
 .composer {
   display: flex; align-items: flex-end; gap: 8px;
   background: rgba(9,4,18,0.6);

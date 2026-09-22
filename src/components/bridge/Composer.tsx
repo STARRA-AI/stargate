@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, type KeyboardEvent } from "react";
+import { useCallback, useEffect, useRef, type KeyboardEvent } from "react";
 import { MicStateBadge } from "./MicStateBadge";
 
 function SendIcon() {
@@ -41,43 +41,101 @@ function CallWaveIcon() {
   );
 }
 
+/** Matches `.composer-input { max-height: 160px }` in deck.css. */
+const MAX_PILL_HEIGHT = 160;
+
 /**
  * Pill composer: one call button (left) + auto-growing textarea + send button.
  * Enter submits, Shift+Enter inserts a newline. There is a SINGLE voice entry —
  * the call button — which opens the full-screen call with her face (`onCall`).
- * The old redundant "mic" launcher was removed (it duplicated the call button).
  *
  * MicStateBadge (G4) sits above the pill, still inside `.composer-dock`, so
  * it stays alongside the composer without disturbing the call button.
+ *
+ * ★ THE TEXTAREA IS UNCONTROLLED, AND THAT IS THE WHOLE POINT (2026-09-22).
+ * It used to be `value={value} onChange={onChange}` with the draft held in
+ * DeckConsole's `useState`. Every single character therefore re-rendered
+ * DeckConsole — which rebuilds 14 `.wave-bar` spans (each with a fresh inline
+ * style object) and the whole chip row on every keystroke, then re-runs an
+ * effect that measures `scrollHeight`. React bailed out of MessageColumn via
+ * `memo`, so the history was safe, but the head, the chips and this component
+ * were not.
+ *
+ * Now the DOM owns the draft: typing fires NO React render anywhere in the
+ * tree. The value is read once, imperatively, at submit. The only per-keystroke
+ * work left is `autosize`, which is coalesced to one measurement per frame and
+ * skips the style write unless the height actually changed — i.e. it does
+ * nothing at all except on the characters that wrap a new line.
+ *
+ * Consequence to respect: nothing outside can set the draft text. Nothing did
+ * (the chips call `submit(label)` directly, never through the box). If a future
+ * caller needs to prefill it, expose an imperative handle — do NOT restore the
+ * controlled prop, which is the regression this comment exists to prevent.
  */
 export function Composer({
-  value,
-  onChange,
   onSubmit,
   onCall,
   recording,
   placeholder,
 }: {
-  value: string;
-  onChange: (v: string) => void;
-  onSubmit: () => void;
+  /** Receives the draft text. Composer clears itself; the caller must not. */
+  onSubmit: (text: string) => void;
   onCall?: () => void;
   recording?: boolean;
   placeholder?: string;
 }) {
   const taRef = useRef<HTMLTextAreaElement>(null);
+  const lastHeight = useRef(0);
+  const rafRef = useRef<number | null>(null);
 
-  useEffect(() => {
+  /**
+   * Grow the pill to fit its content. Writing `height: auto` and then READING
+   * `scrollHeight` forces a synchronous layout — the browser cannot defer it,
+   * because the read needs a settled box. So it happens at most once per frame,
+   * and the early return makes every keystroke after the first in that frame
+   * free rather than merely cheaper.
+   */
+  const autosize = useCallback(() => {
+    if (rafRef.current !== null) return; // a measurement is already queued
+    rafRef.current = requestAnimationFrame(() => {
+      rafRef.current = null;
+      const ta = taRef.current;
+      if (!ta) return;
+      const prev = ta.style.height;
+      ta.style.height = "auto";
+      const next = Math.min(ta.scrollHeight, MAX_PILL_HEIGHT);
+      if (next === lastHeight.current) {
+        ta.style.height = prev; // put it back; nothing to change
+        return;
+      }
+      lastHeight.current = next;
+      ta.style.height = `${next}px`;
+    });
+  }, []);
+
+  useEffect(
+    () => () => {
+      if (rafRef.current !== null) cancelAnimationFrame(rafRef.current);
+    },
+    [],
+  );
+
+  /** Read the draft off the DOM, hand it up, and reset the box. */
+  const send = useCallback(() => {
     const ta = taRef.current;
     if (!ta) return;
-    ta.style.height = "auto";
-    ta.style.height = `${Math.min(ta.scrollHeight, 160)}px`;
-  }, [value]);
+    const text = ta.value;
+    if (!text.trim()) return;
+    ta.value = "";
+    lastHeight.current = 0; // force the shrink back to one row
+    autosize();
+    onSubmit(text);
+  }, [autosize, onSubmit]);
 
   function onKeyDown(e: KeyboardEvent<HTMLTextAreaElement>) {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();
-      onSubmit();
+      send();
     }
   }
 
@@ -88,7 +146,7 @@ export function Composer({
         className="composer"
         onSubmit={(e) => {
           e.preventDefault();
-          onSubmit();
+          send();
         }}
       >
         <button
@@ -103,8 +161,8 @@ export function Composer({
         <textarea
           ref={taRef}
           className="composer-input"
-          value={value}
-          onChange={(e) => onChange(e.target.value)}
+          defaultValue=""
+          onInput={autosize}
           onKeyDown={onKeyDown}
           rows={1}
           placeholder={placeholder}
