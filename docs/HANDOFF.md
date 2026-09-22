@@ -19,13 +19,19 @@ help. Judge every change against that. Memory: `north-star-alive-friend.md`.
 | `954b588` | ignore `__pycache__` |
 | `dd471b2` | **TWO BODIES, WAIST UP** — listening loop + speaking loop (552x840 full frame), mouth bank at (248,278,152,102), confidence-gated patch on the speaking body, 80ms mouth blend |
 | `5c1a346` | `starra stop` kills the whole deck tree + waits; `up` refuses a held port and prints the listener; build log is its own file |
+| `6a55f4d` | speaking-body gate is a hysteretic state machine (ON ≥0.95, OFF <0.93, 500ms dwell, ~50ms dissolve); interim window 240/266 confident, 9 switches, patch shown 78% |
+| `03c7f87` | one `starra up` at a time (mkdir lock), atomic production build, a dist is current only when complete |
 
 Also today, outside the repo: Claude Code update loop fixed (stale lock) → 2.1.278; Agent-Reach
 verified current (v1.5.0); llama.cpp Intel/AMD fork built + benchmarked at
 `~/STARGATE/vendor/llama-cpp-intel-amd` (2.7x generation, 17% slower prompt; NOT integrated).
 
 ## IN FLIGHT
-Nothing. Deck is LIVE on the prod lane (`node scripts/deck-server.mjs`, https://localhost:3000),
+Nothing. The head-still, camera-facing speaking render (`4b92fb32`, $1.76) came back and was cut and
+measured with the SAME command and gate simulation as the interim: 63/266 frames at NCC ≥0.95 vs 197,
+10 switches vs 9, patch shown **31% vs 78%**; by eye she turns and tilts in both. InfiniteTalk's head
+motion follows the audio, not the prompt. **The interim window stays.** The take is filed at
+`STARRA ANGLES /muapi-out/starra_speaking_frontal_720p_infinitetalk.mp4` (+ .json sidecar). Deck is LIVE on the prod lane (`node scripts/deck-server.mjs`, https://localhost:3000),
 BUILD_ID 06:10 newer than every source; serving `base_loop.mp4`, `speak_loop.mp4` and
 `visemes3/` byte-for-byte. `starra up` now prints `lane: prod  listener: node scripts/deck-server.mjs`
 — if it ever says next-server on a prod launch, a stale dev server is answering: run `scripts/starra stop`.
@@ -43,7 +49,7 @@ reads wrong — in what he SEES, not what he thinks causes it.
 - Dragon verbs end-to-end to an order (traced from source, never fired).
 
 ## MONEY (read live 2026-09-22)
-- Muapi balance **$16.195** (spent $2.64 today on the two renders; nothing recurring).
+- Muapi balance **$14.435** (spent $4.40 today on three renders: idle $0.88, speaking $1.76, head-still $1.76 — the third bought nothing; nothing recurring).
 - xAI: $315.61 credit; every invoice $0.00; auto top-up is ARMED at a $5 floor (his switch).
 - GCP: $13.75 this period, GPU VM stopped, $40 budget set.
 - Higgsfield: 27 free credits, untouched.
