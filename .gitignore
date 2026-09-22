@@ -108,8 +108,12 @@ vendor/
 # SDD scratch — ledger, briefs, review packages
 .superpowers/
 
-# production build lane (npm run deck:fast) — kept separate from dev's .next
-.next-prod/
+# production build lane (npm run deck:fast) — kept separate from dev's .next.
+# GLOB, not one name: the verify and swap lanes write .next-verify / .next-prod-new
+# too, and naming them one at a time is how .next-prod-new ended up untracked
+# (and linted — see eslint.config.mjs, same fix).
+.next-*/
+.starra-turbo/
 
 # Runtime log dir — stale empty artifact, nothing in src/ or scripts/ writes it.
 /logs/
