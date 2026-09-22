@@ -1,0 +1,239 @@
+#!/usr/bin/env bash
+# starra-turbo — reclaim CPU on this Mac, on demand, fully reversibly.
+#
+# NOTHING IN THIS SCRIPT RUNS ON ITS OWN. There is no launchd job, no hook, no
+# timer. Every change happens because Classic typed a subcommand, and every
+# change prints its own undo line before it returns.
+#
+# DICTATION IS NEVER TOUCHED AS A SIDE EFFECT. It is its own subcommand
+# (`starra-turbo dictation off`) and nothing else in this file writes that
+# preference. Classic may be dictating RIGHT NOW — `defaults read
+# com.apple.speech.recognition.AppleSpeechRecognition.prefs` showed
+# Dictation.Streaming = 3300 uses on this machine, so it is a working tool, not
+# dead weight.
+#
+# SAFETY: this script never runs `pkill` or `killall` against a name pattern.
+# A generic `pkill -f next-server` once killed Classic's live deck. Processes are
+# only ever addressed by an explicit PID that the script printed first.
+
+set -uo pipefail
+
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+STATE_DIR="$REPO/.starra-turbo"
+NOINDEX_LIST="$STATE_DIR/noindex-paths"
+DICT_STATE="$STATE_DIR/dictation-prior"
+
+mkdir -p "$STATE_DIR"
+
+b() { printf '\033[1m%s\033[0m\n' "$*"; }
+dim() { printf '\033[2m%s\033[0m\n' "$*"; }
+
+# Directories worth keeping out of the Spotlight index. Build output and
+# dependencies: thousands of files that change constantly and that Classic never
+# searches for by name in Spotlight.
+noindex_targets() {
+  local d
+  for d in node_modules .next .next-prod .turbo playwright-report test-results; do
+    [ -d "$REPO/$d" ] && printf '%s\n' "$REPO/$d"
+  done
+}
+
+cmd_status() {
+  b "MACHINE"
+  uptime
+  echo
+  b "TOP CPU (live, sorted)"
+  ps -Ao pcpu,pid,etime,comm -r | head -12
+  echo
+
+  b "DICTATION"
+  local dict
+  dict="$(defaults read com.apple.assistant.support "Dictation Enabled" 2>/dev/null || echo "unset")"
+  echo "  Dictation Enabled = $dict"
+  local n=0 line
+  while IFS= read -r line; do
+    [ -n "$line" ] && { echo "  $line"; n=$((n + 1)); }
+  done < <(ps -Ao pcpu,pid,comm -r 2>/dev/null \
+    | grep -Ei 'coreaudiod|speechrecognition|localspeechrecognition' \
+    | grep -v grep \
+    | awk '$1 > 0.5')
+  if [ "$n" -eq 0 ]; then
+    echo "  no speech/audio processes currently burning CPU"
+  else
+    echo "  -> to reclaim these: starra-turbo dictation off   (reversible, explicit)"
+  fi
+  echo
+
+  b "SPOTLIGHT"
+  local t excluded=0 total=0
+  while IFS= read -r t; do
+    total=$((total + 1))
+    if [ -f "$t/.metadata_never_index" ]; then
+      echo "  excluded : ${t#"$REPO"/}"
+      excluded=$((excluded + 1))
+    else
+      echo "  INDEXED  : ${t#"$REPO"/}"
+    fi
+  done < <(noindex_targets)
+  [ "$total" -eq 0 ] && echo "  (no build/dependency dirs present)"
+  if [ "$excluded" -lt "$total" ]; then
+    echo "  -> to exclude them: starra-turbo on"
+  fi
+  echo
+
+  b "DECK"
+  local pid
+  pid="$(lsof -ti tcp:3000 2>/dev/null | head -1)"
+  if [ -n "$pid" ]; then
+    ps -o pcpu,pid,etime,comm -p "$pid" 2>/dev/null | tail -n +1
+  else
+    echo "  nothing listening on :3000"
+  fi
+}
+
+cmd_on() {
+  b "starra-turbo on — Spotlight exclusions only"
+  echo
+  : > "$NOINDEX_LIST"
+  local t applied=0
+  while IFS= read -r t; do
+    if [ -f "$t/.metadata_never_index" ]; then
+      echo "  already excluded : ${t#"$REPO"/}"
+    else
+      if touch "$t/.metadata_never_index" 2>/dev/null; then
+        printf '%s\n' "$t" >> "$NOINDEX_LIST"
+        echo "  CHANGED excluded : ${t#"$REPO"/}"
+        applied=$((applied + 1))
+      else
+        echo "  could not write   : ${t#"$REPO"/} (left as it was)"
+      fi
+    fi
+  done < <(noindex_targets)
+  echo
+  echo "Changed: $applied directory(ies) now carry a .metadata_never_index marker."
+  echo "Undo:    starra-turbo off"
+  echo
+  dim "Dictation was NOT touched. Nothing was killed. No process was signalled."
+  dim "UNVERIFIED: macOS re-crawls on its own schedule, so the drop in"
+  dim "spotlightknowledged CPU is not instant and this session did not measure it."
+}
+
+cmd_off() {
+  b "starra-turbo off — restoring"
+  echo
+  local removed=0 t
+  # Snapshot the ledger BEFORE clearing it — the pre-existing check below reads
+  # it to tell "this script made that marker" from "that marker was already here".
+  local ledger="$STATE_DIR/.off-snapshot"
+  : > "$ledger"
+  [ -s "$NOINDEX_LIST" ] && cp "$NOINDEX_LIST" "$ledger"
+  if [ -s "$ledger" ]; then
+    while IFS= read -r t; do
+      if [ -f "$t/.metadata_never_index" ]; then
+        rm -f "$t/.metadata_never_index" && {
+          echo "  CHANGED re-indexable : ${t#"$REPO"/}"
+          removed=$((removed + 1))
+        }
+      fi
+    done < "$ledger"
+    : > "$NOINDEX_LIST"
+  fi
+  # ONLY the ledger. A marker this script did not create is someone else's
+  # decision — node_modules already carried one before this script existed — and
+  # `off` restoring the machine must not quietly undo a setting it never made.
+  while IFS= read -r t; do
+    if [ ! -f "$t/.metadata_never_index" ]; then continue; fi
+    if ! grep -qxF "$t" "$ledger" 2>/dev/null; then
+      echo "  left alone (pre-existing) : ${t#"$REPO"/}"
+    fi
+  done < <(noindex_targets)
+
+  echo
+  echo "Removed $removed Spotlight exclusion marker(s)."
+  if [ -f "$DICT_STATE" ]; then
+    echo
+    echo "Dictation is still OFF and was left alone on purpose — turning speech"
+    echo "back on is its own explicit step: starra-turbo dictation on"
+  fi
+}
+
+cmd_dictation() {
+  local sub="${1:-status}"
+  case "$sub" in
+    status)
+      local dict
+      dict="$(defaults read com.apple.assistant.support "Dictation Enabled" 2>/dev/null || echo "unset")"
+      b "DICTATION: Dictation Enabled = $dict"
+      ps -Ao pcpu,pid,etime,comm -r 2>/dev/null \
+        | grep -Ei 'coreaudiod|speechrecognition|localspeechrecognition' \
+        | grep -v grep \
+        | awk '$1 > 0.5'
+      ;;
+    off)
+      b "DICTATION OFF — explicit, reversible"
+      echo
+      local prior
+      prior="$(defaults read com.apple.assistant.support "Dictation Enabled" 2>/dev/null || echo "unset")"
+      printf '%s\n' "$prior" > "$DICT_STATE"
+      echo "  prior value recorded: Dictation Enabled = $prior  ($DICT_STATE)"
+      defaults write com.apple.assistant.support "Dictation Enabled" -bool false
+      echo "  CHANGED: com.apple.assistant.support 'Dictation Enabled' -> false"
+      echo
+      echo "The speech daemons are launchd-managed and exit on their own once"
+      echo "dictation stops being requested. This script does NOT kill them:"
+      echo "coreaudiod is the system audio server and killing it cuts audio for"
+      echo "every app, including her call."
+      echo
+      echo "System Settings must be reopened (or a logout) for macOS to re-read"
+      echo "this. To make it take effect now, toggle Dictation off in"
+      echo "System Settings > Keyboard > Dictation."
+      echo
+      echo "Undo: starra-turbo dictation on"
+      ;;
+    on)
+      b "DICTATION ON — restoring"
+      echo
+      local prior="1"
+      [ -f "$DICT_STATE" ] && prior="$(cat "$DICT_STATE")"
+      if [ "$prior" = "unset" ]; then
+        defaults delete com.apple.assistant.support "Dictation Enabled" 2>/dev/null
+        echo "  CHANGED: 'Dictation Enabled' deleted (it was unset before)"
+      else
+        defaults write com.apple.assistant.support "Dictation Enabled" -bool true
+        echo "  CHANGED: 'Dictation Enabled' -> true (prior value was $prior)"
+      fi
+      rm -f "$DICT_STATE"
+      echo
+      echo "Reopen System Settings > Keyboard > Dictation to confirm."
+      ;;
+    *)
+      echo "usage: starra-turbo dictation {status|off|on}" >&2
+      return 2
+      ;;
+  esac
+}
+
+usage() {
+  cat <<'USAGE'
+starra-turbo — reclaim CPU on demand. Nothing here runs by itself.
+
+  starra-turbo status            measure only; changes nothing
+  starra-turbo on                exclude node_modules/.next/... from Spotlight
+  starra-turbo off               undo every change this script made
+  starra-turbo dictation status  show dictation state and what it is burning
+  starra-turbo dictation off     turn macOS Dictation off   (explicit, opt-in)
+  starra-turbo dictation on      turn macOS Dictation back on
+
+Dictation is NEVER changed by `on` or any other subcommand. It has its own
+verb because Classic may be dictating at this moment.
+USAGE
+}
+
+case "${1:-status}" in
+  status) cmd_status ;;
+  on) cmd_on ;;
+  off) cmd_off ;;
+  dictation) shift; cmd_dictation "${1:-status}" ;;
+  -h | --help | help) usage ;;
+  *) usage; exit 2 ;;
+esac

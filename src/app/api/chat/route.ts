@@ -222,11 +222,24 @@ async function streamLocalWithCopyGuard(opts: {
   return { draft, retried, usedFallback, echoRetry };
 }
 
+/**
+ * Typewriter replay for text that is ALREADY fully known — a fast-path tool
+ * answer, a shell result, the offline notice, a finished agent run. These are
+ * the replies that have nothing to wait for, so the only thing between Classic
+ * and the words is this function's own sleep.
+ *
+ * It used to be 12ms per 12 characters: almost exactly 1ms of pure sleep per
+ * character, so an 800-character tool answer that the server already held in a
+ * variable took 800ms to hand over. Now 6ms per 32 characters — about 0.19ms
+ * per character, a little over 5x faster — which still reads as her typing
+ * rather than a block appearing, without charging a second for a reply that
+ * cost nothing to produce.
+ */
 async function* stubStream(message: string) {
-  const chunks = message.match(/.{1,12}/g) ?? [message];
+  const chunks = message.match(/.{1,32}/g) ?? [message];
   for (const c of chunks) {
     yield c;
-    await new Promise((r) => setTimeout(r, 12));
+    await new Promise((r) => setTimeout(r, 6));
   }
 }
 
@@ -860,14 +873,19 @@ export async function POST(req: Request) {
     return privateLaneResponse(privateCmd, lastUser, req);
   }
 
-  const [tier1, memory, vault, obsidianVolatile] = await Promise.all([
-    getTier1(),
-    getMemory(),
-    getVault(),
-    obsidianForPrompt(),
-  ]);
+  // readLatestPackPreview was a SERIAL disk read sitting after this Promise.all
+  // (measured 16-18ms warm, 18ms cold on this Mac). It reads a different file
+  // than any of the four below and depends on none of them, so it belongs in
+  // the same batch — a fifth parallel read costs nothing extra.
+  const [tier1, memory, vault, obsidianVolatile, packPreview] =
+    await Promise.all([
+      getTier1(),
+      getMemory(),
+      getVault(),
+      obsidianForPrompt(),
+      readLatestPackPreview(2500),
+    ]);
 
-  const packPreview = await readLatestPackPreview(2500);
   const { model: ollamaModel } = ollamaConfig();
 
   const operatorScan = lastUser
@@ -952,13 +970,26 @@ export async function POST(req: Request) {
       .filter(Boolean)
       .join("\n\n---\n\n");
 
+  /** Resolves when this turn's USER memory row has landed. See the write below. */
+  let userWrite: Promise<void> = Promise.resolve();
+
   if (lastUser) {
     // Call turns: memory is the CLIENT's job (recordCallTurn — see the
     // callVoice doc on the body type) and the call transcript is already on
     // screen, so no memory write and no EXEC feed line. Metering and the
     // security alert apply to every turn regardless of surface.
     if (!callVoice) {
-      await recordExchange("user", lastUser);
+      // OFF THE CRITICAL PATH, ORDER STILL GUARANTEED. Nothing about the first
+      // token depends on this row having landed — the prompt was already built
+      // from the memory snapshot read above, before this write. So it is
+      // started here and NOT awaited, and the assistant write below awaits this
+      // promise first. That keeps user-then-assistant ordering in
+      // data/memory.json exactly as it was, while taking the disk write out of
+      // the gap between Classic hitting Enter and her first word.
+      userWrite = recordExchange("user", lastUser).then(
+        () => undefined,
+        () => undefined,
+      );
       pushFeed("EXEC", `Operator: ${redact(lastUser).slice(0, 70)}`);
     }
     addTokens(lastUser.length + system.length / 8);
@@ -971,7 +1002,6 @@ export async function POST(req: Request) {
   }
 
   const encoder = new TextEncoder();
-  const anthropicKey = await getKey("anthropic");
   const prefer =
     (process.env.LLM_PROVIDER || "auto").toLowerCase() as
       | "auto"
@@ -980,6 +1010,15 @@ export async function POST(req: Request) {
       | "kimi"
       | "grok";
 
+  // NOT batched into a Promise.all, deliberately. These three reads are
+  // independent and could run together, but the combined saving is ~1ms
+  // (measured: getKey 0.5ms, maybeToolReply 0.5ms warm) against a turn whose
+  // cost is the provider's ~2.2s time-to-first-token — and
+  // tests/tool-fastpath-shared.test.ts:85 asserts on the literal source text
+  // `await maybeToolReply(lastUser)` to guarantee the shared fast path is still
+  // invoked byte-identically. Trading a real guard for one millisecond is a bad
+  // trade; left serial on purpose.
+  const anthropicKey = await getKey("anthropic");
   const shellReply = lastUser ? await maybeShellReply(lastUser, req) : null;
   const toolReply = lastUser ? await maybeToolReply(lastUser) : null;
   const useAgentTools =
@@ -999,11 +1038,21 @@ export async function POST(req: Request) {
         } else if (toolReply) {
           for await (const chunk of stubStream(toolReply)) push(chunk);
         } else {
-          const { up: ollamaUp, hasModel } = await ollamaStatus();
-          // Auto priority: keyed Kimi (free, tiered) -> keyed Anthropic -> local
-          // Ollama -> offline canned message. Grok stays opt-in (prefer === "grok"
-          // only) — never entered implicitly by auto.
-          const kimiKeyed = await hostedAvailable("kimi");
+          // ollamaStatus() is an HTTP probe to the local Ollama (measured 18ms
+          // warm, 50ms cold on this Mac; up to 3s if Ollama is up but wedged —
+          // ollama.ts:68 sets that timeout). It used to run ALONE and FIRST,
+          // ahead of two independent key lookups, so every turn paid for it in
+          // series even when Grok was always going to answer. All three are
+          // independent inputs to the routing decision below, so they resolve
+          // together and the probe no longer sets a floor by itself.
+          const [{ up: ollamaUp, hasModel }, kimiKeyed, grokKeyed] =
+            await Promise.all([
+              ollamaStatus(),
+              // Auto priority: keyed Kimi (free, tiered) -> keyed Anthropic ->
+              // local Ollama -> offline canned message.
+              hostedAvailable("kimi"),
+              hostedAvailable("grok"),
+            ]);
           // GROK IS THE STANDING BRAIN (Classic's ONE BRAIN order, 2026-08-06).
           // `auto` now enters it — it is no longer opt-in-only — unless the
           // spend meter says the emergency lane is forced, which is the ONE
@@ -1012,7 +1061,7 @@ export async function POST(req: Request) {
           const grokLane =
             tier.provider === "grok" &&
             (prefer === "auto" || prefer === "grok") &&
-            (await hostedAvailable("grok"));
+            grokKeyed;
           const useOllama =
             prefer === "ollama" ||
             (prefer === "auto" &&
@@ -1240,6 +1289,10 @@ export async function POST(req: Request) {
           // run: what she learns on a call she should keep, whoever wrote the
           // turn rows.
           if (!callVoice) {
+            // Ordering barrier: the user row above is written without being
+            // awaited so it stays off the first-token path. Awaiting it HERE
+            // keeps user-then-assistant order in the store intact.
+            await userWrite;
             await recordExchange("assistant", stripThinkTags(full));
           }
           // Durable-fact distillation (mem0-style, free driver) — fire-and-

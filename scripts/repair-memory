@@ -1,0 +1,104 @@
+#!/usr/bin/env python3
+"""Restore the deck's working memory window after probe traffic evicts it.
+
+DELETES ALMOST NOTHING BY DESIGN. Only the agent timing probe of 2026-09-14
+06:57:23-30 is removed. Call transcripts and appointment requests are REAL and
+are preserved -- Classic's line takes live calls.
+
+WHY: WORKING_WINDOW = 24 (src/lib/memory/store.ts:73). Any burst of 24 automated
+turns evicts 100% of the real conversation out of `working` and into `archival`.
+Nothing is lost -- store.ts:110-111 SPLICES overflow into archival -- but her hot
+context ends up entirely junk.
+
+WHAT THIS DOES: drops only rows whose content exactly matches a known probe
+phrase, then backfills `working` from the most recent NON-probe rows already in
+`archival`. It never deletes from `archival`, `summaries` or `facts`.
+
+WHAT IT DELIBERATELY DOES NOT DO: pattern-strip `summaries`. Those same probe
+phrases appear in ~140 summaries going back to index 238, from many prior
+sessions. Cleaning those would destroy real history to remove one night's junk.
+
+Dry run by default. Pass --apply to write.
+"""
+import json, os, re, shutil, sys, tempfile, time
+
+ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+PATH = os.path.join(ROOT, "data", "memory.json")
+WORKING_WINDOW = 24
+
+# ONLY the agent timing-probe signature, and ONLY inside the window that probe
+# ran. Everything else is treated as REAL and is never deleted.
+#
+# WHY THIS IS NARROW: "call Chase Tuesday" and "x" were initially mistaken for
+# test junk. They are not. They arrive as PLAIN spoken turns with no `[note]`
+# prefix (contrast route.ts:152), which is what a transcribed CALL looks like —
+# Classic's line takes real calls, so those rows can be a caller's appointment
+# request. Deleting them would destroy business data.
+PROBE_TEXT = {"say hi in three words", "hey there, classic.",
+              "hey classic — hello.", "hey classic - hello."}
+PROBE_WINDOW = ("2026-09-14T06:57:23", "2026-09-14T06:57:30")
+
+def is_probe(row) -> bool:
+    """True ONLY for the agent timing probe: known text AND inside its window."""
+    text = str(row.get("content") or row.get("text") or "")
+    if ": " in text and text.split(": ", 1)[0] in ("user", "assistant"):
+        text = text.split(": ", 1)[1]
+    at = str(row.get("at") or "")
+    return (text.strip().lower() in PROBE_TEXT
+            and PROBE_WINDOW[0] <= at <= PROBE_WINDOW[1])
+
+
+def main() -> int:
+    apply = "--apply" in sys.argv
+    with open(PATH, encoding="utf-8") as fh:
+        d = json.load(fh)
+    for k in ("working", "summaries", "archival", "facts"):
+        d.setdefault(k, [])
+
+    before = len(d["working"])
+    kept = [r for r in d["working"] if not is_probe(r)]
+
+    # Backfill from archival's real tail, oldest-first, without deleting anything.
+    have = {(r.get("at"), str(r.get("content", ""))) for r in kept}
+    backfill = []
+    for r in reversed(d["archival"]):
+        if len(kept) + len(backfill) >= WORKING_WINDOW:
+            break
+        text = str(r.get("text", ""))
+        role, _, content = text.partition(": ")
+        if role not in ("user", "assistant"):
+            role, content = "user", text
+        if is_probe(r) or (r.get("at"), content) in have:
+            continue
+        backfill.append({"role": role, "content": content, "at": r.get("at")})
+    backfill.reverse()
+
+    merged = backfill + kept
+    merged.sort(key=lambda r: str(r.get("at") or ""))
+    merged = merged[-WORKING_WINDOW:]
+
+    print(f"working: {before} -> {len(merged)}  "
+          f"(dropped {before - len(kept)} probe rows, restored {len(backfill)} real)")
+    print(f"archival {len(d['archival'])}, summaries {len(d['summaries'])}, "
+          f"facts {len(d['facts'])}: UNCHANGED")
+    print("--- working after ---")
+    for r in merged:
+        print(f"  {r.get('at')} | {r.get('role')} | {str(r.get('content'))[:64]}")
+
+    if not apply:
+        print("\nDRY RUN. Nothing written. Re-run with --apply to commit.")
+        return 0
+
+    d["working"] = merged
+    bak = f"{PATH}.bak-{time.strftime('%Y%m%d-%H%M%S')}"
+    shutil.copy2(PATH, bak)
+    fd, tmp = tempfile.mkstemp(dir=os.path.dirname(PATH), suffix=".tmp")
+    with os.fdopen(fd, "w", encoding="utf-8") as fh:
+        json.dump(d, fh, ensure_ascii=False, indent=2)
+    shutil.copymode(PATH, tmp)
+    os.replace(tmp, PATH)   # atomic; a concurrent reader sees old or new, never half
+    print(f"\nWROTE {PATH}\nBACKUP {bak}")
+    return 0
+
+if __name__ == "__main__":
+    sys.exit(main())

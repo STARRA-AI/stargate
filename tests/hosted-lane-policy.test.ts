@@ -120,14 +120,51 @@ describe("callVoice branch — reaches the same grok-4.5 lane, never writes memo
   });
 
   it("a callVoice turn skips recordExchange — matches the probed memory.json being unchanged", () => {
-    assert.match(
-      route,
-      /if \(!callVoice\) \{\s*\n\s*await recordExchange\("user", lastUser\);/,
-      "the live probe found data/memory.json byte-identical across callVoice:true turns; this is why",
+    // WHAT THIS GUARDS, restated: a callVoice turn must not write EITHER memory
+    // row — the call client owns its own transcript (recordCallTurn) and a
+    // second writer here double-writes the shared store. That is the invariant,
+    // and it is asserted below by requiring both calls to sit inside an
+    // `if (!callVoice)` block.
+    //
+    // WHAT IT NO LONGER PINS: the literal `await` in front of the user write.
+    // That write rewrites the whole of data/memory.json (522KB as of this
+    // commit, measured 8.9-24.8ms and growing with every turn) and used to sit
+    // in the gap between Classic pressing Enter and her first token, for no
+    // reason — the prompt is built from the memory snapshot read earlier in the
+    // request, so nothing about the reply depends on the row having landed.
+    // It is now started without being awaited and joined before the assistant
+    // write (`await userWrite`), which preserves user-then-assistant ordering
+    // in the store. Pinning the keyword `await` here would have blocked that
+    // without protecting anything this test exists to protect.
+    const userWriteBlock = route.slice(
+      route.indexOf('if (!callVoice) {'),
+      route.indexOf('if (!callVoice) {') + 700,
     );
     assert.match(
-      route,
-      /if \(!callVoice\) \{\s*\n\s*await recordExchange\("assistant", stripThinkTags\(full\)\);/,
+      userWriteBlock,
+      /recordExchange\("user", lastUser\)/,
+      "the live probe found data/memory.json byte-identical across callVoice:true turns; this is why",
+    );
+    const assistantIdx = route.indexOf(
+      'recordExchange("assistant", stripThinkTags(full))',
+    );
+    assert.ok(
+      assistantIdx > 0,
+      "the assistant memory row must still be written",
+    );
+    // The assistant write must still be guarded by !callVoice: walk back from
+    // the call to the nearest enclosing guard and require it to be that one.
+    const before = route.slice(Math.max(0, assistantIdx - 700), assistantIdx);
+    assert.ok(
+      before.lastIndexOf("if (!callVoice) {") >= 0,
+      "the assistant recordExchange must stay inside an if (!callVoice) block",
+    );
+    // Ordering barrier: the un-awaited user write must be joined before the
+    // assistant row is written, or the store can land out of order.
+    assert.match(
+      before,
+      /await userWrite;/,
+      "the assistant write must await the user write so memory stays in order",
     );
   });
 });
