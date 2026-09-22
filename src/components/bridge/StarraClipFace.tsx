@@ -26,6 +26,8 @@ import {
   audioOutputDelayMs,
   bodyBoxAt,
   bodyPatchConfidence,
+  SPEAK_CONF_FLOOR,
+  SPEAK_CONF_FULL,
   type BodyKind,
   channelMeans,
   containRect,
@@ -190,6 +192,8 @@ export const MIN_BODY_RETRY_GAP_MS = 1500;
 export const BODY_HEALTH_TICK_MS = 2000;
 /** How long a new mouth shape fades in over the previous one (v4 draw). */
 export const MOUTH_BLEND_MS = 80;
+/** Minimum time the speaking-body patch gate holds a state before it may switch again. */
+export const GATE_DWELL_MS = 500;
 export const BODY_STUCK_TICKS = 2;
 
 /**
@@ -1004,6 +1008,8 @@ export function StarraClipFace({
     let prevPick: HTMLImageElement | null = null;
     let pickChangedAt = 0;
     let smoothAlpha = 1;
+    let gateOn = true;
+    let gateChangedAt = 0;
     let baseMeansAt = 0;
     let toneOff = false;
 
@@ -1224,13 +1230,37 @@ export function StarraClipFace({
           // On the speaking body a turned head (low tracker confidence) fades the
           // patch out and lets her OWN talking mouth show — real footage — instead
           // of a translated patch on a rotated face. The listening body is 1.
-          // Eased over a few ticks so neighbouring frames straddling the floor
-          // cannot flicker the patch; snaps to 0/1 once within 0.02.
-          const targetAlpha = bodyPatchConfidence(bodyKind, bodyFrame);
-          smoothAlpha += (targetAlpha - smoothAlpha) * 0.35;
-          if (Math.abs(targetAlpha - smoothAlpha) < 0.02) smoothAlpha = targetAlpha;
+          // HYSTERESIS, then a SHORT dissolve. The gate turns ON only when the
+          // frame's confidence reaches SPEAK_CONF_FULL and OFF only when it drops
+          // below SPEAK_CONF_FLOOR, so a track hovering at the floor cannot flicker
+          // it. The switch itself dissolves in ~3 ticks (~50ms at 60Hz) — a half-
+          // blend of two mouths HELD is a blur (seen in the first QC sheet, frames
+          // 5 and 6 at alpha 0.50); a 50ms dissolve between two speaking mouths is
+          // an edit, not a blur.
+          const frameConf = bodyPatchConfidence(bodyKind, bodyFrame);
+          // ...and a MINIMUM DWELL. Simulated over the shipped speaking loop, the
+          // bare hysteresis still switched 16 times in 11s — one every 0.7s — as
+          // the track hovered around the floor. A switch now holds for at least
+          // GATE_DWELL_MS unless her head has CLEARLY turned (confidence below the
+          // floor by a margin), which is the one case where a stale patch would
+          // sit on a rotated face.
+          const rawConf = bodyKind === "speak" ? SPEAK_CONF_FLOOR + frameConf * (SPEAK_CONF_FULL - SPEAK_CONF_FLOOR) : 1;
+          if (bodyKind === "base") {
+            gateOn = true;
+          } else {
+            const wantOn = frameConf >= 1 ? true : frameConf <= 0 ? false : gateOn;
+            const dwellOver = now - gateChangedAt >= GATE_DWELL_MS;
+            const clearlyTurned = rawConf <= SPEAK_CONF_FLOOR - 0.02;
+            if (wantOn !== gateOn && (dwellOver || (!wantOn && clearlyTurned))) {
+              gateOn = wantOn;
+              gateChangedAt = now;
+            }
+          }
+          const targetAlpha = gateOn ? 1 : 0;
+          smoothAlpha += (targetAlpha - smoothAlpha) * 0.6;
+          if (Math.abs(targetAlpha - smoothAlpha) < 0.05) smoothAlpha = targetAlpha;
           const bodyAlpha = smoothAlpha;
-          if (bodyAlpha <= 0.02) return hide();
+          if (bodyAlpha <= 0.05) return hide();
           const place = patchPlacement(box, canvas.width, canvas.height);
           if (!place) return hide();
           if (!toneOff && now - baseMeansAt >= TONE_RESAMPLE_MS && insideVideo(box, video)) {

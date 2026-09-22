@@ -167,8 +167,11 @@ describe("StarraClipFace uses both bodies (source pins — the wiring has no oth
   });
   it("picks the drift table by the body on screen and gates the patch by confidence", () => {
     assert.match(face, /const box = bodyBoxAt\(bodyKind, pick\.baseBox, bodyFrame\)/);
-    assert.match(face, /const targetAlpha = bodyPatchConfidence\(bodyKind, bodyFrame\)/);
-    assert.match(face, /smoothAlpha \+= \(targetAlpha - smoothAlpha\) \* 0\.35/, "the gate must be eased, not per-frame binary");
+    assert.match(face, /const frameConf = bodyPatchConfidence\(bodyKind, bodyFrame\)/);
+    assert.match(face, /const wantOn = frameConf >= 1 \? true : frameConf <= 0 \? false : gateOn;/, "hysteresis: opens at FULL, closes below FLOOR, otherwise holds");
+    assert.match(face, /export const GATE_DWELL_MS = 500;/);
+    assert.match(face, /dwellOver \|\| \(!wantOn && clearlyTurned\)/, "a switch must wait out the dwell unless her head clearly turned");
+    assert.match(face, /smoothAlpha \+= \(targetAlpha - smoothAlpha\) \* 0\.6/, "the switch dissolves in a few ticks — a held half-blend is a blur");
     assert.match(face, /canvas\.style\.opacity = String\(bodyAlpha\)/);
     assert.ok(!/video\.getAttribute\("src"\) !== STARRA_CLIPS\[CONTINUOUS_BODY_CLIP\]\.file\) \{\s*return hide\(\);/.test(face),
       "the old single-body guard would hide the patch on the speaking body");

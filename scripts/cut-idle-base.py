@@ -133,7 +133,7 @@ def main():
                     help="anchor = crop so the nose lands where the shipped base had it (default); "
                          "full = no crop, the entire waist-up frame scaled to --out-size (Classic: "
                          "'WE WANT HER FROM THE WAIST UP', 2026-09-22).")
-    ap.add_argument("--window-by", choices=["seam", "calm", "frontal"], default="seam",
+    ap.add_argument("--window-by", choices=["seam", "calm", "frontal", "steady"], default="seam",
                     help="seam = the window whose wrap is closest (default, for idle footage); "
                          "calm = the window with the least head motion, then seam — for a SPEAKING "
                          "render, where the calmest 11s makes the steadiest talking body.")
@@ -226,7 +226,7 @@ def main():
     # per-source-frame head motion (render px), for --window-by calm
     motion = None
     frontal = None
-    if a.window_by == "frontal":
+    if a.window_by in ("frontal", "steady"):
         # per-source-frame multi-scale NCC of the render's own frame-0 nose; the
         # window that keeps the most frames above the pose floor wins.
         nx, ny = int(round(cx - tpl.shape[1] * s / 2)), int(round(cy - tpl.shape[0] * s / 2))
@@ -262,7 +262,19 @@ def main():
     best = None
     for st in range(0, n_out_total - need + 1):
         seam = float(np.mean(np.abs(small[st + need - 1] - small[st])))
-        if frontal is not None:
+        if frontal is not None and a.window_by == "steady":
+            # simulate the CLIENT's gate over this window: hysteresis (on >= 0.95,
+            # off < 0.93), a 12-frame (500ms) dwell, emergency-off at <= 0.91. The
+            # window with the FEWEST switches wins — measured 2026-09-22 the frontal
+            # window switched 15x in 11s (a nod every 0.7s), which no gate can hide.
+            gate, changed, sw = True, -999, 0
+            for k_, c in enumerate(frontal[st:st + need]):
+                want = True if c >= 0.95 else False if c < 0.93 else gate
+                if want != gate and ((k_ - changed >= 12) or (not want and c <= 0.91)):
+                    gate, changed, sw = want, k_, sw + 1
+            below = sum(1 for c in frontal[st:st + need] if c < 0.93)
+            score = sw * 100.0 + below + seam
+        elif frontal is not None:
             below = sum(1 for c in frontal[st:st + need] if c < 0.93)
             score = below * 10.0 + seam
         elif motion is not None:
@@ -279,7 +291,12 @@ def main():
         print(f"  CALM WINDOW: head range dx {min(xs)}..{max(xs)} dy {min(ys)}..{max(ys)} render px over the window")
     if frontal is not None:
         below = sum(1 for c in frontal[st:st + need] if c < 0.93)
-        print(f"  FRONTAL WINDOW: {need - below}/{need} source frames at NCC >= 0.93 (multi-scale, vs render frame 0)")
+        gate, changed, sw = True, -999, 0
+        for k_, c in enumerate(frontal[st:st + need]):
+            want = True if c >= 0.95 else False if c < 0.93 else gate
+            if want != gate and ((k_ - changed >= 12) or (not want and c <= 0.91)):
+                gate, changed, sw = want, k_, sw + 1
+        print(f"  {a.window_by.upper()} WINDOW: {need - below}/{need} source frames at NCC >= 0.93; simulated gate switches over the window: {sw}")
     win = src_idx[st:st + need]                       # need frames
     print(f"  WINDOW: {need} frames from out {st} (src {win[0]}..{win[-1]}), raw wrap seam mean|d| {seam:.2f}")
     win_base = [to_base(frames[j]) for j in win]
