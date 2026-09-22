@@ -1080,6 +1080,23 @@ export const BASE_LOOP_FRAMES = 266;
 export const BASE_LOOP_FPS = 24;
 
 /**
+ * Body-clip playback time -> the body frame that is ON SCREEN. Both bodies
+ * (base_loop.mp4 and speak_loop.mp4) are BASE_LOOP_FRAMES at BASE_LOOP_FPS.
+ *
+ * NEVER index the body with the BANK's fps. bank.json carries the rate of the
+ * footage its patches were cut from (25 for the InfiniteTalk speaking render);
+ * the bodies are cut at 24. Indexing a 24fps body at 25 ran the drift and
+ * confidence tables up to 11 frames AHEAD of the picture by the end of every
+ * loop — up to 30.7px of mouth placement error on the speaking body and the
+ * wrong gate decision on a quarter of the ticks (measured 2026-09-22 from the
+ * shipped tables). The old bank was cut from 24fps footage, which is why the
+ * mismatch only appeared with the InfiniteTalk bank.
+ */
+export function bodyFrameAt(timeSec: number): number {
+  return frameIndexAt(timeSec, BASE_LOOP_FPS, BASE_LOOP_FRAMES);
+}
+
+/**
  * MEASURED per-frame drift of her mouth across base_loop, in base_loop pixels,
  * RELATIVE TO FRAME 0 (which is the frame every baseBox was measured on, so
  * frame 0 is exactly {0,0} and a fixed box is the special case of this table).

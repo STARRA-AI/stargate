@@ -24,7 +24,9 @@ import {
   baseDriftAt,
   bodyBoxAt,
   bodyDriftAt,
+  bodyFrameAt,
   bodyPatchConfidence,
+  frameIndexAt,
 } from "../src/lib/voice/viseme-sync";
 import {
   CONTINUOUS_BODY_CLIP,
@@ -181,5 +183,38 @@ describe("StarraClipFace uses both bodies (source pins — the wiring has no oth
     assert.match(face, /const blend = Math\.min\(1, \(now - pickChangedAt\) \/ MOUTH_BLEND_MS\)/);
     assert.match(face, /draw2d\.globalAlpha = blend;/);
     assert.match(face, /draw2d\.globalAlpha = 1;/, "alpha must be restored after the blended draw");
+  });
+});
+
+describe("the body frame index runs at the BODY's rate, never the bank's", () => {
+  // FOUND 2026-09-22 before the first live test: the compositor indexed the
+  // 24fps body clips with b4.fps — the bank's SOURCE footage rate, 25 for the
+  // InfiniteTalk render — so the drift and confidence tables ran up to 11
+  // frames ahead of the picture by the end of each loop (30.7px of placement
+  // error on the speaking body; wrong gate decision on ~25% of ticks). The old
+  // bank was cut from 24fps footage, which hid it.
+  it("bodyFrameAt is the 24fps index, clamped into the 266-frame loop", () => {
+    assert.equal(bodyFrameAt(0), 0);
+    assert.equal(bodyFrameAt(5), 120);
+    assert.equal(bodyFrameAt(10), 240);
+    assert.equal(bodyFrameAt(11), 264);
+    assert.equal(bodyFrameAt(11.08), BASE_LOOP_FRAMES - 1);
+    assert.equal(bodyFrameAt(99), BASE_LOOP_FRAMES - 1);
+    assert.equal(bodyFrameAt(-1), 0);
+    assert.equal(bodyFrameAt(Number.NaN), 0);
+  });
+  it("the bank's declared rate is its source footage's, and would land 10 frames ahead at 10s", () => {
+    const bank = JSON.parse(readFileSync(join(REPO, "public/avatar/visemes3/bank.json"), "utf8")) as { fps: number };
+    assert.equal(bank.fps, 25, "the InfiniteTalk bank is cut from 25fps footage (informational; the bodies are 24)");
+    assert.equal(frameIndexAt(10, bank.fps, BASE_LOOP_FRAMES) - bodyFrameAt(10), 10);
+  });
+  it("both body clips' declared durations are exactly 266 frames at 24fps", () => {
+    const ms = Math.round((BASE_LOOP_FRAMES / BASE_LOOP_FPS) * 1000);
+    assert.equal(STARRA_CLIPS[CONTINUOUS_BODY_CLIP].durationMs, ms);
+    assert.equal(STARRA_CLIPS[SPEAKING_BODY_CLIP].durationMs, ms);
+  });
+  it("StarraClipFace indexes the body with bodyFrameAt, not with the bank's fps (source pin)", () => {
+    assert.match(face, /const bodyFrame = bodyFrameAt\(video\.currentTime\);/);
+    assert.ok(!/frameIndexAt\(video\.currentTime, b4\.fps/.test(face), "b4.fps must never drive the body frame index");
   });
 });

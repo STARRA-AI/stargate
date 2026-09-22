@@ -18,13 +18,13 @@ import {
   type StarraClipKey,
 } from "@/lib/voice/starra-clip-map";
 import {
-  BASE_LOOP_FRAMES,
   TONE_RESAMPLE_MS,
   effectiveMouthSync,
   anchorAt,
   applyToneOffsets,
   audioOutputDelayMs,
   bodyBoxAt,
+  bodyFrameAt,
   bodyPatchConfidence,
   SPEAK_CONF_FLOOR,
   SPEAK_CONF_FULL,
@@ -1225,7 +1225,10 @@ export function StarraClipFace({
           // later in the loop (mean |dy| 6.0px; 56/266 frames >= 10px), which I
           // composited and LOOKED at — the mouth sits visibly low. baseBoxAt adds
           // the measured rigid head drift, and is the identity at frame 0.
-          const bodyFrame = frameIndexAt(video.currentTime, b4.fps, BASE_LOOP_FRAMES);
+          // The BODY's rate (24fps), never b4.fps: the bank declares its SOURCE
+          // footage's 25fps, and indexing the body with it ran these tables up to
+          // 11 frames ahead of the picture (see bodyFrameAt).
+          const bodyFrame = bodyFrameAt(video.currentTime);
           const box = bodyBoxAt(bodyKind, pick.baseBox, bodyFrame);
           // On the speaking body a turned head (low tracker confidence) fades the
           // patch out and lets her OWN talking mouth show — real footage — instead
