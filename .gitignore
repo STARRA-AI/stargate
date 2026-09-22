@@ -117,3 +117,6 @@ vendor/
 
 # Runtime log dir — stale empty artifact, nothing in src/ or scripts/ writes it.
 /logs/
+
+# python bytecode from the avatar tooling (py_compile / imports)
+__pycache__/
