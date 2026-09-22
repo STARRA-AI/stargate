@@ -31,6 +31,22 @@
 #     still running, so that instance overwrote it from memory on exit.
 #     FIX: quit Chrome FIRST, then write Preferences, then launch.
 #
+#  5. THE DOCK ICON ONLY WORKED ONCE (fixed 2026-09-22). This script used to
+#     end in `exec "$CHROME" ...`, which REPLACES the script's process with
+#     Chrome. LaunchServices had registered that process as STARRA.app, so from
+#     the Dock's point of view STARRA stayed "running" for as long as that Chrome
+#     lived — and on macOS Chrome outlives its last window. Every later click was
+#     therefore a "reopen" event delivered to a windowless Chrome, and THIS
+#     SCRIPT NEVER RAN AGAIN, so defect 1's fix (quit the profile's Chrome so
+#     --app is honoured) never got a chance to run either. PROVED by launching
+#     through LaunchServices twice: the first `open -a STARRA.app` changed the
+#     app-window Chrome's pid (88172 -> 88318), the second left it unchanged.
+#     FIX: launch Chrome through `open -n -a` — a separate instance, parented to
+#     launchd, registered as Google Chrome — and EXIT. LaunchServices then sees
+#     STARRA.app quit at once, so every Dock click runs this script from the top.
+#     Side benefit: the mic/TCC prompt is attributed to Google Chrome (which he
+#     has already granted) instead of to the launching bundle.
+#
 # Nothing here touches Classic's main Chrome. This profile is dedicated to the
 # STARGATE app, so quitting it loses no browsing session.
 # ─────────────────────────────────────────────────────────────────────────────
@@ -166,7 +182,7 @@ for kind in ("media_stream_mic",):
 # Land straight on the deck; never restore a stray tab or the New Tab Page.
 sess = d.setdefault("session", {})
 sess["restore_on_startup"] = 4          # 4 = open a specific set of URLs
-sess["startup_urls"] = ["https://127.0.0.1:3000/"]
+sess["startup_urls"] = ["https://localhost:3000/"]  # the NAME: Touch ID refuses an IP
 tmp = pref + ".tmp"
 with open(tmp, "w") as fh:
     json.dump(d, fh)
@@ -174,10 +190,17 @@ os.replace(tmp, pref)
 PY
 
 # ── 4. chromeless standalone window, dedicated profile ───────────────────────
-exec "$CHROME" --app="$DECK/" \
+# `open -n -a`, NOT exec (see defect 5): a fresh Chrome instance, parented to
+# launchd, registered with LaunchServices as Google Chrome — and this script
+# exits right after, so the Dock never mistakes a lingering Chrome for STARRA.
+# Measured: `open` returns in ~0.09s; the new instance carries --app and its own
+# --user-data-dir, so it cannot collide with the main browser's singleton.
+open -n -a "Google Chrome" --args \
+  --app="$DECK/" \
   --user-data-dir="$PROFILE" \
   --window-size=1440,900 \
   --class=STARGATE \
   --no-first-run \
   --no-default-browser-check \
-  >/dev/null 2>&1
+  || die "macOS refused to open Google Chrome.\n\nIs it still installed at:\n$CHROME"
+exit 0
