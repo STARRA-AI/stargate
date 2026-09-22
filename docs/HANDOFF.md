@@ -21,26 +21,33 @@ help. Judge every change against that. Memory: `north-star-alive-friend.md`.
 | `5c1a346` | `starra stop` kills the whole deck tree + waits; `up` refuses a held port and prints the listener; build log is its own file |
 | `6a55f4d` | speaking-body gate is a hysteretic state machine (ON ≥0.95, OFF <0.93, 500ms dwell, ~50ms dissolve); interim window 240/266 confident, 9 switches, patch shown 78% |
 | `03c7f87` | one `starra up` at a time (mkdir lock), atomic production build, a dist is current only when complete |
+| `1548800` | **the body was indexed at the BANK's 25fps, not its own 24** — tables ran up to 11 frames ahead, mouth 31px off at 8s into every speaking loop. `bodyFrameAt()`; pinned |
+| `86ce949` | **five more from the source review**: gate is a tested state machine (120ms off-debounce, no on-dwell, real clearly-turned), ONE 50ms dissolve (the 180ms CSS ease under a JS ramp was the blur), switch re-issued after a rollback, `speak_loop` primed at call open, canplay one-shot; bank null not memoized; `/avatar/*` revalidates every load |
 
 Also today, outside the repo: Claude Code update loop fixed (stale lock) → 2.1.278; Agent-Reach
 verified current (v1.5.0); llama.cpp Intel/AMD fork built + benchmarked at
 `~/STARGATE/vendor/llama-cpp-intel-amd` (2.7x generation, 17% slower prompt; NOT integrated).
 
 ## IN FLIGHT
-Nothing. The head-still, camera-facing speaking render (`4b92fb32`, $1.76) came back and was cut and
-measured with the SAME command and gate simulation as the interim: 63/266 frames at NCC ≥0.95 vs 197,
-10 switches vs 9, patch shown **31% vs 78%**; by eye she turns and tilts in both. InfiniteTalk's head
-motion follows the audio, not the prompt. **The interim window stays.** The take is filed at
-`STARRA ANGLES /muapi-out/starra_speaking_frontal_720p_infinitetalk.mp4` (+ .json sidecar). Deck is LIVE on the prod lane (`node scripts/deck-server.mjs`, https://localhost:3000),
-BUILD_ID 06:10 newer than every source; serving `base_loop.mp4`, `speak_loop.mp4` and
-`visemes3/` byte-for-byte. `starra up` now prints `lane: prod  listener: node scripts/deck-server.mjs`
-— if it ever says next-server on a prod launch, a stale dev server is answering: run `scripts/starra stop`.
+Nothing. Deck is LIVE on the prod lane (`node scripts/deck-server.mjs`, https://localhost:3000),
+BUILD_ID **08:00:02**, serving the `86ce949` bundle (verified: the served chunk carries the new
+50ms transition; `/avatar/body/speak_loop.mp4` answers `Cache-Control: public, max-age=0`).
+LANDMINE seen once today: `starra up`'s own build failed on a transient next/font/google
+(Orbitron) module-not-found and it SERVED THE PREVIOUS BUILD — it says so in its output
+("Serving the PREVIOUS production build"). A direct `STARRA_DIST=.next-prod-new npm run build`
+succeeded a minute later; swap with `starra stop; rm -rf .next-prod; mv .next-prod-new .next-prod;
+starra up`. Always read the BUILD_ID time after an `up`.
+The head-still, camera-facing speaking render (`4b92fb32`, $1.76) was cut and measured with the
+same command and gate simulation as the interim: patch shown **31% vs 78%**; by eye she turns and
+tilts in both. InfiniteTalk's head motion follows the audio, not the prompt. Interim window stays;
+the take is filed at `STARRA ANGLES /muapi-out/starra_speaking_frontal_720p_infinitetalk.mp4`.
 
 ## THE EXACT NEXT STEP — his
-Hard-reload the deck (avatar assets cache 3600s), open a call, and watch her. Then tell me what
+Open a call and watch her (assets now revalidate on every load; a hard-reload is still the safe first move). Then tell me what
 reads wrong — in what he SEES, not what he thinks causes it.
 
 ## UNVERIFIED (nobody has watched a live call with any of this)
+- The face fixes of `1548800` + `86ce949` on a live call: the mouth now tracks the 24fps body (it was up to 31px off), the gate no longer hides the patch on a frontal face, switches are 50ms cuts. QC of the misindex: scratchpad `fps_misindex_qc.png` (this session).
 - The two-body face on a live call (`dd471b2`): the listening→speaking crossfade on her first word, the
   patch fading to her own mouth on turns, the 80ms mouth blend. QC images:
   scratchpad/it-render/speaking_body_qc.png, SHIPPED_fullframe_bank.png.
@@ -49,7 +56,7 @@ reads wrong — in what he SEES, not what he thinks causes it.
 - Dragon verbs end-to-end to an order (traced from source, never fired).
 
 ## MONEY (read live 2026-09-22)
-- Muapi balance **$14.435** (spent $4.40 today on three renders: idle $0.88, speaking $1.76, head-still $1.76 — the third bought nothing; nothing recurring).
+- Muapi balance **$14.435** (spent $4.40 today on three renders: idle $0.88, speaking $1.76, head-still $1.76 — the third bought nothing; nothing recurring). Nothing spent since.
 - xAI: $315.61 credit; every invoice $0.00; auto top-up is ARMED at a $5 floor (his switch).
 - GCP: $13.75 this period, GPU VM stopped, $40 budget set.
 - Higgsfield: 27 free credits, untouched.
