@@ -413,6 +413,14 @@ start_deck() {
   fi
   echo "→ Starting STARGATE (${SCHEME}) on ${HOST}:${PORT}…"
   cd "$PROJ"
+  # NEVER LAUNCH INTO A HELD PORT. A server that fails to bind dies silently and
+  # the health check would then pass on whatever stranger is answering.
+  if lsof -ti tcp:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1; then
+    echo "◆ Port ${PORT} is already held by:"
+    for _p in $(lsof -ti tcp:"${PORT}" -sTCP:LISTEN 2>/dev/null); do ps -o pid=,command= -p "$_p" | cut -c1-100 | sed 's/^/    /'; done
+    echo "  Run \`scripts/starra stop\` first (it kills the whole deck tree and waits for the port)."
+    return 1
+  fi
   # --hostname $HOST (0.0.0.0 under HTTPS) so the iPhone on the same Wi‑Fi can reach the Mac.
   # Same trap-HUP form as start_ollama (macOS nohup dies under launchd — see there).
   # ★ THE PRODUCTION LANE IS THE DEFAULT (2026-09-22).
@@ -452,8 +460,13 @@ start_deck() {
     local DIST="${STARRA_DIST:-.next-prod}"
     if [[ ! -f "$DIST/BUILD_ID" ]] || [[ -n "$(find src public -newer "$DIST/BUILD_ID" -print -quit 2>/dev/null)" ]]; then
       echo "→ Building the production deck (first run, or sources changed)…"
-      if ! STARRA_DIST="$DIST" npm run build >>"$LOG" 2>&1; then
-        echo "◆ Production build FAILED — see $LOG. Falling back to the dev lane."
+      # ITS OWN LOG, truncated per run. A failed build appended to the multi-GB
+      # starra-up.log on the external volume was unreadable in practice (2026-09-22).
+      local BUILD_LOG="${LOG%/*}/starra-build.log"
+      if ! STARRA_DIST="$DIST" npm run build >"$BUILD_LOG" 2>&1; then
+        echo "◆ Production build FAILED — last lines of $BUILD_LOG:"
+        tail -15 "$BUILD_LOG" | sed 's/^/    /'
+        echo "  Falling back to the dev lane."
         LANE="dev"
       fi
     else
@@ -475,6 +488,14 @@ start_deck() {
   for _ in $(seq 1 60); do
     if deck_up; then
       echo "● Deck online at $URL"
+      # THE LISTENER MUST BE THE LANE WE LAUNCHED. Otherwise a stale server is
+      # answering for us and the new code is not what he is looking at.
+      local _holder; _holder="$(for _p in $(lsof -ti tcp:"${PORT}" -sTCP:LISTEN 2>/dev/null); do ps -o command= -p "$_p"; done | head -1)"
+      if [[ "$LANE" == "prod" && "$_holder" == *next-server* && "$_holder" != *deck-server* ]]; then
+        echo "◆ WARNING: port ${PORT} is answered by a next-server (dev) process, not deck-server.mjs:"
+        echo "    $_holder" | cut -c1-110
+      fi
+      echo "  lane: ${LANE}  listener: $(echo "$_holder" | cut -c1-70)"
       # `probe`, not a bare print: `starra up` must never hand him a phone URL it
       # has not just curled. The deck is answering by definition here, so the
       # extra check costs one local request.
@@ -553,16 +574,40 @@ cmd_open() {
 # the exact holder; the `next dev`/deck-server patterns are a narrow, port-scoped
 # fallback for the case where lsof is unavailable.
 stop_port_holder() {
-  local holders
-  holders="$(lsof -ti tcp:"${PORT}" 2>/dev/null || true)"
-  if [[ -n "$holders" ]]; then
-    echo "$holders" | while read -r h; do
-      [[ -n "$h" ]] && kill "$h" 2>/dev/null || true
+  # KILL THE TREE, THEN WAIT FOR THE PORT. Measured 2026-09-22: killing only the
+  # listener pid left `next dev` alive, which respawned its next-server child within
+  # seconds; the following `starra up` launched the prod server into EADDRINUSE,
+  # it died silently, and the health check happily passed on the surviving dev
+  # server. So: every listener on the port, plus each one's ancestors that are a
+  # deck process (next dev / next-server / npm run dev / deck-server.mjs), gets
+  # TERM; then we wait up to 6s for the port to actually free, and KILL stragglers.
+  local pids="" p pp cmd
+  for p in $(lsof -ti tcp:"${PORT}" -sTCP:LISTEN 2>/dev/null); do
+    pids="$pids $p"
+    pp="$(ps -o ppid= -p "$p" 2>/dev/null | tr -d ' ')"
+    while [[ -n "$pp" && "$pp" != "1" && "$pp" != "0" ]]; do
+      cmd="$(ps -o command= -p "$pp" 2>/dev/null)"
+      case "$cmd" in
+        *"next dev"*|*next-server*|*"npm run dev"*|*deck-server.mjs*|*"scripts/deck-server"*) pids="$pids $pp" ;;
+        *) break ;;
+      esac
+      pp="$(ps -o ppid= -p "$pp" 2>/dev/null | tr -d ' ')"
     done
+  done
+  if [[ -z "${pids// /}" ]]; then
+    pkill -f "next dev.*${PORT}" 2>/dev/null || true
+    pkill -f "deck-server.mjs" 2>/dev/null || true
     return 0
   fi
-  pkill -f "next dev.*${PORT}" 2>/dev/null || true
-  pkill -f "deck-server.mjs" 2>/dev/null || true
+  for p in $pids; do kill "$p" 2>/dev/null || true; done
+  local i
+  for i in $(seq 1 30); do
+    lsof -ti tcp:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1 || return 0
+    sleep 0.2
+  done
+  for p in $(lsof -ti tcp:"${PORT}" -sTCP:LISTEN 2>/dev/null) $pids; do kill -9 "$p" 2>/dev/null || true; done
+  sleep 0.5
+  lsof -ti tcp:"${PORT}" -sTCP:LISTEN >/dev/null 2>&1 && echo "◆ port ${PORT} is STILL held after SIGKILL" || true
 }
 
 
