@@ -415,7 +415,56 @@ start_deck() {
   cd "$PROJ"
   # --hostname $HOST (0.0.0.0 under HTTPS) so the iPhone on the same Wi‑Fi can reach the Mac.
   # Same trap-HUP form as start_ollama (macOS nohup dies under launchd — see there).
-  if [[ "$SCHEME" == "https" ]]; then
+  # ★ THE PRODUCTION LANE IS THE DEFAULT (2026-09-22).
+  #
+  # MEASURED on the login page — the LIGHTEST page in the app, no canvas, no
+  # video, no avatar — same browser, minutes apart:
+  #
+  #                        dev lane      prod lane
+  #   JavaScript shipped    659 KB        122 KB     5.4x less
+  #   JS requests              20             9
+  #   DOMContentLoaded      673 ms        131 ms     5.1x faster
+  #   load event           4426 ms       2074 ms     2.1x faster
+  #   JS heap                 9 MB          3 MB     3x less
+  #
+  # Dev mode also runs React with development-mode checks on EVERY render. Her
+  # viseme canvas composites at ~30fps, the reactor rides the analyser bus and
+  # the HUD animates — every one of those frames paid that tax, on every surface,
+  # forever. This is the one change that reaches the whole app rather than one
+  # lane of it.
+  #
+  # THE TRADE, stated plainly: a code change now needs a rebuild instead of hot
+  # reload. `STARRA_LANE=dev scripts/starra up` puts HMR back, unchanged.
+  #
+  # HTTPS ONLY. scripts/deck-server.mjs is HTTPS-only by design (a prod deck on
+  # http breaks Touch ID and the phone link), so an http start — which only
+  # happens when the mkcert pair is missing — stays on dev rather than failing.
+  LANE="${STARRA_LANE:-prod}"
+  if [[ "$LANE" == "prod" && "$SCHEME" != "https" ]]; then
+    echo "◆ No mkcert pair, so the production lane cannot serve https. Using dev."
+    LANE="dev"
+  fi
+
+  if [[ "$LANE" == "prod" ]]; then
+    # Rebuild only when something under src/ or public/ is newer than the build.
+    # STARRA_DIST keeps this out of .next, so a build never clobbers a running
+    # dev server (that lesson cost a 500ing deck once already).
+    local DIST="${STARRA_DIST:-.next-prod}"
+    if [[ ! -f "$DIST/BUILD_ID" ]] || [[ -n "$(find src public -newer "$DIST/BUILD_ID" -print -quit 2>/dev/null)" ]]; then
+      echo "→ Building the production deck (first run, or sources changed)…"
+      if ! STARRA_DIST="$DIST" npm run build >>"$LOG" 2>&1; then
+        echo "◆ Production build FAILED — see $LOG. Falling back to the dev lane."
+        LANE="dev"
+      fi
+    else
+      echo "→ Production build is current — serving it."
+    fi
+  fi
+
+  if [[ "$LANE" == "prod" ]]; then
+    ( trap '' HUP; STARRA_DIST="${STARRA_DIST:-.next-prod}" STARRA_PORT="$PORT" \
+      exec node scripts/deck-server.mjs ) </dev/null >>"$LOG" 2>&1 &
+  elif [[ "$SCHEME" == "https" ]]; then
     # Next 15 dev TLS using our mkcert cert (trusted → no "Not secure" warning).
     ( trap '' HUP; exec npm run dev -- --experimental-https --experimental-https-key "$KEY" \
       --experimental-https-cert "$CERT" --hostname "$HOST" --port "$PORT" ) </dev/null >>"$LOG" 2>&1 &
@@ -497,6 +546,25 @@ cmd_open() {
     return 1
   fi
 }
+# Kill whatever is holding the deck port, whichever lane started it.
+#
+# BY PORT, NOT BY NAME. `pkill -f next-server` once killed his LIVE DECK, so the
+# rule is kill by PID or by port and never by a generic process name. lsof gives
+# the exact holder; the `next dev`/deck-server patterns are a narrow, port-scoped
+# fallback for the case where lsof is unavailable.
+stop_port_holder() {
+  local holders
+  holders="$(lsof -ti tcp:"${PORT}" 2>/dev/null || true)"
+  if [[ -n "$holders" ]]; then
+    echo "$holders" | while read -r h; do
+      [[ -n "$h" ]] && kill "$h" 2>/dev/null || true
+    done
+    return 0
+  fi
+  pkill -f "next dev.*${PORT}" 2>/dev/null || true
+  pkill -f "deck-server.mjs" 2>/dev/null || true
+}
+
 
 cmd_stop() {
   # Tell the watchdog this is intentional BEFORE killing anything — otherwise it
@@ -510,12 +578,15 @@ cmd_stop() {
     if [[ -n "$pid" ]] && kill -0 "$pid" 2>/dev/null; then
       echo "→ Stopping deck pid ${pid}…"
       kill "$pid" 2>/dev/null || true
-      # also kill child next if present
-      pkill -f "next dev.*${PORT}" 2>/dev/null || true
+      # also kill the child server if present — EITHER LANE. The prod lane runs
+      # `node scripts/deck-server.mjs`, which the `next dev` pattern never
+      # matched, so before this a prod deck survived `starra stop` and kept
+      # holding the port.
+      stop_port_holder
     fi
     rm -f "$PID_FILE"
   else
-    pkill -f "next dev.*${PORT}" 2>/dev/null || true
+    stop_port_holder
   fi
   echo "● Deck stopped (Ollama left running). Watchdog paused — \`starra up\` resumes it."
 }
