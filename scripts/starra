@@ -50,6 +50,10 @@ PORT="${STARRA_PORT:-3000}"
 # down". Without it, `starra stop` would race the watchdog and she'd pop right
 # back up. `starra up` clears it. See scripts/starra-watchdog.sh.
 PAUSE_FILE="$PROJ/data/starra-paused"
+# Serialises `starra up` (see the up-lock block in the start path). FILE-SCOPED on
+# purpose: a RETURN trap runs after a function's locals are gone, so a `local`
+# lock path made the trap die with "UP_LOCK: unbound variable" (2026-09-22).
+UP_LOCK="$PROJ/data/starra-up.lock"
 # launchd job label — kept in one place so the script, the plist and the
 # installer can never drift apart.
 KEEPALIVE_LABEL="com.starra.deck"
@@ -421,6 +425,29 @@ start_deck() {
     echo "  Run \`scripts/starra stop\` first (it kills the whole deck tree and waits for the port)."
     return 1
   fi
+  # ONE `up` AT A TIME. Measured 2026-09-22 (data/logs/starra-watchdog.log 06:24:45):
+  # the watchdog saw the deck down during a rebuild and ran its OWN `starra up`;
+  # two `next build`s wrote the same dist, the first was killed mid-compile with
+  # no error, and its half-written BUILD_ID then looked "current". mkdir is the
+  # atomic lock (same trick the watchdog uses for itself); a second `up` waits for
+  # the first and then simply checks whether she is up.
+  if ! mkdir "$UP_LOCK" 2>/dev/null; then
+    local _age=$(( $(date +%s) - $(stat -f %m "$UP_LOCK" 2>/dev/null || echo 0) ))
+    if (( _age > 900 )); then
+      echo "○ Stale up-lock (${_age}s old) — removing it."
+      rm -rf "$UP_LOCK"; mkdir "$UP_LOCK" 2>/dev/null || true
+    else
+      echo "○ Another \`starra up\` is running (lock ${_age}s old) — waiting for it…"
+      local _w
+      for _w in $(seq 1 180); do
+        [[ -d "$UP_LOCK" ]] || break
+        sleep 1
+      done
+      if deck_up; then echo "● Deck online (brought up by the other run)"; return 0; fi
+      mkdir "$UP_LOCK" 2>/dev/null || { echo "◆ up-lock still held after 180s"; return 1; }
+    fi
+  fi
+  trap 'rm -rf "$UP_LOCK"' RETURN
   # --hostname $HOST (0.0.0.0 under HTTPS) so the iPhone on the same Wi‑Fi can reach the Mac.
   # Same trap-HUP form as start_ollama (macOS nohup dies under launchd — see there).
   # ★ THE PRODUCTION LANE IS THE DEFAULT (2026-09-22).
@@ -458,16 +485,30 @@ start_deck() {
     # STARRA_DIST keeps this out of .next, so a build never clobbers a running
     # dev server (that lesson cost a 500ing deck once already).
     local DIST="${STARRA_DIST:-.next-prod}"
-    if [[ ! -f "$DIST/BUILD_ID" ]] || [[ -n "$(find src public -newer "$DIST/BUILD_ID" -print -quit 2>/dev/null)" ]]; then
+    # A dist is only "current" if it is COMPLETE (routes-manifest.json is among the
+    # last files next build writes) AND newer than every source. A killed build
+    # leaves BUILD_ID behind without the manifests.
+    if [[ ! -f "$DIST/BUILD_ID" ]] || [[ ! -f "$DIST/routes-manifest.json" ]] || [[ -n "$(find src public -newer "$DIST/BUILD_ID" -print -quit 2>/dev/null)" ]]; then
       echo "→ Building the production deck (first run, or sources changed)…"
       # ITS OWN LOG, truncated per run. A failed build appended to the multi-GB
       # starra-up.log on the external volume was unreadable in practice (2026-09-22).
       local BUILD_LOG="${LOG%/*}/starra-build.log"
-      if ! STARRA_DIST="$DIST" npm run build >"$BUILD_LOG" 2>&1; then
+      # ATOMIC: build into a sibling dist and swap only on success, so a killed or
+      # failed build can never leave a half-written dist that reads as "current".
+      rm -rf "${DIST}-new"
+      if STARRA_DIST="${DIST}-new" npm run build >"$BUILD_LOG" 2>&1 && [[ -f "${DIST}-new/routes-manifest.json" ]]; then
+        rm -rf "$DIST" && mv "${DIST}-new" "$DIST"
+        git checkout -q tsconfig.json 2>/dev/null || true   # next build rewrites the include list for the dist name
+      else
         echo "◆ Production build FAILED — last lines of $BUILD_LOG:"
         tail -15 "$BUILD_LOG" | sed 's/^/    /'
-        echo "  Falling back to the dev lane."
-        LANE="dev"
+        rm -rf "${DIST}-new"
+        if [[ -f "$DIST/BUILD_ID" && -f "$DIST/routes-manifest.json" ]]; then
+          echo "  Serving the PREVIOUS production build (older than the sources) rather than the dev lane."
+        else
+          echo "  Falling back to the dev lane."
+          LANE="dev"
+        fi
       fi
     else
       echo "→ Production build is current — serving it."
