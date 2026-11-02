@@ -169,7 +169,7 @@ so the same helpers run in Edge middleware and Node routes. The login screen has
 ## Run
 
 ```bash
-cd ~/Projects/stargate
+git clone https://github.com/ppt615-spec/stargate.git && cd stargate
 cp .env.example .env.local     # add keys you want: XAI_API_KEY (voice/grok), ANTHROPIC_API_KEY, GROQ_API_KEY, STARRA_PASSWORD…
 npm install
 npm run starra:install         # once — puts `starra` on PATH + builds STARRA.app
@@ -204,3 +204,9 @@ Handy scripts: `starra up | open | stop | status | install` · `npm run typechec
 ---
 
 *Personal project for STARRA LLC. Dark-only. Operator voice. She is STARGATE.*
+
+---
+
+## License
+
+MIT. See [LICENSE](LICENSE). Copyright (c) 2026 STARRA LLC.

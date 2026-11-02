@@ -120,3 +120,6 @@ vendor/
 
 # python bytecode from the avatar tooling (py_compile / imports)
 __pycache__/
+
+# local scratch (viseme frames, experiments)
+/scratchpad/
