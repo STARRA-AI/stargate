@@ -197,7 +197,40 @@ describe("presence layer: grain and vignette cannot eat input or chrome", () => 
     });
   }
 
+  /**
+   * THE INVARIANT, NOT THE MAGIC NUMBER. The grain layer is `inset: -N%`, so it
+   * is (1 + 2N/100)x the stage on each axis and hangs N% of the STAGE off every
+   * side. `@keyframes starra-grain` translates it by percentages OF ITSELF, so a
+   * step of S% moves it S% * (1 + 2N/100) of the stage. The overhang has to
+   * cover that or a bare edge sweeps across her face.
+   *
+   * Today: N = 6 and max S = 1.5, so the drift reaches 1.5 * 1.12 = 1.68% of the
+   * stage against 6% of cover. It was N = 50 (a composited surface 4x the stage
+   * area) until 2026-09-30; shrinking it is safe for exactly this reason, and
+   * this test now checks the reason instead of the old number.
+   */
   it("grain overhangs the stage so drift cannot expose an edge", () => {
-    assert.match(overlay("after"), /inset:\s*-50%/);
+    const inset = /inset:\s*-([\d.]+)%/.exec(overlay("after"));
+    assert.ok(inset, "grain overlay has no negative percentage inset to overhang with");
+    const overhang = Number.parseFloat(inset[1]);
+
+    const kf = /@keyframes\s+starra-grain\s*\{([\s\S]*?)\n\}/.exec(deck);
+    assert.ok(kf, "@keyframes starra-grain not found");
+    const steps = [...kf[1].matchAll(/translate\(([^)]*)\)/g)]
+      .flatMap((m) => m[1].split(","))
+      .map((v) => Math.abs(Number.parseFloat(v.trim().replace("%", ""))));
+    assert.ok(steps.length > 0, "starra-grain declares no translate() steps");
+    assert.ok(
+      steps.every((v) => Number.isFinite(v)),
+      "starra-grain has a translate step this test cannot read as a percentage",
+    );
+
+    const maxStep = Math.max(...steps);
+    const travel = maxStep * (1 + (2 * overhang) / 100);
+    assert.ok(
+      overhang >= travel,
+      `grain drifts ${travel.toFixed(2)}% of the stage but only overhangs ` +
+        `${overhang}% — an unpainted edge would sweep across her face`,
+    );
   });
 });

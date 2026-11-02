@@ -16,13 +16,16 @@ import { FundingPanel } from "./FundingPanel";
 import { InstagramApproval } from "./InstagramApproval";
 import { LiveSky } from "./LiveSky";
 import ReactorSphere from "@/components/hud/ReactorSphere";
-import { Starfield } from "@/components/bridge/Starfield";
 import { deckBoot, pressable, tabSwitch, tabsIn } from "@/lib/ui/motion";
 import { ShadowPanel } from "./ShadowPanel";
 import { SnapHydrator } from "./SnapHydrator";
 import { useStageScale } from "./useStageScale";
 import { VoiceCallOverlay } from "./VoiceCallOverlay";
 import "@/styles/deck.css";
+
+/* ECO survives a reload / Dock relaunch. Written only by the ECO button, read
+   once on mount (see ECO_RESTORE in Bridge). "1" = on, anything else = off. */
+const ECO_KEY = "starra_eco";
 
 /* ── live data shapes from the API layer ── */
 
@@ -137,7 +140,14 @@ export function Bridge() {
   const [ventures, setVentures] = useState<Venture[]>([]);
   const [feed, setFeed] = useState<FeedLine[]>([]);
   const [clock, setClock] = useState("—");
-  const [eco, setEco] = useState(false); /* launches with full motion; toggle ECO on if the machine needs it */
+  /* ECO starts off, then ECO_RESTORE below reinstates his last choice. It is a
+     mount effect and NOT a lazy useState initializer on purpose: Bridge is
+     server-rendered (app/page.tsx imports it directly, no ssr:false), so
+     reading localStorage during render would make the server HTML disagree with
+     the first client render whenever ECO was on — a hydration mismatch. The
+     effect costs him nothing: `body.low-power` is applied by an effect anyway
+     (see below), so ECO never applied during the server HTML to begin with. */
+  const [eco, setEco] = useState(false);
   const [shine, setShine] = useState(false);
   const [reduced, setReduced] = useState(false);
   const [isMobile, setIsMobile] = useState(false);
@@ -234,6 +244,19 @@ export function Bridge() {
   useEffect(() => {
     document.documentElement.classList.add("deck-active");
     return () => document.documentElement.classList.remove("deck-active");
+  }, []);
+
+  /* ECO_RESTORE — ECO PERSISTS NOW. It used to reset to OFF on every reload and
+     every Dock relaunch, so the deck went back to paying full per-frame cost
+     each time he opened it, and the fix he had already chosen silently
+     un-chose itself. try/catch mirrors the brief stamp above: storage is a
+     nicety, never a requirement. */
+  useEffect(() => {
+    try {
+      if (localStorage.getItem(ECO_KEY) === "1") setEco(true);
+    } catch {
+      /* no storage — ECO simply starts off */
+    }
   }, []);
 
   useEffect(() => {
@@ -634,15 +657,22 @@ export function Bridge() {
             + a breathing core glow (deck.css, centered on --reactor-cx/cy).
             ECO + prefers-reduced-motion + hidden tab hold all of it still. */}
         <div className="galaxy-spin" aria-hidden />
-        {/* The starfield's two layers drift via `background-position` (globals.css
-            :121-126), which repaints the full 1680x1000 layer every frame — it is
-            never composited. ECO exists to still exactly that, and the stylesheet
-            has no `body.low-power` rule for it, so the gate lives here. Precedent:
-            `.ambient-sweep` is dropped outright under ECO (deck.css:1540).
-            prefers-reduced-motion is already handled in CSS (globals.css:250-256),
-            which freezes the layers rather than removing them — leave that path
-            alone, a reduced-motion user should still see stars. */}
-        {!eco && <Starfield />}
+        {/* THE SECOND STARFIELD IS GONE (2026-09-30). <Starfield /> painted two
+            CSS-gradient layers that drifted via `background-position`
+            (globals.css:121-126) — uncompositable, so it repainted the full
+            1680x1000 stage every frame, forever, for 8 gradient dots at 25% and
+            15% opacity sitting UNDER LiveSky's canvas, which already draws 120
+            stars at alpha 0.55-1.00 (LiveSky.tsx:86, :89-92). Its third layer
+            was a static scanline wash duplicating `.ambient-scanlines`
+            (deck.css, same 1px/3px period), so the only visible change is that
+            the scanlines are ~30% fainter. The component file is untouched;
+            restoring is one line.
+            DO NOT DELETE THE STARFIELD CSS. `<Starfield />` is still the sky on
+            all SEVEN ScreenShell screens (ScreenShell.tsx:49 -> /brief,
+            /connectors, /memory, /pipeline, /settings, /tools, /vault), so
+            globals.css:121-126 (.starfield-a / .starfield-b drift) and :250-256
+            (their reduced-motion guard) are LIVE and must stay. Only the DECK
+            stopped rendering it. */}
         <LiveSky />
         <div className="reactor-ring reactor-ring-1" aria-hidden />
         <div className="reactor-ring reactor-ring-2" aria-hidden />
@@ -737,7 +767,13 @@ export function Bridge() {
             className={`eco-btn${eco ? " on" : ""}`}
             title="Low power — pauses decorative animations"
             onClick={(e) => {
-              setEco((v) => !v);
+              const next = !eco;
+              setEco(next);
+              try {
+                localStorage.setItem(ECO_KEY, next ? "1" : "0");
+              } catch {
+                /* no storage — the toggle still works for this session */
+              }
               pressable(e.currentTarget);
             }}
           >

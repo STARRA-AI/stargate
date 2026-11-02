@@ -122,12 +122,23 @@ export const OPENNESS_STALL_MS = 700;
  * from a COLD start and the frozen half-open stamp could still be drawn for a
  * whole reply.
  *
- * WHY 1e-3 IS SAFE IN BOTH DIRECTIONS. Nothing drawable lives below it: the
- * shipped bank's most-closed frame is v00 at openness 0.0814, i.e. 81x this
- * value, and `opennessFromAudio` already returns a HARD 0 for anything at or
- * under SILENCE_FLOOR, so real silence arrives as an exact zero and real speech
- * arrives orders of magnitude above. 1e-3 only ever catches the decay tail —
- * a level far below any visible mouth movement.
+ * WHY 1e-3 IS SAFE IN BOTH DIRECTIONS. `opennessFromAudio` already returns a HARD
+ * 0 for anything at or under SILENCE_FLOOR, so real silence arrives as an exact
+ * zero and real speech arrives orders of magnitude above. 1e-3 only ever catches
+ * the decay tail — a level far below any visible mouth movement.
+ *
+ * CORRECTED 2026-09-30, and the correction INVERTS the old argument rather than
+ * trimming it. This used to read "Nothing drawable lives below it: the shipped
+ * bank's most-closed frame is v00 at openness 0.0814, i.e. 81x this value."
+ * v00 at 0.0814 is the floor of public/avatar/visemes/bank.json — the 8-frame
+ * LEGACY v1 bank (`jq` on it: ids v00..v07, floor 0.0814), which is the LAST
+ * fallback rung, not the shipped bank. On the shipped v4 bank
+ * (public/avatar/visemes3/bank.json) FIVE entries sit at openness exactly 0.0
+ * (m_closed, m00, m01, m02, m03), so drawable frames DO live below this epsilon.
+ * THE ACTION IS STILL RIGHT, for a different reason than the one stated: what
+ * lives down there is a genuinely SHUT mouth, and hiding the patch over
+ * base_loop's own at-rest mouth is the same picture as drawing it. Read this
+ * constant as a decay-tail filter, never as a claim about the bank's floor.
  */
 export const OPENNESS_SILENT_EPSILON = 1e-3;
 
@@ -550,12 +561,18 @@ export function createOpennessRing(capacity: number = 64): OpennessRing {
 
 /**
  * Watchdog for a DEAD analyser. If smoothed openness sits at zero for longer
- * than a real inter-word pause while she is supposed to be speaking, the audio
- * is not reaching the analyser at all — and because the bank's floor frame is
- * v00 at openness 0.0814 (a slightly OPEN mouth, not a closed one) the old code
- * stamped that frozen half-open mouth over her filmed mouth for the whole
- * reply. `update` returning true means HIDE the patch and let her real filmed
- * mouth play.
+ * than a real inter-word pause while she is supposed to be speaking, the audio is
+ * not reaching the analyser at all — and the old code stamped a FROZEN mouth over
+ * her filmed mouth for the whole reply. `update` returning true means HIDE the
+ * patch and let her real filmed mouth play.
+ *
+ * WHICH BANK THAT FROZEN FRAME BELONGS TO, corrected 2026-09-30: the floor frame
+ * "v00 at openness 0.0814 (a slightly OPEN mouth)" this used to name is the floor
+ * of public/avatar/visemes/bank.json, the 8-frame LEGACY v1 bank — verified with
+ * `jq` (v00..v07, floor 0.0814). The shipped v4 bank floors at a genuinely shut
+ * mouth (five entries at openness 0.0). So on the v4 path this gate rescues a
+ * FROZEN mouth rather than a half-open one; that is the defect either way, and on
+ * the legacy rung the half-open floor this was written against is still real.
  */
 export interface StallGate {
   /** Advance by `dtMs`; true once openness has been silent past the window. */
@@ -704,10 +721,14 @@ export const BANK2_URL = "/avatar/visemes/bank2.json";
  * openness could hand back a WIDE closed mouth on an /m/. Forcing the dedicated
  * entry makes the closure unambiguous.
  *
- * WHY 0.10. The bank's non-closed entries start at openness 0.133, and
- * `opennessFromAudio` already returns a hard 0 at or under SILENCE_FLOOR, so 0.10
- * sits in the empty gap between real silence and her first genuinely-parted mouth.
- * It cannot swallow real speech: a spoken vowel clears it by several multiples.
+ * WHY 0.10. RE-DERIVED 2026-09-30 against the SHIPPED visemes3 bank (the old
+ * text claimed "non-closed entries start at openness 0.133", which was the v2
+ * bank). On bank.json's own axis — 0 = the 6px shut floor, 1 = a 44px aperture —
+ * 0.10 is a ~9.8px aperture, and the only entries it swallows are m00..m03 (6px,
+ * openness 0.0) and m04 (7px, openness 0.0263): every one of them is already a
+ * shut mouth. Her first genuinely-parted entry is m05 at openness 0.2368 (~15px),
+ * clear of this by 2.4x. `opennessFromAudio` also returns a hard 0 at or under
+ * SILENCE_FLOOR, so real silence arrives as an exact zero.
  */
 export const CLOSURE_OPENNESS = 0.1;
 
@@ -1005,27 +1026,49 @@ export function createRoundnessSmoother(tauMs: number = ROUNDNESS_TAU_MS): Mouth
 // the shipped asset, not a typo here; the parser keys off the version field.
 //
 // WHAT IS DIFFERENT FROM v2, per entry:
-//   baseBox      {x,y,w,h} — the paste box in BASE_LOOP's OWN 552x720 pixel
-//                space. REBUILT 2026-07-30: every entry now shares ONE UNIFORM
-//                box placed by a single rigid e-heavy->base_loop nose-template
-//                mapping (NCC 0.9822), not per-entry template re-registration —
-//                the old per-entry matching slid the "oo" crops 11-15px up into
-//                her nose (measured by scripts/measure_mouth_alignment.py). The
-//                box top (y=242) clears the measured nose baseline (238..241
-//                drift-relative) on all 266 frames by construction.
+//   baseBox      {x,y,w,h} — the paste box in BASE_LOOP's OWN 552x840 pixel
+//                space (552x840 confirmed 2026-09-30 by `ffprobe` on
+//                public/avatar/body/base_loop.mp4: 552x840, 24fps, 266 frames).
+//                Every entry shares ONE UNIFORM box placed by a single rigid
+//                e-heavy->base_loop nose-template mapping, not per-entry template
+//                re-registration — the old per-entry matching slid the "oo" crops
+//                11-15px up into her nose (measured by
+//                scripts/measure_mouth_alignment.py).
+//                CORRECTED 2026-09-30, read off the shipped asset. The uniform box
+//                is {x:248, y:278, w:152, h:102} (`jq '[.frames[].baseBox]|unique'
+//                public/avatar/visemes3/bank.json`), and that bank's own
+//                `placementNote` puts the mapping at scale 0.720, NCC 0.9950. The
+//                numbers that stood here — y=242, nose baseline 238..241,
+//                NCC 0.9822 — were the RETIRED bank's, in its coordinate space.
+//                THE NOSE GUARANTEE, and prefer this to any number: the box top
+//                clears the measured per-frame nose baseline on all 266 frames,
+//                asserted for EVERY entry by tests/anatomy-v4-bank.test.ts:527
+//                (opened and confirmed green 2026-09-30). Today that is top 278
+//                against the NOSE_BASELINE_Y table at that file :483, whose 266
+//                entries span 272..277 — parsed, not eyeballed.
+//                LANDMINE: bank.json's own `placementNote` STILL recites the
+//                retired y=242 / 238..241 pair, so the shipped asset contradicts
+//                its own baseBox. Trust the baseBox and the test; do not
+//                "restore" these numbers from that note.
 //   registration each patch's NCC against base frame 0 at the shared box.
 //                Metadata only — never a placement input.
-// And top-level: `base`, `opennessCeiling` (0.55) and `closedId` ("m_closed").
+// And top-level: `base`, `opennessCeiling` (1.0 in the SHIPPED visemes3 bank —
+// see THE CEILING below) and `closedId` ("m_closed").
 //
 // SCALE — THE RUNTIME MUST NOT RESCALE. Each PNG's pixel size EQUALS its own
 // baseBox w/h (asserted in tests/anatomy-v4-bank.test.ts). They were resampled
 // ONCE, offline, from the e-heavy source crops. Any further scaling here would
 // be a second resample of an already-resampled image.
 //
-// THE CEILING IS NOT A TUNABLE. openness spans 0.00..0.50 only; entries above
-// 0.55 were DELIBERATELY dropped because a full gape composited as a visible
-// shout. So a loud passage must CLAMP to the ceiling, never extrapolate past the
-// top of the real ladder into footage that does not exist.
+// THE CEILING IS NOT A TUNABLE — AND THE NUMBER IN IT IS NOT 0.55. CORRECTED
+// 2026-09-30, re-read off the asset: 0.55 described the FIRST v4 bank, whose
+// ladder stopped at openness 0.50 because a full gape composited as a visible
+// shout. The SHIPPED public/avatar/visemes3/bank.json declares
+// `opennessCeiling: 1.0` and carries 24 entries spanning openness 0.00..1.00
+// (m21/m22 at 1.0 — the measured 44px aperture), so clampOpenness is currently
+// the IDENTITY. The RULE is what is fixed and what must survive a re-cut bank: a
+// loud passage CLAMPS to whatever the bank declares, and never extrapolates past
+// the top of the real ladder into footage that does not exist.
 
 /** A paste box in base_loop's own pixel space. */
 export interface VisemeBaseBox {
@@ -1043,7 +1086,7 @@ export interface VisemeBank4Frame {
   roundness: number;
   sourceFrame: number;
   label: string;
-  /** Absolute paste box in BASE_LOOP coordinates (552x720), from frame 0. */
+  /** Absolute paste box in BASE_LOOP coordinates (552x840), from frame 0. */
   baseBox: VisemeBaseBox;
   /** NCC of that template match. Metadata: it is a STATIC per-entry score, not
    *  a per-frame pose signal, so it is deliberately NOT used as an opacity ramp. */
@@ -1101,24 +1144,41 @@ export function bodyFrameAt(timeSec: number): number {
  * RELATIVE TO FRAME 0 (which is the frame every baseBox was measured on, so
  * frame 0 is exactly {0,0} and a fixed box is the special case of this table).
  *
- * WHY THIS EXISTS — a fixed box is NOT good enough, measured 2026-07-30. The
- * brief's premise ("head travel is only 10x17px over 11s, so a fixed box is
- * defensible") is true about the travel and I reproduced it: template-matching
- * m01 into all 266 frames puts her mouth at x 211..221 (span 10) and y 203..221
- * (span 18). But the CONSEQUENCE is that a box fixed at frame 0 is off by up to
- * 17px vertically, mean |dy| 6.0px, with 129/266 frames >= 6px off and 56/266
- * >= 10px off. I composited the worst frame (41, dy -17) and LOOKED at it: the
- * mouth sits visibly low with a smeared double upper-lip edge. 21% of the loop
- * looked wrong. So the box tracks instead.
+ * WHY THIS EXISTS — RESTATED 2026-09-30, because the rationale that stood here
+ * described a file that is no longer shipped and the table below contradicted it.
+ *
+ * WHAT IT SAID: "a fixed box is NOT good enough, measured 2026-07-30 ...
+ * template-matching m01 into all 266 frames puts her mouth at x 211..221 (span 10)
+ * and y 203..221 (span 18) ... a box fixed at frame 0 is off by up to 17px
+ * vertically, mean |dy| 6.0px, with 129/266 frames >= 6px off and 56/266 >= 10px
+ * off ... 21% of the loop looked wrong."
+ *
+ * WHAT THE SHIPPED TABLE BELOW ACTUALLY SAYS (computed off these arrays
+ * 2026-09-30, not re-template-matched): BASE_DRIFT_X spans 0..+8, BASE_DRIFT_Y
+ * spans -2..+3. So a box fixed at frame 0 is off by at most 3px vertically, mean
+ * |dy| 0.95px, with 0/266 frames >= 6px off and 0/266 >= 10px. Those two accounts
+ * cannot both describe one file, and they do not: base_loop.mp4 was REPLACED on
+ * 2026-09-22 by an InfiniteTalk listening render, and this table was re-measured
+ * against the new file while the prose above it was not.
+ *
+ * SO WHY KEEP THE TABLE. Not for base_loop, where it is nearly a no-op today — for
+ * SPEAK_LOOP, where it carries the whole weight: SPEAK_DRIFT_Y spans -31..+13,
+ * mean |dy| 9.32px, 106/266 frames >= 10px off. bodyBoxAt feeds from whichever
+ * body is showing, so one mechanism serves both; on base it costs nothing and
+ * stays correct, on speak it is the difference between a registered mouth and one
+ * up to 31px low. Do NOT "simplify" base back to a fixed box on the strength of
+ * the small numbers — it is the same code path speak depends on.
  *
  * WHY IT IS SAFE — the drift is RIGID HEAD MOTION, not lip motion:
- *   - three independent templates agree: m01 vs m02 differ by mean 0.21px in x /
- *     0.59px in y (max 1px); m01 vs m_closed by 0.08px / 0.62px (max 2px).
- *   - the match is confident on every frame: NCC 0.954..0.978, mean 0.968.
- *   - it is already smooth: max per-frame step 1px in either axis, so there is
- *     nothing to smooth and no jitter to introduce.
- *   - it is seam-continuous: frame 265 -> frame 0 steps 0px in x, 1px in y, so
- *     the loop wrap does not jump the mouth.
+ *   - it is already smooth: max per-frame step 1px in either axis (verified on the
+ *     shipped arrays), so there is nothing to smooth and no jitter to introduce.
+ *   - it is seam-continuous: frame 265 -> frame 0 steps 1px in x and 0px in y
+ *     (verified; this line read "0px in x, 1px in y", which was the retired
+ *     table's wrap), so the loop wrap does not jump the mouth.
+ *   - NOT re-verified on the shipped render, and carried over from 2026-07-30:
+ *     the three-template agreement (m01 vs m02 mean 0.21px x / 0.59px y; m01 vs
+ *     m_closed 0.08px / 0.62px) and the NCC 0.954..0.978 confidence. Those needed
+ *     the template matcher, which was not re-run here.
  * TO REVERT to a fixed box, make baseDriftAt return {dx:0,dy:0}. Nothing else
  * changes; baseBoxAt is then the identity.
  */
@@ -1449,12 +1509,14 @@ export function parseVisemeBank4(raw: unknown): VisemeBank4 | null {
 /**
  * Hold openness AT the bank's ceiling instead of asking for footage above it.
  *
- * The v4 ladder tops out at openness 0.50 with a hard ceiling of 0.55, because
- * every wider entry read as a SHOUT when composited (verified by eye, then
- * dropped from the bank). Nearest-neighbour would already return the top entry
- * for openness 1.0, so this is not about the lookup — it is about never letting a
- * later change (an extrapolation, a synthesised in-between, a wider bank) treat a
- * loud passage as licence to open her mouth past what was actually filmed.
+ * CORRECTED 2026-09-30 — the old text here said "the v4 ladder tops out at
+ * openness 0.50 with a hard ceiling of 0.55". That was the FIRST v4 bank. The
+ * SHIPPED visemes3/bank.json declares `opennessCeiling: 1.0` and carries real
+ * entries all the way up (m21/m22 at openness 1.0, i.e. the measured 44px
+ * aperture), so this function is the IDENTITY on today's bank. It stays because
+ * the guarantee is what matters, not the current number: never let a later change
+ * (an extrapolation, a synthesised in-between, a re-cut bank) treat a loud passage
+ * as licence to open her mouth past what was actually filmed.
  *
  * TOTAL: a non-finite openness is 0, a non-finite/non-positive ceiling means no
  * clamping, and a ceiling above 1 cannot lift openness past 1.
@@ -1491,9 +1553,16 @@ export function pickVisemeFrame4(
  * backing store whenever the pick flips between size groups, which roundness
  * wobble can do frame to frame. So the canvas is sized ONCE to the maximum and
  * each patch is drawn CENTRED in it (see patchPlacement), which also keeps the
- * feathered mask centred on the patch. The rebuilt bank's boxes are UNIFORM
- * (131x78, all identical — asserted in tests/anatomy-v4-bank.test.ts), so today
- * this is the identity; the machinery stays for any future mixed-size bank.
+ * feathered mask centred on the patch. The rebuilt bank's boxes are UNIFORM, so
+ * today this is the identity; the machinery stays for any future mixed-size bank.
+ *
+ * WHAT THAT TEST ACTUALLY ASSERTS — because this line used to borrow its authority
+ * for a figure it never mentions. tests/anatomy-v4-bank.test.ts:515 (opened
+ * 2026-09-30) asserts UNIFORMITY ONLY: `assert.deepEqual(f.baseBox, first)` for
+ * every entry, naming no size. The SIZE is the asset's, not the test's — 152x102,
+ * from bank.json's width/height and from every baseBox's w/h. The "131x78" that
+ * stood here was the retired bank. Cite uniformity to the test; read the size off
+ * bank.json.
  */
 export function bankPatchExtent(
   frames: readonly { baseBox: VisemeBaseBox }[] | null | undefined,
@@ -1543,13 +1612,31 @@ export function patchPlacement(
 // ── the LOCAL TONE MATCH ────────────────────────────────────────────────────
 //
 // WHY IT IS NEEDED even though patch and base come from the same footage. The
-// patches were cut from the e-heavy source and resampled to the base's scale, and
-// two of them ("oo": m05, m07) came from a slightly different source crop.
-// MEASURED 2026-07-30 over base frames 0/66/132/199/265, the per-channel offset
-// this function produces reaches +15.5 on m07's red channel and +13.4 on m05's,
-// with most entries inside +-7. A 15-level channel shift on a mouth-sized patch
-// reads as a different exposure, i.e. a visible rectangle. With the match applied
-// the composite is seamless (composited and LOOKED at, all 10 entries).
+// patches were cut from a separate source render and resampled to the base's
+// scale, so their exposure can land a few levels off the base's. A ~15-level
+// channel shift on a mouth-sized patch reads as a different exposure, i.e. a
+// visible rectangle — that is what this exists to remove.
+//
+// WHAT IS GUARANTEED, which is all this comment should ever have claimed:
+// `toneMatchOffsets` is the IDENTITY when the means already agree (asserted at
+// tests/anatomy-v4-bank.test.ts:328-330, opened 2026-09-30 — matching means give
+// [0,0,0]), and it is a MEAN SHIFT ONLY — no gain, no gamma, no per-pixel
+// transfer — so it cannot invent or destroy detail. That property survives any
+// re-cut of the bank; a per-entry number does not.
+//
+// WHAT WAS REMOVED 2026-09-30, and why. This block used to end "the composite is
+// seamless (composited and LOOKED at, all 10 entries)". The shipped bank has 24
+// entries (`jq '.frames|length' public/avatar/visemes3/bank.json`), so that count
+// covered under half of it and seamlessness was NOT confirmed across the bank —
+// StarraClipFace.tsx already flagged "10 entries" as this line's stale count.
+// THERE IS NO PER-ENTRY VISUAL CONFIRMATION ON RECORD for the shipped bank. Do
+// not write one back until somebody has actually looked.
+// The per-channel figures that stood here (+15.5 on m07's red, +13.4 on m05's,
+// most inside +-7, over base frames 0/66/132/199/265) were measured 2026-07-30 on
+// the RETIRED bank, before the 2026-09-22 rebuild replaced base_loop.mp4 AND the
+// patch set. They have not been re-measured, and the ids no longer mean what that
+// sentence meant by them: in the shipped bank m05 is labelled "ee" and m07
+// "oo-small", not an "oo" pair.
 //
 // It is deliberately a MEAN shift only — no gain, no gamma, no per-pixel
 // transfer. A mean shift cannot invent or destroy detail; it slides the patch's
@@ -1563,11 +1650,17 @@ export const TONE_BASE_WEIGHT = 1 - TONE_PATCH_WEIGHT;
 /**
  * How often the base region under the mouth is re-measured, in ms.
  *
- * The base tone changes slowly (her head travels 10x18px over 11.08s and the
- * region is her mouth at rest), so measuring it every frame would be pure burn.
- * 100ms is ~6 frames at 60fps.
+ * 400ms, and it was 100ms. Each re-measure is a getImageData readback, which
+ * stalls the GPU pipeline — at 100ms that was a hitch roughly ten times a second.
+ * The base tone drifts far slower than that (the mouth anchor travels 8px in x and
+ * 5px in y across the whole shipped 11.08s loop — BASE_DRIFT_X 0..+8, BASE_DRIFT_Y
+ * -2..+3 — and the region is her mouth at rest. This cited "head travels 10x18px",
+ * which was measured on the take base_loop.mp4 REPLACED on 2026-09-22), so nothing is given up by
+ * measuring it less often. The ONE moment it changes instantly is a base/speak
+ * footage swap, and StarraClipFace forces a re-measure there explicitly rather
+ * than waiting out this interval.
  */
-export const TONE_RESAMPLE_MS = 100;
+export const TONE_RESAMPLE_MS = 400;
 
 /**
  * Mean of each of R,G,B over an RGBA byte buffer. FULLY TRANSPARENT pixels are
@@ -1867,5 +1960,244 @@ export function containRect(
     left: (boxW - natW * scale) / 2,
     top: (boxH - natH * scale) / 2,
     scale,
+  };
+}
+
+// ── FLUIDITY (2026-09-30) ───────────────────────────────────────────────────
+// Four pure pieces for the "fully fluid like a real person" pass. Every one is
+// total and DOM-free so it is unit-testable on the table, and every one degrades
+// to today's behaviour when its inputs are missing or malformed.
+
+/**
+ * Weighted distance between two bank cells, in the SAME units
+ * `pickVisemeFrame2`'s nearest scan uses (OPENNESS_AXIS_WEIGHT /
+ * ROUNDNESS_AXIS_WEIGHT). Returns the real (non-squared) distance, because the
+ * blend length below is a LINEAR ramp over it, not a ranking.
+ *
+ * MEASURED on the shipped visemes3 bank (and the threshold below was corrected
+ * by that measurement, not chosen): the openness ROWS sit at 0, 0.0263, 0.2368,
+ * 0.2632, 0.5, 0.5263, 0.7105..0.7632, 0.9474, 1.0, so the WIDEST single-row step
+ * is 0 -> 0.2632 = 0.790 in these units; one roundness COLUMN step is ~0.21 in
+ * roundness, i.e. ~0.21 here. A two-row openness jump (0 -> 0.5) is 1.5.
+ *
+ * TOTAL: a non-finite coordinate is read the way pickVisemeFrame2 reads it —
+ * openness 0, roundness NEUTRAL 0.5 — so a bad cell can never produce NaN here.
+ */
+export function cellDistance(
+  a: { openness: number; roundness: number } | null | undefined,
+  b: { openness: number; roundness: number } | null | undefined,
+): number {
+  if (!a || !b) return Infinity;
+  const ao = Number.isFinite(a.openness) ? clamp01(a.openness) : 0;
+  const bo = Number.isFinite(b.openness) ? clamp01(b.openness) : 0;
+  const ar = Number.isFinite(a.roundness) ? clamp01(a.roundness) : 0.5;
+  const br = Number.isFinite(b.roundness) ? clamp01(b.roundness) : 0.5;
+  const dO = (ao - bo) * OPENNESS_AXIS_WEIGHT;
+  const dR = (ar - br) * ROUNDNESS_AXIS_WEIGHT;
+  return Math.sqrt(dO * dO + dR * dR);
+}
+
+/**
+ * THE GHOSTED MOUTH — how long one shape dissolves into the next.
+ *
+ * WHAT WAS WRONG. The v4 draw crossfaded the outgoing PNG into the incoming one
+ * over a FIXED 80ms — StarraClipFace's `MOUTH_BLEND_MS`, which this change
+ * DELETED, so do not go looking for it. A dissolve between two
+ * photographs of a mouth is not motion — it is two mouths on one face — and the
+ * only part of it the eye forgives is the part too short to resolve. At 80ms,
+ * 40ms of every single shape change sits in the visibly-ghosted 0.25..0.75 alpha
+ * band, and ~30% of speaking frames were measured inside it.
+ *
+ * SO THE LENGTH FOLLOWS THE JUMP. Adjacent cells differ by a few pixels of
+ * aperture, so they need almost nothing (MIN) — a snap there reads as motion, not
+ * as a cut. A multi-row jump is a genuinely different mouth, so it gets the
+ * longer (still short) MAX rather than a hard pop. Linear in between.
+ *
+ * THE CEILING IS THE POINT: MAX is 30ms, so the worst case leaves 15ms in the
+ * ghosted band — under one 60fps frame — against 40ms before.
+ *
+ * TOTAL: a non-finite distance takes MAX (the safe, softer end); a min above max
+ * is swapped rather than trusted.
+ */
+export const MOUTH_BLEND_MIN_MS = 16;
+export const MOUTH_BLEND_MAX_MS = 30;
+/** At or below this cell distance the two shapes are ADJACENT (see cellDistance):
+ *  0.8 holds the bank's widest single openness-row step (0.790, measured). */
+export const MOUTH_BLEND_ADJACENT_DIST = 0.8;
+/** At or above this the pick JUMPED (two openness rows or more). */
+export const MOUTH_BLEND_FAR_DIST = 1.5;
+
+export function mouthBlendMs(
+  dist: number,
+  minMs: number = MOUTH_BLEND_MIN_MS,
+  maxMs: number = MOUTH_BLEND_MAX_MS,
+  adjacent: number = MOUTH_BLEND_ADJACENT_DIST,
+  far: number = MOUTH_BLEND_FAR_DIST,
+): number {
+  const lo = Number.isFinite(minMs) && minMs >= 0 ? minMs : MOUTH_BLEND_MIN_MS;
+  const hi = Number.isFinite(maxMs) && maxMs >= 0 ? maxMs : MOUTH_BLEND_MAX_MS;
+  const min = lo <= hi ? lo : hi;
+  const max = lo <= hi ? hi : lo;
+  if (!Number.isFinite(dist)) return max;
+  const a = Number.isFinite(adjacent) ? adjacent : MOUTH_BLEND_ADJACENT_DIST;
+  const f = Number.isFinite(far) && far > a ? far : a + 1;
+  if (dist <= a) return min;
+  if (dist >= f) return max;
+  return min + ((dist - a) / (f - a)) * (max - min);
+}
+
+/**
+ * THE FROZEN MOUTH AFTER EVERY TURN — the release, made monotonic.
+ *
+ * WHAT CLASSIC SEES TODAY, traced on the source rather than guessed. Her voice
+ * stops; `createMouthSmoother` decays openness with RELEASE_MS = 110ms; below
+ * CLOSURE_OPENNESS the pick locks to the bilabial `m_closed`, so a STILL
+ * photograph of a shut mouth is pasted over a speaking body that is still moving
+ * its jaw. The only thing that ever cleared it was `createStallGate`, which
+ * starts counting its 700ms only once openness has decayed past 1e-3 — a further
+ * ~680ms from a normal 0.4 — so the frozen frame lived ~1.4s. And the body
+ * crossfade back to the listening loop lands in the middle of that (700ms hold +
+ * 320ms fade), blanking the patch and then bringing it BACK: the "flickers off
+ * then on before clearing" Classic reported.
+ *
+ * THIS GATE RELEASES ON THE REST CROSSING INSTEAD, AND LATCHES.
+ *   - released once openness has been at/below MOUTH_REST_OPENNESS continuously
+ *     for MOUTH_RELEASE_HOLD_MS;
+ *   - it STAYS released until openness climbs back over MOUTH_REARM_OPENNESS,
+ *     so nothing downstream (a body crossfade, a republished layer, the stall
+ *     gate) can flicker the patch back on;
+ *   - the hold equals the shipped OPENNESS_STALL_MS (700ms) minus the ~200ms the
+ *     smoother takes to fall from a normal speaking level to the rest threshold,
+ *     so it tolerates EXACTLY the same real silence the stall gate was tuned for
+ *     (the 250-600ms inter-phrase pauses named at OPENNESS_STALL_MS) while
+ *     clearing at ~710ms after her last sound instead of ~1.4s.
+ *
+ * WHAT THIS GATE DOES NOT DECIDE — and the first version of the consumer got this
+ * wrong. It answers "is her mouth at rest and latched", nothing more. It does NOT
+ * decide WHICH BODY may act on that. StarraClipFace applies it only while
+ * base_loop is the layer on screen, because the release fires 320-440ms BEFORE the
+ * body leaves body_speak (SPEAKING_BODY_HOLD_MS 700ms, then a CROSSFADE_MS 320ms
+ * blend), and hiding the patch over body_speak shows her own filmed mouth talking
+ * in silence — a lying mouth instead of a frozen one. So the honest claim is: the
+ * frozen shut-mouth photo clears EARLIER ON THE LISTENING BODY, and across the
+ * overlap it is still held, exactly as it was before this gate.
+ *
+ * HOW MUCH EARLIER, stated as the range it actually is rather than one number: a
+ * ~550-670ms improvement, not a flat 667ms. The patch clears when the body STARTS
+ * fading back (~700-820ms after her last sound, because the body switch is polled
+ * every SPEAKING_BODY_POLL_MS) instead of ~1367ms. The full trace, including why
+ * PATCH_FADE_MIN_OPACITY absorbs most of the 320-440ms overlap, is at the point of
+ * use in StarraClipFace (the `released && bodyKind === "base"` guard). DERIVED FROM
+ * SOURCE, not observed on a live turn.
+ *
+ * TOTAL: non-finite openness counts as SILENT (the safe direction — release),
+ * non-finite dt advances nothing, and dt is clamped exactly as the stall gate
+ * clamps it so one long frame cannot jump the hold.
+ */
+export const MOUTH_REST_OPENNESS = 0.06;
+export const MOUTH_REARM_OPENNESS = 0.12;
+export const MOUTH_RELEASE_HOLD_MS = 500;
+
+export interface ReleaseGate {
+  /** Advance by `dtMs`; true means RELEASED — hide the patch and keep it hidden. */
+  step(openness: number, dtMs: number): boolean;
+  reset(): void;
+}
+
+export function createReleaseGate(
+  holdMs: number = MOUTH_RELEASE_HOLD_MS,
+  rest: number = MOUTH_REST_OPENNESS,
+  rearm: number = MOUTH_REARM_OPENNESS,
+): ReleaseGate {
+  const hold = Number.isFinite(holdMs) && holdMs > 0 ? holdMs : MOUTH_RELEASE_HOLD_MS;
+  const restAt = Number.isFinite(rest) && rest > 0 ? rest : MOUTH_REST_OPENNESS;
+  const rearmAt =
+    Number.isFinite(rearm) && rearm > restAt ? rearm : restAt * 2;
+  let restFor = 0;
+  let released = false;
+  return {
+    step(openness: number, dtMs: number): boolean {
+      const o = Number.isFinite(openness) ? openness : 0;
+      if (released) {
+        // ONE WAY BACK: real sound, clear of the rest band. Anything less leaves
+        // her mouth released, which is what makes the release monotonic.
+        if (o > rearmAt) {
+          released = false;
+          restFor = 0;
+        }
+        return released;
+      }
+      if (o > restAt) {
+        restFor = 0;
+        return false;
+      }
+      const dt = Number.isFinite(dtMs) && dtMs > 0 ? Math.min(dtMs, 250) : 0;
+      restFor += dt;
+      if (restFor >= hold) released = true;
+      return released;
+    },
+    reset(): void {
+      restFor = 0;
+      released = false;
+    },
+  };
+}
+
+/**
+ * THE BODY ANSWERS HER VOICE — a continuous response where there was one bit.
+ *
+ * The body layer reacted to a single boolean (speaking / not), so between the two
+ * clip switches nothing about her moved with what she was SAYING. This maps the
+ * mouth engine's own smoothed envelope onto a subtle rigid transform:
+ *   - `scale` follows the FAST envelope: she settles a little taller and forward
+ *     as she speaks. Up only, never below 1 — scaling DOWN would pull her edges
+ *     in and expose the letterbox behind her.
+ *   - `ty` follows the fast envelope upward (negative = up), the way a head lifts
+ *     slightly into an emphasised phrase.
+ *   - `rotate` follows fast MINUS slow, i.e. EMPHASIS: a syllable louder than her
+ *     running average leans her a fraction of a degree, and steady speech leans
+ *     her not at all. That is why it needs two time constants and not one.
+ *
+ * IT RIDES THE EXISTING ANALYSER. The caller feeds it the envelope the mouth loop
+ * already computed from the one analyser on the bus — no second tap, no second
+ * rAF, and no extra work per frame beyond two one-poles.
+ *
+ * Amplitudes are DELIBERATELY under the existing CSS presence layer's
+ * (deck.css `starra-handheld` translate is 0.38-0.5% of the stage and
+ * `starra-breathe` scale is 1.0072): this is the SUBJECT moving, and it must stay
+ * quieter than the camera. One constant scales all three (see BODY_MOTION_GAIN in
+ * StarraClipFace).
+ *
+ * TOTAL: non-finite inputs are 0 and a non-finite gain is 0, so the worst case is
+ * the identity transform — exactly today's still body.
+ */
+export const BODY_MOTION_TAU_FAST_MS = 140;
+export const BODY_MOTION_TAU_SLOW_MS = 900;
+/** Full-scale amplitudes at gain 1 and energy 1. */
+export const BODY_MOTION_SCALE = 0.005;
+export const BODY_MOTION_RISE_PX = 2;
+export const BODY_MOTION_ROLL_DEG = 0.12;
+
+export function bodyMotionFromEnergy(
+  fast: number,
+  slow: number,
+  gain: number,
+): { scale: number; tx: number; ty: number; rotate: number } {
+  const g = Number.isFinite(gain) && gain > 0 ? gain : 0;
+  const f = Number.isFinite(fast) ? clamp01(fast) : 0;
+  const s = Number.isFinite(slow) ? clamp01(slow) : 0;
+  // Emphasis is signed and small; clamp it so one loud burst cannot roll her far.
+  let emph = f - s;
+  if (emph > 0.5) emph = 0.5;
+  if (emph < -0.5) emph = -0.5;
+  // `-0` is not the identity (Object.is(-0, 0) is false, and it prints as
+  // "-0.000px"), so both signed products are normalised.
+  const ty = -BODY_MOTION_RISE_PX * g * f;
+  const rotate = BODY_MOTION_ROLL_DEG * g * emph * 2;
+  return {
+    scale: 1 + BODY_MOTION_SCALE * g * f,
+    tx: 0,
+    ty: ty === 0 ? 0 : ty,
+    rotate: rotate === 0 ? 0 : rotate,
   };
 }

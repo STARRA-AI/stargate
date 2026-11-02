@@ -13,9 +13,17 @@
  * dropped frame never jumps); all mutable state lives in the once-run
  * effect's closure — zero React re-renders per frame. The loop fully STOPS
  * (cancelAnimationFrame, not a skip) under document.hidden, body.low-power,
- * or prefers-reduced-motion, and resumes when they clear (visibilitychange
- * + matchMedia change + MutationObserver on body class). A bad frame
- * disables the sky instead of breaking the deck — additive degradation.
+ * prefers-reduced-motion, or body.in-call, and resumes when they clear
+ * (visibilitychange + matchMedia change + MutationObserver on body class).
+ * A bad frame disables the sky instead of breaking the deck — additive
+ * degradation.
+ *
+ * STOPPED IS STILL, NEVER EMPTY (2026-09-30). Every one of those gates paints
+ * ONE static frame (paintStill -> paint(t, 0)) and holds it, so a reduced-motion
+ * user, an ECO-on reload and a deck opened in a background tab all see the stars
+ * STANDING STILL — the same thing the retired CSS star layers gave them. This is
+ * load-bearing now that Bridge no longer renders <Starfield />: on this deck
+ * nothing else paints a star.
  */
 
 /**
@@ -178,13 +186,24 @@ export function LiveSky() {
       canvas.width = Math.round(cw * dpr);
       canvas.height = Math.round(ch * dpr);
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      /* NOTE: setting width/height WIPES the canvas. The running loop repaints
+         it on the next frame; when the gates are closed there IS no next frame,
+         so onResize below repaints explicitly. */
     };
 
     /* stillness gates — checked every frame batch (cheap classList read) */
     const gatesClosed = () =>
       document.hidden ||
       prm.matches ||
-      document.body.classList.contains("low-power");
+      document.body.classList.contains("low-power") ||
+      /* behind an opaque call panel: 120 star arcs nobody can see, competing
+         with her mouth canvas for frames. VoiceCallOverlay sets this class only
+         while the call is EXPANDED and covering the viewport, never while it is
+         the collapsed 268px window (VoiceCallOverlay.tsx, the in-call effect) —
+         collapsing must not freeze the deck he collapsed it to keep using. The
+         MutationObserver below re-syncs on body class changes, so both expand
+         and hang-up restart this on their own. */
+      document.body.classList.contains("in-call");
 
     const stop = () => {
       if (raf !== null) {
@@ -194,42 +213,45 @@ export function LiveSky() {
       last = null; /* resume never inherits a stale delta-t */
     };
 
-    const frame = (t: number) => {
-      try {
-        if (gatesClosed()) {
-          stop(); /* full stop, not a skip — sync() restarts us */
-          return;
+    /* DRAW ONE FRAME. `dt === 0` means a STILL frame: nothing advances — no
+       star drift, no meteor spawn, no meteor state touched — the field is
+       painted exactly where it already stands. That is what every closed gate
+       renders (see paintStill), so ECO, a hidden tab, reduced motion and an
+       expanded call all leave STARS FROZEN on screen instead of an empty sky.
+       Splitting this out of frame() is the whole reason the sky can be still
+       without being blank; before the split, a gate that closed before the
+       first frame landed meant the canvas was never painted at all. */
+    const paint = (t: number, dt: number) => {
+      const tSec = t / 1000;
+      const dx = Math.cos(DRIFT_RAD);
+      const dy = Math.sin(DRIFT_RAD);
+      ctx.clearRect(0, 0, w, h);
+      for (const s of stars) {
+        const L = LAYERS[s.layer];
+        if (dt > 0 && w > 0 && h > 0) {
+          s.x += (dx * L.speed * dt) / w;
+          s.y += (dy * L.speed * dt) / h;
+          if (s.x < 0) s.x += 1;
+          else if (s.x >= 1) s.x -= 1;
+          if (s.y < 0) s.y += 1;
+          else if (s.y >= 1) s.y -= 1;
         }
-        const dt = last === null ? 0 : Math.min((t - last) / 1000, 0.1);
-        last = t;
-        const tSec = t / 1000;
-        const dx = Math.cos(DRIFT_RAD);
-        const dy = Math.sin(DRIFT_RAD);
-        ctx.clearRect(0, 0, w, h);
-        for (const s of stars) {
-          const L = LAYERS[s.layer];
-          if (dt > 0 && w > 0 && h > 0) {
-            s.x += (dx * L.speed * dt) / w;
-            s.y += (dy * L.speed * dt) / h;
-            if (s.x < 0) s.x += 1;
-            else if (s.x >= 1) s.x -= 1;
-            if (s.y < 0) s.y += 1;
-            else if (s.y >= 1) s.y -= 1;
-          }
-          const tw = 0.5 + 0.5 * Math.sin(s.phase + (tSec * TAU) / s.period);
-          ctx.globalAlpha = L.alpha * (0.3 + 0.7 * tw);
-          ctx.fillStyle = s.color;
+        const tw = 0.5 + 0.5 * Math.sin(s.phase + (tSec * TAU) / s.period);
+        ctx.globalAlpha = L.alpha * (0.3 + 0.7 * tw);
+        ctx.fillStyle = s.color;
+        ctx.beginPath();
+        ctx.arc(s.x * w, s.y * h, s.size, 0, TAU);
+        ctx.fill();
+        if (s.bright) {
+          ctx.fillStyle = "#ffffff";
           ctx.beginPath();
-          ctx.arc(s.x * w, s.y * h, s.size, 0, TAU);
+          ctx.arc(s.x * w, s.y * h, s.size * 0.45, 0, TAU);
           ctx.fill();
-          if (s.bright) {
-            ctx.fillStyle = "#ffffff";
-            ctx.beginPath();
-            ctx.arc(s.x * w, s.y * h, s.size * 0.45, 0, TAU);
-            ctx.fill();
-          }
         }
-        /* one shooting star at a time, every 6-14s */
+      }
+      /* one shooting star at a time, every 6-14s. Skipped entirely on a still
+         frame (dt 0): a frozen sky must not spawn or advance a streak. */
+      if (dt > 0) {
         if (nextShootAt === 0) {
           nextShootAt =
             t + SHOOT_GAP_MIN_MS + Math.random() * (SHOOT_GAP_MAX_MS - SHOOT_GAP_MIN_MS);
@@ -265,7 +287,34 @@ export function LiveSky() {
             ctx.fill();
           }
         }
-        ctx.globalAlpha = 1;
+      }
+      ctx.globalAlpha = 1;
+    };
+
+    /* THE STARS ALWAYS PAINT AT LEAST ONCE. Every gate in gatesClosed() used to
+       mean an unpainted canvas if it was already shut when the loop tried to
+       start: prefers-reduced-motion (permanently), ECO restored on at load, and
+       a deck opened in a background tab. The old CSS star layers gave a still
+       sky on those paths; this gives the same thing from the canvas. */
+    const paintStill = () => {
+      if (disabled || w <= 0 || h <= 0) return;
+      try {
+        paint(performance.now(), 0);
+      } catch {
+        disabled = true; /* same additive degradation as a bad live frame */
+      }
+    };
+
+    const frame = (t: number) => {
+      try {
+        if (gatesClosed()) {
+          stop(); /* full stop, not a skip — sync() restarts us */
+          paintStill(); /* leave the sky visible and frozen, never blank */
+          return;
+        }
+        const dt = last === null ? 0 : Math.min((t - last) / 1000, 0.1);
+        last = t;
+        paint(t, dt);
       } catch {
         disabled = true; /* a bad frame kills the sky, never the deck */
         stop();
@@ -278,27 +327,47 @@ export function LiveSky() {
       if (disabled || raf !== null || gatesClosed()) return;
       raf = requestAnimationFrame(frame);
     };
-    const sync = () => (gatesClosed() ? stop() : start());
+    const sync = () => {
+      if (gatesClosed()) {
+        stop();
+        paintStill();
+      } else {
+        start();
+      }
+    };
+    /* A RESIZE MUST NOT BLANK A FROZEN SKY. resize() wipes the canvas, and with
+       the gates closed no frame is coming to repaint it — so under ECO or
+       reduced motion a window resize used to leave an empty stage. This is also
+       how the stars get up when canvas.clientWidth was still 0 at mount: the
+       first observer callback lands here. */
+    const onResize = () => {
+      resize();
+      if (gatesClosed()) paintStill();
+    };
 
     resize();
     let ro: ResizeObserver | null = null;
     if (typeof ResizeObserver !== "undefined") {
-      ro = new ResizeObserver(resize);
+      ro = new ResizeObserver(onResize);
       ro.observe(canvas);
     } else {
-      window.addEventListener("resize", resize);
+      window.addEventListener("resize", onResize);
     }
     document.addEventListener("visibilitychange", sync);
     prm.addEventListener("change", sync);
     /* resume the stopped loop the moment body.low-power (ECO) clears */
     const mo = new MutationObserver(sync);
     mo.observe(document.body, { attributes: true, attributeFilter: ["class"] });
-    start();
+    /* sync(), not start(): if a gate is ALREADY closed at mount — reduced
+       motion, ECO restored on from localStorage, or the deck opened in a
+       background tab — start() returns without ever painting and the sky is
+       EMPTY. sync() paints the one still frame instead. */
+    sync();
 
     return () => {
       stop();
       if (ro) ro.disconnect();
-      else window.removeEventListener("resize", resize);
+      else window.removeEventListener("resize", onResize);
       document.removeEventListener("visibilitychange", sync);
       prm.removeEventListener("change", sync);
       mo.disconnect();

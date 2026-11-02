@@ -41,8 +41,17 @@ input::placeholder { color: #7a63a8; }
 /* Badge breath — transform only (2013 MBP budget). Cine webm carries the glow. */
 @keyframes badge-breath { 0%, 100% { transform: scale(1); opacity: 0.92; } 50% { transform: scale(1.03); opacity: 1; } }
 @keyframes badge-pulse-dim { 0%, 100% { opacity: 0.78; } 50% { opacity: 1; } }
+/* drift is no longer applied to .ambient-dots (see below) — kept so restoring
+   the dot drift is a one-line change. */
 @keyframes drift { from { background-position: 0 0; } to { background-position: -600px -600px; } }
-@keyframes sweep { 0% { top: -10%; } 100% { top: 110%; } }
+/* PERFORMANCE: animates `transform`, NOT `top`. `top` is not a compositable
+   property, so the old keyframe forced layout + paint of a full-stage layer on
+   every one of 60 frames a second, forever. The px values are the exact
+   equivalent of the old `top: -10% -> 110%`: `top` percentages resolve against
+   the containing block, which is `#stage` at a hardcoded `height: 1000px`
+   (deck.css:65-68 — `#stage { width: 1680px; height: 1000px }`), so
+   -10% = -100px and 110% = 1100px. Identical motion. */
+@keyframes sweep { 0% { transform: translateY(-100px); } 100% { transform: translateY(1100px); } }
 @keyframes wave { 0%, 100% { transform: scaleY(0.2); } 50% { transform: scaleY(1); } }
 @keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0.2; } }
 @keyframes feed-in { from { opacity: 0; transform: translateY(-5px); } to { opacity: 1; transform: translateY(0); } }
@@ -82,14 +91,36 @@ input::placeholder { color: #7a63a8; }
     radial-gradient(1px 1px at 55% 40%, #fff 100%, transparent);
   background-size: 600px 600px;
   opacity: 0.18;
-  animation: drift 120s linear infinite;
+  /* PERFORMANCE: the `drift` animation was removed here, not merely gated.
+     `background-position` is not compositable, so it repainted this
+     full-stage layer every frame, forever — to move 1px dots at 18% opacity
+     by 5px/sec (600px / 120s), which is below perception. The drift the deck
+     actually shows comes from LiveSky's canvas: 120 stars at 2.0-5.0 px/s and
+     alpha 0.55-1.00 in the same footprint (LiveSky.tsx:86, :89-92).
+     TO RESTORE, ALL THREE LINES — the two BODY-CLASS gates went with the
+     animation, because `animation: none` on a layer with no animation is a dead
+     rule that reads as live: (1) add `animation: drift 120s linear infinite;`
+     back here, (2) add `body.low-power .ambient-dots { animation: none; }` and
+     (3) add `body.in-call .ambient-dots` back to the in-call selector list.
+     Restoring only (1) would drift under ECO and behind a call.
+     THE ONE GATE THAT WAS KEPT is the `prefers-reduced-motion` entry in the
+     @media block below — an accessibility guard is worth more standing than
+     tidy, so it stays even though it is inert while there is no animation to
+     stop. Do not read it as evidence that this layer animates. */
 }
 .ambient-scanlines {
   position: absolute; inset: 0; z-index: 0; pointer-events: none;
   background: repeating-linear-gradient(0deg, rgba(176,77,252,0.028) 0px, rgba(176,77,252,0.028) 1px, transparent 1px, transparent 3px);
 }
 .ambient-sweep {
-  position: absolute; left: 0; right: 0; height: 90px; z-index: 0; pointer-events: none;
+  /* `top: 0` + the resting `translateY(-100px)` are BOTH load-bearing now that
+     @keyframes sweep translates instead of animating `top`. The pair reproduces
+     the keyframe's 0% state exactly (old `top: -10%` of the 1000px stage), so
+     when something stills the animation — `prefers-reduced-motion` sets
+     `animation: none !important` below — the band parks off the top of the
+     stage where it always did, instead of sitting visible across the header. */
+  position: absolute; top: 0; transform: translateY(-100px);
+  left: 0; right: 0; height: 90px; z-index: 0; pointer-events: none;
   background: linear-gradient(180deg, transparent, rgba(211,139,255,0.055), transparent);
   animation: sweep 9s linear infinite;
 }
@@ -154,7 +185,14 @@ input::placeholder { color: #7a63a8; }
     var(--panel);
   border: 1px solid var(--border);
   border-radius: 12px;
-  backdrop-filter: blur(10px);
+  /* PERFORMANCE: `backdrop-filter: blur(10px)` was removed. It was the single
+     most expensive thing on the deck — ~12 panels each re-sampling and
+     re-blurring everything beneath them every frame. Nothing visible is lost:
+     the three background layers above already end 82-92% opaque
+     (rgba(11,5,23,0.82) -> rgba(17,8,34,0.92)), so there was almost no
+     backdrop left to see through. ECO already proved the deck is correct
+     without it (the old `body.low-power .panel { backdrop-filter: none }`).
+     TO RESTORE: add `backdrop-filter: blur(10px);` back here. */
   box-shadow:
     inset 0 0 0 1px color-mix(in oklab, var(--chrome) 4%, transparent),
     inset 0 0 36px color-mix(in oklab, var(--purple) 8%, transparent),
@@ -520,7 +558,9 @@ body.low-power .star-ring { animation: none; }
 .console {
   height: 32%; min-height: 210px; display: flex; flex-direction: column;
   background: linear-gradient(180deg, rgba(16,7,32,0.84), rgba(9,4,18,0.94)); border: 1px solid var(--border); border-radius: 12px;
-  backdrop-filter: blur(8px); overflow: hidden;
+  /* PERFORMANCE: `backdrop-filter: blur(8px)` removed — same reason as .panel.
+     This background is already 84-94% opaque. TO RESTORE: re-add it here. */
+  overflow: hidden;
 }
 .console-head { display: flex; align-items: center; gap: 8px; padding: 8px 14px; border-bottom: 1px solid rgba(176,77,252,0.22); }
 .wave-bars { display: flex; align-items: center; gap: 2px; height: 16px; }
@@ -1249,6 +1289,12 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
   display: flex; align-items: center; justify-content: center;
   padding: 24px;
   background: radial-gradient(circle at center, color-mix(in oklab, var(--purple) 14%, transparent), rgba(5,2,10,0.86) 70%);
+  /* NEVER ACTUALLY COMPOSITED TODAY — kept as documentation of the intent. The
+     overlay always carries `.call-facetime` too (VoiceCallOverlay.tsx renders
+     `call-overlay call-facetime`), and that rule sets `backdrop-filter: none`
+     expanded, collapsed and under low-power alike. This line only starts costing
+     frames again if something ever mounts `.call-overlay` without
+     `.call-facetime`. Do not read it as a live blur. */
   backdrop-filter: blur(14px);
   animation: call-backdrop-in 0.2s ease-out;
 }
@@ -1323,7 +1369,18 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
    Three silent portrait clips crossfaded on call-state: calm idle, an attentive
    LISTENING face while you talk, her TALKING loop while she speaks. Her face
    fills the screen. No transcript — just her, like a real call. */
-.call-facetime { padding: 0; background: var(--void); }
+/* NO BACKDROP BLUR WHEN EXPANDED. .call-overlay (:1287) asks for a
+   full-viewport backdrop-filter: blur(14px); this rule then paints opaque
+   --void straight over it. The compositor was snapshotting the entire
+   viewport, Gaussian-blurring it, and discarding the result every frame for a
+   picture nobody can see. Same move the collapsed window (:1574) and low-power
+   (:1918) already make. -webkit- prefixed too, for the WKWebView dock app. */
+.call-facetime {
+  padding: 0;
+  background: var(--void);
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+}
 
 /* Two-column call: her face fills the left/center column, the live transcript
    sits in its own column on the right — so her aspect ratio is never squeezed
@@ -1629,7 +1686,7 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
    that is the whole model here. This is also the first thing on
    the stage that has ever reacted to her state: `mode` reaches
    the DOM as `.call-face-{speaking,listening,idle}` on the stage
-   (VoiceCallOverlay.tsx:608) and until now nothing consumed it. */
+   (VoiceCallOverlay.tsx:651) and until now nothing consumed it. */
 .call-face-speaking  .call-face-portrait { animation-duration: 16s, 3.1s; }
 .call-face-listening .call-face-portrait { animation-duration: 20s, 5.2s; }
 .call-face-idle      .call-face-portrait { animation-duration: 25s, 6.1s; }
@@ -1639,7 +1696,11 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
    the status/controls (z-index 3), so it grades HER and never
    fights the operator chrome for legibility.
 
-   inset:-50% so the drift below can never expose an edge; the
+   inset:-6% so the drift below can never expose an edge, sized from the
+   drift itself: the keyframe's largest step is 1.5% of THIS element, which
+   at 1.12x the stage is 1.68% of the stage — well inside the 6% overhang.
+   It used to be inset:-50%, i.e. a composited surface 4x the stage area,
+   4/1.2544 = ~3.2x more pixels than the drift needs; the
    stage is `overflow:hidden` (see .call-facetime .call-face-stage)
    so the overhang is clipped. Fixed and pointer-events:none, which
    is the only safe way to run grain — on a scrolling container it
@@ -1647,7 +1708,7 @@ body.low-power .mic-open-dot { animation: none; opacity: 1; }
    belongs to the lens, not to the subject. */
 .call-facetime .call-face-stage::after {
   content: "";
-  position: absolute; inset: -50%;
+  position: absolute; inset: -6%;
   z-index: 2; pointer-events: none;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='220' height='220'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.82' numOctaves='3' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='220' height='220' filter='url(%23n)'/%3E%3C/svg%3E");
   background-repeat: repeat;
@@ -1799,9 +1860,44 @@ body.low-power .call-facetime .call-face-stage::after { animation: none; }
 .eco-btn:hover { color: var(--text); }
 .eco-btn.on { background: rgba(110,231,160,0.14); border-color: rgba(110,231,160,0.45); color: var(--good); }
 
-/* Stills decorative animation + drops the GPU-heavy blur; everything
-   functional (chat, voice, speaking cues, wave bars) stays live. */
-body.low-power .ambient-dots { animation: none; }
+/* Stills decorative animation; everything functional (chat, voice, speaking
+   cues, wave bars) stays live.
+   SPLIT 2026-09-30: the rules that cost frames but showed him NOTHING were
+   moved OUT of here and made unconditional, because ECO defaulted off and did
+   not persist, so the deck was always paying for them. Those are: the
+   backdrop-filter blurs (.panel / .console), the .ambient-dots drift and the
+   sweep's `top` animation — all fixed at their base rules above. dot-breathe's
+   box-shadow was moved out of the keyframe too, but that one was NOT invisible
+   and is not claimed to be: see the note above @keyframes dot-breathe for the
+   one difference it leaves on the panel dots. What is LEFT under ECO is only motion he can see:
+   galaxy-spin, the reactor rings/core, the badge + wordmark videos, the
+   starfield/sweep, the call orb and the panel reveal. */
+/* ── BEHIND AN EXPANDED CALL ──────────────────────────────────────────────
+   EXPANDED ONLY, and that is load-bearing. `.call-facetime` paints opaque
+   --void over the whole viewport (:1378-1383), so while the call is expanded
+   every animation below is running for nobody, on the one screen where her
+   mouth canvas needs the frames. COLLAPSED, the call is a 268px window in the
+   bottom-right (`.call-overlay.call-facetime.is-collapsed`) and the deck is in
+   full view — stilling it there would freeze the screen he collapsed the call
+   in order to keep working on. So `body.in-call` is set on `open && !collapsed`,
+   never on `open` alone (VoiceCallOverlay.tsx, the in-call effect).
+   Suspended, not hidden — they resume the instant the class clears, on collapse
+   and on hang-up alike. Selector list mirrors the body.low-power precedent
+   above; NOTHING here touches .call-* elements, so the call's own motion — and
+   the collapsed window's — is untouched. */
+body.in-call .galaxy-spin,
+body.in-call .reactor-ring,
+body.in-call .reactor-ring-1,
+body.in-call .reactor-ring-2,
+body.in-call .reactor-ring-3,
+body.in-call .reactor-core,
+body.in-call .reactor-core-glow,
+body.in-call .star-ring,
+body.in-call .ring-outer,
+body.in-call .ring-inner,
+body.in-call .ring-pupil { animation: none; }
+body.in-call .ambient-sweep { display: none; }
+
 body.low-power .ambient-sweep { display: none; }
 body.low-power .badge,
 body.low-power .boot-badge { animation: none; filter: drop-shadow(0 0 6px var(--accent-glow)); }
@@ -1816,8 +1912,9 @@ body.low-power .reactor-core { animation: none; opacity: 0.9; }
 body.low-power .reactor-core.speaking { animation: core-pulse 0.7s ease-in-out infinite; }
 body.low-power .reactor-cursor { animation: none; }
 body.low-power .panel-tag.pulse { animation: none; }
-body.low-power .panel,
-body.low-power .console { backdrop-filter: none; }
+/* (The `.panel` / `.console` backdrop-filter override that used to live here is
+   gone: the base rules no longer set a blur at all, so ECO has nothing to
+   undo. `.call-overlay` below still does have one.) */
 body.low-power .call-overlay { backdrop-filter: none; animation: none; }
 body.low-power .call-panel { animation: none; }
 body.low-power .call-orb-connecting,
@@ -1939,11 +2036,33 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
 
 /* Status dots BREATHE — slow, offset per panel so the deck never pulses in
    lockstep like a metronome. */
+/* PERFORMANCE: OPACITY ONLY. `box-shadow` is not compositable, so animating it
+   on 8 dots forever forced a non-composited repaint of all 8 every frame (and,
+   while the panels still had backdrop-filter, re-blurred them with it). The
+   mechanism is certain; the pixel cost of it was NOT measured here.
+   HIS LOOK IS KEPT, NOT RESTYLED. The old keyframe ran the halo from
+   `0 0 4px var(--purple)` down to `0 0 1px transparent`; that same 4px purple is
+   now a STATIC declaration on `.panel-head .dot` below, overriding the base
+   `.dot`'s wider magenta `0 0 8px var(--accent-glow)` (:224) exactly as the
+   keyframe used to. Element opacity applies to a box-shadow too, so the halo
+   still dims and brightens with the dot on the same 3.6s clock.
+   THE ONE HONEST DIFFERENCE, stated exactly: the old trough was
+   `0 0 1px transparent` — a transparent colour, so the halo went away entirely
+   once per 3.6s breath. Now a 4px purple halo is always there and only dims
+   with the dot to 0.55 opacity. The PEAK of the breath is unchanged; only the
+   dimmest instant differs, and it differs by having a faint halo where there
+   used to be none. This is NOT invisible and is not filed as invisible.
+   It is why the low-power and reduced-motion overrides below restore the base
+   8px magenta: with the animation off, those paths fell back to the unanimated
+   base rule before, and they still do. */
 @keyframes dot-breathe {
-  0%, 100% { opacity: 1; box-shadow: 0 0 4px var(--purple); }
-  50%      { opacity: 0.55; box-shadow: 0 0 1px transparent; }
+  0%, 100% { opacity: 1; }
+  50%      { opacity: 0.55; }
 }
-.panel-head .dot { animation: dot-breathe 3.6s ease-in-out infinite; }
+.panel-head .dot {
+  box-shadow: 0 0 4px var(--purple);
+  animation: dot-breathe 3.6s ease-in-out infinite;
+}
 .main-grid .col .panel:nth-of-type(2) .dot { animation-delay: 0.9s; }
 .main-grid .col .panel:nth-of-type(3) .dot { animation-delay: 1.8s; }
 .main-grid .col .panel:nth-of-type(4) .dot { animation-delay: 2.7s; }
@@ -1956,9 +2075,12 @@ body.low-power .mobile-hero-badge img { animation: none; filter: drop-shadow(0 0
 }
 
 body.low-power .main-grid .panel { animation: none; }
-body.low-power .panel-head .dot { animation: none; }
+/* `box-shadow` back to the base `.dot` value on both still paths: with the
+   animation off, the dots used to fall back to it, and they must keep doing so
+   now that `.panel-head .dot` carries the keyframe's 4px purple statically. */
+body.low-power .panel-head .dot { animation: none; box-shadow: 0 0 8px var(--accent-glow); }
 @media (prefers-reduced-motion: reduce) {
   .main-grid .panel { animation: none; }
-  .panel-head .dot { animation: none; }
+  .panel-head .dot { animation: none; box-shadow: 0 0 8px var(--accent-glow); }
   .main-grid .panel:hover { box-shadow: none; }
 }

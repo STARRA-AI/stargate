@@ -181,9 +181,20 @@ describe("StarraClipFace uses both bodies (source pins — the wiring has no oth
     assert.ok(!/video\.getAttribute\("src"\) !== STARRA_CLIPS\[CONTINUOUS_BODY_CLIP\]\.file\) \{\s*return hide\(\);/.test(face),
       "the old single-body guard would hide the patch on the speaking body");
   });
-  it("blends a new mouth shape in over the previous one instead of snapping", () => {
-    assert.match(face, /export const MOUTH_BLEND_MS = 80;/);
-    assert.match(face, /const blend = Math\.min\(1, \(now - pickChangedAt\) \/ MOUTH_BLEND_MS\)/);
+  it("blends a new mouth shape in over the previous one, for a length that follows the jump", () => {
+    // UPDATED 2026-09-30. This used to pin `MOUTH_BLEND_MS = 80` — i.e. it
+    // asserted the ghosting defect as correct: a fixed 80ms dissolve leaves 40ms
+    // of EVERY shape change in the visibly-ghosted 0.25..0.75 alpha band, two
+    // photographs of a mouth on her face at once. The dissolve is now scaled by
+    // the distance between the two bank cells (16ms for adjacent, 30ms for a
+    // multi-row jump), which caps the ghosted band at 15ms. mouthBlendMs and
+    // cellDistance are unit-tested on the table in tests/mouth-fluidity.test.ts.
+    assert.match(face, /export const MOUTH_BLEND_CEILING_MS = MOUTH_BLEND_MAX_MS;/);
+    assert.match(face, /blendMs = mouthBlendMs\(cellDistance\(lastPickCell, pick\)\);/);
+    assert.match(
+      face,
+      /const blend = blendMs > 0 \? Math\.min\(1, \(now - pickChangedAt\) \/ blendMs\) : 1;/,
+    );
     assert.match(face, /draw2d\.globalAlpha = blend;/);
     assert.match(face, /draw2d\.globalAlpha = 1;/, "alpha must be restored after the blended draw");
   });

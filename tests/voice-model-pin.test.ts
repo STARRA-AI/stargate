@@ -49,7 +49,7 @@ describe("xAI realtime model pin", () => {
    * `expires_after`/`session`, so a `model` in that body does NOT pin anything.
    * A socket opened without ?model= therefore rides the alias.
    */
-  it("puts the pin on the socket URL, which is what selects the model", () => {
+  it("puts the requested model on the socket URL (a request, not a selection)", () => {
     const url = xaiRealtimeWsUrl(XAI_REALTIME_DEFAULT_MODEL);
     assert.ok(url.startsWith("wss://api.x.ai/v1/realtime?"), `no query string: ${url}`);
     assert.equal(new URL(url).searchParams.get("model"), "grok-voice-think-fast-1.0");
@@ -79,12 +79,23 @@ describe("xAI realtime model pin", () => {
     );
   });
 
-  /** The meter and the pin are one decision — see voiceCost.ts. */
-  it("the rate meter matches the pinned model's published rate", () => {
+  /**
+   * ★ THIS TEST ASSERTED THE PIN'S RATE AND THE PIN DOES NOT HOLD (2026-09-30).
+   * It required VOICE_RATE_PER_MIN === 0.05, the `grok-voice-think-fast-1.0`
+   * price, on the strength of the `?model=` query pin. MEASURED on the wire:
+   * with the socket opened as `?model=grok-voice-think-fast-1.0`, xAI's own
+   * `session.created` reports model `grok-voice-think-fast-2.0` — the pin is
+   * accepted and ignored. So the meter must carry the 2.0 rate, $0.08/min
+   * (docs.x.ai/docs/models), and this test now pins THAT.
+   *
+   * The lesson is the reason for the long comment: a green assertion on a false
+   * premise is worse than no test, because it defends the false premise.
+   */
+  it("the rate meter matches the model the SERVER reports, not the pin", () => {
     assert.equal(
       VOICE_RATE_PER_MIN,
-      0.05,
-      "grok-voice-think-fast-1.0 is $0.05/min; if the pin moves to 2.0 this must become 0.08",
+      0.08,
+      "the wire runs grok-voice-think-fast-2.0 ($0.08/min) whatever ?model= asks for",
     );
   });
 

@@ -21,8 +21,15 @@ export const STARRA_CLIPS = {
   // THE CONTINUOUS BODY (2026-07-30). One clip, looping forever, idle AND
   // speaking. See CONTINUOUS_BODY_CLIP below for why this replaces the
   // idle-pool/talking SWITCH rather than joining it.
-  // MEASURED on the shipped file: 552x720, 24fps, 266 frames, 11.083333s, no
-  // audio stream (`ffprobe` 2026-07-30). 266/24*1000 = 11083ms.
+  // MEASURED on the shipped file: 552x840, 24fps, 266 frames, 11.083333s, no
+  // audio stream (`ffprobe` 2026-09-30). 266/24*1000 = 11083ms.
+  // CORRECTED 2026-09-30: this line read 552x720 from 2026-07-30 until today.
+  // `ffprobe -show_entries stream=width,height` on public/avatar/body/base_loop.mp4
+  // returns 552x840 — the SAME geometry as speak_loop.mp4, which is what lets one
+  // mouth bank composite onto either body. No code computed from the number, so
+  // this was a lie in the record rather than a bug in the math; grepped, and the
+  // only other 552x720 claims were viseme-sync.ts's baseBox comments and
+  // StarraClipFace's hero-still note, corrected in the same pass.
   body_base: { file: "/avatar/body/base_loop.mp4", durationMs: 11083, loop: true },
   // THE SPEAKING BODY (2026-09-22). Cut from an InfiniteTalk render of her
   // actually talking — jaw, cheeks, brows, nods — 552x840 @24fps, 266 frames,
@@ -96,6 +103,35 @@ export type StarraClipKey = keyof typeof STARRA_CLIPS;
  */
 export const IDLE_POOL = ["idle_a1", "idle_c1", "idle_a2"] as const;
 
+/**
+ * NOTHING PLAYS THIS POOL ANY MORE — verified 2026-09-30, and it is the reason a
+ * request to "extend IDLE_POOL with the unused gaze/tilt/nod/eyebrow footage" was
+ * NOT actioned here.
+ *
+ * `grep -rn "IDLE_POOL\|pickIdle\|resolveIdlePool" src` returns, outside this
+ * file: `src/app/api/engine/_shared.ts` (the cosmetics WIRE SCHEMA only) and one
+ * comment in `src/lib/engine/useCosmetics.ts`. StarraClipFace imports neither
+ * IDLE_POOL nor pickIdle nor resolveIdlePool — the video layer has played
+ * CONTINUOUS_BODY_CLIP / SPEAKING_BODY_CLIP since 2026-07-30 (still mode) and
+ * ALIVE_POOL in alive mode. Adding clips here would therefore change NOTHING a
+ * viewer can see.
+ *
+ * AND THE FOOTAGE IS ALREADY POOLED WHERE THE FACE CAN REACH IT: gaze_left,
+ * gaze_right, gaze_up, tilt_left, tilt_right, nod and eyebrow are all in
+ * ALIVE_POOL below (plus laugh and idle). Mixing their 30fps into a pool is
+ * already safe, and that is verified rather than assumed: the only frame-indexed
+ * math on a body clip is `bodyFrameAt` inside the v4 patch draw, and that draw
+ * returns early unless the layer's src is base_loop or speak_loop
+ * (StarraClipFace, `if (bodyKind === null) return hide()`), so a 30fps pool clip
+ * suppresses the patch instead of being indexed at 24. MEASURED with ffprobe
+ * 2026-09-30: nod, eyebrow, the three gaze clips, both tilt clips, laugh and
+ * talking_loop are all 832x1248 @30fps,
+ * clips/idle.mp4 is 832x1248 @25fps, and idle_a1/a2/c1 are 768x1168 @24fps.
+ *
+ * The pool is kept as-is because the engine API still validates against it and a
+ * blank or frozen face is strictly worse than a clip nobody plays.
+ */
+
 /** RETIRED FROM PLAYBACK (2026-07-30, Classic's order: "No test video"). The
  *  face NEVER plays this clip any more — not even when base_loop.mp4 fails
  *  (that now retries; see StarraClipFace + no-test-video-engine-only.test.ts).
@@ -117,19 +153,66 @@ export const SPEAKING_CLIP: StarraClipKey = "talking";
  * Only the COMPOSITED MOUTH changes (see viseme-sync.ts, the v4 bank). There is
  * no state transition in the video layer at all, so there is nothing to cut.
  *
- * WHAT MAKES THAT SAFE, measured (2026-07-30):
- *   - cut from a QC'd take: head travel 10x17px over the whole 11.08s, no zoom,
- *     eyes open and on the lens throughout, 0 corrupt frames.
- *   - the loop point came from an exhaustive seam search: seam mean-abs-diff
- *     2.025 = 1.64x the clip's MEDIAN inter-frame motion but only 0.52x its
- *     MAXIMUM natural inter-frame motion. The seam is smaller than motion that
- *     already happens naturally in the clip, so it is invisible.
+ * WHAT MAKES THAT SAFE — RE-MEASURED 2026-09-30 ON THE SHIPPED FILE, because the
+ * numbers that stood here did not describe it.
  *
- * WHAT IT COSTS. Her mouth is AT REST for all 266 frames (aperture 4-14px, 0
- * frames above 2x median). This clip carries NO speech. The composited patch is
- * therefore not decoration — it is the ONLY thing that makes her look like she
- * is talking. If THIS CLIP fails to load, StarraClipFace retries it on a capped
+ * THE ROT, named so it is not re-introduced: this block read "measured
+ * (2026-07-30) ... cut from a QC'd take: head travel 10x17px ... seam
+ * mean-abs-diff 2.025 = 1.64x the clip's MEDIAN inter-frame motion but only 0.52x
+ * its MAXIMUM". public/avatar/body/base_loop.mp4 was REPLACED on 2026-09-22 05:55
+ * (file mtime) by an InfiniteTalk render of her LISTENING — blinks, breath, real
+ * head motion, deliberately NOT "at rest" (scripts/cut-idle-base.py:7-12 says so
+ * in as many words). So that whole block described a file that is no longer here.
+ * The 552x720 -> 552x840 correction made earlier in this file was the same event
+ * seen from one angle only: the cause was a REPLACED FILE, not a typo, which is
+ * why every neighbouring measurement went stale with it.
+ *
+ * MEASURED 2026-09-30, in the repo's OWN metric so the numbers stay comparable —
+ * scripts/qc-poselock-clip.py:62-87, i.e. `format=gray` then blend=difference +
+ * signalstats YAVG, full-range greyscale 0..255. (Getting the scale right matters:
+ * the same measurement WITHOUT `format=gray` reads ~14% low across the board,
+ * because limited-range luma is 16-235 rather than 0-255. That is 255/219 = 1.164,
+ * and it is how two honest measurements of one file disagree.)
+ *
+ *   base_loop.mp4 (ffprobe: 552x840, 24fps, 266 frames)
+ *     - inter-frame motion over its 265 transitions: median 0.677, MAX 2.461
+ *     - loop seam (frame 265 -> frame 0): 1.687 = 2.49x the median, 0.69x the MAX
+ *
+ * SO THE CONCLUSION SURVIVES AND THE NUMBERS DID NOT: the seam is still below the
+ * clip's own MAX natural inter-frame motion, which is the stated bar
+ * (scripts/clip-compat-matrix.py:20-22) and the property that makes it invisible.
+ * What changed is the headroom — 0.69x of max, not 0.52x.
+ *
+ * WHERE "2.025" ACTUALLY COMES FROM, as far as measurement can say: speak_loop's
+ * OWN loop seam is 2.026 (measured the same way), which is almost certainly the
+ * collision. But the RATIOS quoted with it reproduce on NEITHER shipped body —
+ * they imply a median of 1.235 and a max of 3.896, against base_loop's 0.677/2.461
+ * and speak_loop's 2.455/6.471. So the triple is best read as belonging to the
+ * RETIRED 552x720 cut, with the 2.025/2.026 near-match a coincidence. Stated as a
+ * bounded conclusion on purpose: the retired file is gone, so it cannot be closed.
+ *
+ * NOT re-measured, so do not treat either as current: "head travel 10x17px" /
+ * "10x18px" (both figures appear in this repo, and both describe the RETIRED
+ * take — the shipped render blinks and breathes by design), and the "no zoom,
+ * eyes open throughout, 0 corrupt frames" QC. Measuring head travel needs a
+ * landmark tracker, which was not run here.
+ *
+ * WHAT IT COSTS. Her mouth carries NO speech on this clip, so the composited
+ * patch is not decoration — it is the ONLY thing that makes her look like she is
+ * talking. If THIS CLIP fails to load, StarraClipFace retries it on a capped
  * backoff — never a switch to another clip (Classic's order, 2026-07-30).
+ *
+ * THE "AT REST" PROPERTY IS LOAD-BEARING AND IS NOT RE-MEASURED HERE. The
+ * "aperture 4-14px, 0 frames above 2x median" figure that stood in this sentence
+ * was measured on the RETIRED take (see above), so it is removed rather than
+ * restated. It matters because StarraClipFace drops the patch entirely once the
+ * release gate latches AND base_loop is the layer on screen — that only hands her
+ * a genuinely closed mouth if this footage's own mouth is shut. Qualitatively it
+ * is, by construction: the shipped file is an InfiniteTalk render of her
+ * LISTENING. Measuring it properly needs a lip metric, and this repo's alignment
+ * tool's lip detector is known to lie on this footage, so no number is asserted.
+ * If her mouth ever reads as open at the END of a turn in still mode, THIS is the
+ * assumption to re-measure first.
  */
 export const CONTINUOUS_BODY_CLIP: StarraClipKey = "body_base";
 /** The body shown while she speaks (still mode). Same size, fps and length as body_base. */
@@ -148,7 +231,7 @@ export const SPEAKING_BODY_POLL_MS = 120;
  * resting pose differs from `base_loop` by 14-29x its own natural motion. That
  * measurement is correct and the conclusion drawn from it was wrong: it compared
  * the clips against BASE_LOOP, which is a different generation at a different
- * resolution (552x720 against their 832x1248 — the exact size of his ANGLE
+ * resolution (552x840 against their 832x1248 — the exact size of his ANGLE
  * stills). Of course they did not match. Nobody compared them to EACH OTHER.
  *
  * MEASURED 2026-08-22 (scripts/clip-compat-matrix.py, full-resolution
@@ -158,11 +241,27 @@ export const SPEAKING_BODY_POLL_MS = 120;
  *     share one anchor pose;
  *   - all 110 A-last -> B-first transitions pass;
  *   - measured end to end over a real 11-clip chain, every seam lands at
- *     1.65-2.36, i.e. 0.81x-1.17x the 2.025 seam base_loop ALREADY SHIPS and
- *     that starra-clip-map.ts:99-105 calls invisible.
+ *     1.65-2.36.
  *
- * So these clips are interchangeable by construction, and the switch that was
- * abandoned as "the cut the eye reads" is not a cut at all inside this family.
+ * THE COMPARISON THAT FOLLOWED THAT LAST LINE WAS RESTATED 2026-09-30, because it
+ * was anchored to a dead number. It read "i.e. 0.81x-1.17x the 2.025 seam
+ * base_loop ALREADY SHIPS" — 2.025 is not base_loop's seam (see CONTINUOUS_BODY_CLIP
+ * above; the shipped file's seam is 1.687 and 2.026 is speak_loop's). Against the
+ * re-measured base_loop the honest ratio is 0.98x-1.40x its 1.687 seam, not
+ * 0.81x-1.17x — so the alive chain's WORST seam is about 40% larger than the one
+ * base_loop ships, where the old line implied it was comfortably inside it.
+ *
+ * IT STILL CLEARS THE STATED BAR, which is what the claim rests on: the bar is
+ * "below the clip's MAX natural inter-frame motion" (scripts/clip-compat-matrix.py:20-22),
+ * and base_loop's max is 2.461 — above the chain's worst 2.36. So these clips
+ * remain interchangeable by construction and the switch abandoned as "the cut the
+ * eye reads" is still not a cut inside this family. The margin is thinner than
+ * previously written: 2.36 against 2.461 is 4% of headroom, not a comfortable gap.
+ *
+ * UNVERIFIED HERE: the 1.65-2.36 chain figures are the 2026-08-22 measurement,
+ * carried forward. They were taken before base_loop was replaced, but they are
+ * measurements of the ALIVE family against ITSELF, which that swap does not touch.
+ * They were not re-run in this pass.
  *
  * WHY IT IS A SEPARATE MODE AND NOT A REPLACEMENT. base_loop and this family
  * CANNOT cut into one another — measured at ~26, and scripts/match-families.py
@@ -173,14 +272,30 @@ export const SPEAKING_BODY_POLL_MS = 120;
  *   still (default, unchanged)  base_loop forever + the composited viseme mouth,
  *                               so speech is really SYNCED to her words.
  *   alive                       this family: she nods, tilts, glances, laughs and
- *                               raises an eyebrow, at 832x1248 instead of 552x720
+ *                               raises an eyebrow, at 832x1248 instead of 552x840
  *                               — but speech runs on her real talking footage,
  *                               which moves photorealistically WITHOUT being
  *                               synced to the actual words.
  *
- * The mouth compositor already fails safe here: it paints only when the video
- * src is CONTINUOUS_BODY_CLIP (StarraClipFace.tsx:976), so an alive-mode clip
- * suppresses the patch on its own rather than floating it over her cheek.
+ * The mouth compositor already fails safe here, and CORRECTED 2026-09-30 because
+ * this block was wrong on both counts. It said the patch paints "only when the
+ * video src is CONTINUOUS_BODY_CLIP (StarraClipFace.tsx:976)". It paints on
+ * EITHER still-mode body — base_loop (CONTINUOUS_BODY_CLIP) or speak_loop
+ * (SPEAKING_BODY_CLIP) — since the speaking body shipped 2026-09-22; and :976 is
+ * not the guard, it is unrelated body-watchdog wiring. The real guard derives
+ * `bodyKind` from the showing layer's src and bails on anything else:
+ * `if (bodyKind === null) return hide()` in StarraClipFace's v4 draw. RE-GREPPED
+ * 2026-09-30: `shownSrc` is read at :1598, `bodyKind` is derived from
+ * it at :1599-1604, and the guard itself is the single line
+ * :1605. The range :1565-1571 that stood here was a SECOND bad citation
+ * — written to replace a dead line number, it did not contain the guard either.
+ * Grep `bodyKind === null` rather than trusting any of these numbers.
+ *
+ * The CONCLUSION still holds, which is why this stayed a record bug and not a
+ * behaviour one: no alive-family clip is base_loop or speak_loop, so every one of
+ * them yields bodyKind null and suppresses the patch on its own rather than
+ * floating it over her cheek. a_talking_loop included — that is exactly why
+ * pickBodyClip returning it while she speaks CANNOT layer two mouths.
  */
 export const ALIVE_POOL = [
   "a_idle",
@@ -218,6 +333,26 @@ export function pickBodyClip(
   // still mode is the shipped behaviour, byte for byte: one clip, forever,
   // through every state. Do not let anything below change that.
   if (mode !== "alive") return CONTINUOUS_BODY_CLIP;
+  // HER REAL TALKING FOOTAGE. REVERTED 2026-09-30 — the line that replaced this
+  // returned CONTINUOUS_BODY_CLIP, and its stated reason ("the talking clip's own
+  // moving mouth would create two mouths layered") is FALSE. The v4 patch paints
+  // only when the showing layer's src is base_loop or body_speak
+  // (StarraClipFace.tsx, `if (bodyKind === null) return hide()`), so on
+  // a_talking_loop the patch is already suppressed by construction. There is no
+  // two-mouths case here to prevent.
+  //
+  // What that change DID do is cut a 552x840 generation into this 832x1248
+  // family — the seam ALIVE_POOL above measures at ~26, against base_loop's own
+  // 1.687 loop seam (re-measured 2026-09-30; the "2.025" this file used to compare
+  // against is speak_loop's seam, not base_loop's) and the 4.424 best-possible
+  // base->speak pair the repo already rejects as visible. a_talking_loop is
+  // also the ONLY clip in the alive family with `loop: true`, so it is the only
+  // one a long reply cannot run dry on mid-sentence.
+  //
+  // THE TRADE IS DELIBERATE, AND IT IS CLASSIC'S TO MAKE: in alive mode her mouth
+  // moves photorealistically but is NOT synced to her words. Buying synced lips
+  // means giving up the alive family, which is a MODE DECISION — not a one-line
+  // edit behind a comment.
   if (speaking) return ALIVE_SPEAKING_CLIP;
   return pickAlive(prev, rand, pool);
 }

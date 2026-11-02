@@ -7,35 +7,39 @@ export const runtime = "nodejs";
 const XAI_REALTIME_WS = "wss://api.x.ai/v1/realtime";
 
 /**
- * PINNED voice model — do NOT loosen this back to an alias.
+ * The voice model this route ASKS FOR. It is not a guarantee.
  *
- * WHY A VERSIONED ID: `grok-voice-latest` is an ALIAS. Per xAI, "On August 5,
- * 2026, the `grok-voice-latest` endpoint will automatically upgrade from
- * version 1.0 to version 2.0", and the stated remedy is to pin the versioned
- * name before then. Think Fast 1.0 is $0.05/min audio; 2.0 is $0.08/min
- * (docs.x.ai/docs/models, fetched 2026-07-31) — a 60% jump that would land
- * silently on the meter in src/lib/voice/voiceCost.ts.
+ * ★ MEASURED ON THE WIRE 2026-09-30 — THE PIN DOES NOT HOLD. The socket is
+ * opened as `?model=grok-voice-think-fast-1.0` and xAI's own `session.created`
+ * event comes back reporting model `grok-voice-think-fast-2.0`. The query
+ * parameter is accepted and ignored. Two further facts from the same session,
+ * because they are what makes this easy to get wrong twice:
+ *   - a WS upgrade returns 101 Switching Protocols even for a DELIBERATELY
+ *     BOGUS model name, so a successful upgrade proves nothing about the model;
+ *   - therefore the ONLY source of truth for what is running is the
+ *     `session.created` event, which useVoiceCall.ts now reads and reports on
+ *     the ops feed.
  *
- * WHERE THE MODEL IS ACTUALLY SELECTED — the part that is easy to get wrong:
- * NOT here in the client_secrets body. The REST reference for
- * POST /v1/realtime/client_secrets accepts `expires_after` and `session`
- * only, and the ephemeral-token guide states the endpoint "Does not support
- * 'session' or 'expires_after.anchor' fields" — so a top-level `model` in that
- * body is ignored. The socket is what chooses: the Voice Agent guide says
- * "Pass model as a query parameter; use a versioned name to pin to a specific
- * release", and the REST reference lists the WS `model` query param as
- * "(string, optional, default: grok-voice-latest)".
+ * WHAT THIS DOCSTRING USED TO SAY, and why it is deleted rather than softened:
+ * that `?model=` is "the ONLY thing that selects the model for the session" and
+ * that the versioned pin therefore held the $0.05/min Think Fast 1.0 rate. Both
+ * halves are false, and the second one kept the meter in
+ * src/lib/voice/voiceCost.ts at the wrong number (now 0.08, the 2.0 rate).
  *
- * That default is the trap: a bare wss://api.x.ai/v1/realtime with no
- * `?model=` resolves to the ALIAS, so after 2026-08-05 it bills at the 2.0
- * rate no matter what this route sent to client_secrets. Hence `wsUrl()`
- * below appends `?model=` — the pin only counts on the socket.
+ * The param is KEPT: it is harmless, it is the documented way to ask, and it
+ * starts working the day xAI honours it. What is gone is the belief that it
+ * settles anything.
+ *
+ * Still true, and still the reason not to put `model` in the POST body: the
+ * REST reference for POST /v1/realtime/client_secrets accepts `expires_after`
+ * and `session` only, and the ephemeral-token guide states the endpoint "Does
+ * not support 'session' or 'expires_after.anchor' fields".
  */
 export const XAI_REALTIME_DEFAULT_MODEL = "grok-voice-think-fast-1.0";
 
 /**
- * The realtime socket URL with the model pin applied as a query parameter.
- * This is the ONLY thing that selects the model for the session.
+ * The realtime socket URL with the requested model as a query parameter.
+ * It is a REQUEST, not a selection — see XAI_REALTIME_DEFAULT_MODEL.
  */
 export function xaiRealtimeWsUrl(model: string): string {
   return `${XAI_REALTIME_WS}?model=${encodeURIComponent(model)}`;

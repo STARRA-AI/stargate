@@ -304,7 +304,7 @@ export function VoiceCallOverlay({
   //
   // THE BUG THIS FIXES: `faceMode` used to be `state === "speaking" ||
   // sheReplying`, i.e. driven by the TEXT token stream. stargate-context.tsx
-  // calls setStreaming("") (:262) BEFORE awaiting the TTS round-trip (:263) and
+  // calls setStreaming("") BEFORE awaiting the TTS round-trip and
   // therefore before audio.play() — so her face animated all the way through the
   // SILENT token stream and flipped back to the idle pool at the exact moment
   // her voice started. Inverted, every single typed reply.
@@ -333,7 +333,7 @@ export function VoiceCallOverlay({
   // just tidiness. speak.ts only builds an AudioContext / captures her TTS
   // element into a WebAudio graph when this subscription exists (its
   // `ttsListeners.size === 0` bail). This component is mounted for the whole
-  // session (Bridge.tsx:519,945) and only returns null when closed, so an
+  // session (Bridge.tsx:645 mobile, :1238 desktop) and returns null closed, so an
   // ungated `[]` subscription made every typed DeckConsole reply and every
   // wake-word reply carry the WebAudio risk while nothing on screen could
   // possibly use the analyser — StarraClipFace is its only consumer and only
@@ -419,6 +419,9 @@ export function VoiceCallOverlay({
       // speakStarra's callLive gate reads, so from this moment until close no
       // chat-side engine can make a sound.
       publishCallLive(true);
+      // `body.in-call` (the deck-suspend class) is NOT set here. It belongs to
+      // the dedicated effect below, because it must follow `collapsed` as well
+      // as `open` — see the comment there.
       stopSpeaking();
       // THE LOCK: the engine is captured here and held for the whole call.
       //
@@ -442,11 +445,36 @@ export function VoiceCallOverlay({
     }
   }, [open, stopSpeaking, hangUpBoth]);
 
+  // ── SUSPEND THE DECK ONLY WHILE THE CALL ACTUALLY COVERS IT ──────────────
+  // `body.in-call` stills the deck's decorative motion (deck.css) and stops
+  // LiveSky's and ReactorSphere's rAF loops outright. That is only correct while
+  // the call is EXPANDED, because only then does `.call-facetime` paint opaque
+  // --void over the whole viewport (deck.css:1378-1383).
+  //
+  // COLLAPSED, the call is a 268px window in the bottom-right corner
+  // (deck.css:1574-1578) and the deck is in full view. Keying this class on
+  // `open` alone froze the exact screen he collapses the call in order to keep
+  // working on — so it is keyed on `open && !collapsed`.
+  //
+  // No other plumbing is needed: LiveSky's MutationObserver (LiveSky.tsx:359-360)
+  // and ReactorSphere's (ReactorSphere.tsx:193-194) both watch body's class
+  // attribute and re-sync, so collapse and expand each recover on their own.
+  //
+  // THE DECK MUST ALWAYS COME BACK. The cleanup runs on every change of either
+  // flag and on unmount, so an error path, a thrown connect or a hot reload
+  // cannot leave the deck frozen behind a closed call.
+  useEffect(() => {
+    const coversTheDeck = open && !collapsed;
+    document.body.classList.toggle("in-call", coversTheDeck);
+    return () => document.body.classList.remove("in-call");
+  }, [open, collapsed]);
+
   // Belt-and-suspenders: tear the engine down (and release her voice) if this
   // unmounts mid-call.
   useEffect(() => {
     return () => {
       publishCallLive(false);
+      document.body.classList.remove("in-call");
       hangUpBoth();
     };
   }, [hangUpBoth]);

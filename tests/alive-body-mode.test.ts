@@ -7,12 +7,20 @@
  * because every one of them differs from `base_loop` at rest by 14-29x its own
  * natural motion (StarraClipFace.tsx:1029-1038).
  *
- * That comparison was against the WRONG reference. base_loop is 552x720 from a
- * different generation; these are 832x1248, the exact size of his ANGLE stills.
- * Measured against EACH OTHER (scripts/clip-compat-matrix.py, verified at full
- * resolution): all 55 first-frame pairs match, all 110 transitions pass, and a
- * real 11-clip chain seams at 1.65-2.36 — i.e. 0.81x-1.17x the 2.025 seam
- * base_loop already ships and that the code itself calls invisible.
+ * That comparison was against the WRONG reference. base_loop is a different
+ * generation at 552x840 (ffprobe on the shipped file 2026-09-30 — this line read
+ * 552x720, which was the cut REPLACED on 2026-09-22); these are 832x1248, the
+ * exact size of his ANGLE stills. Measured against EACH OTHER
+ * (scripts/clip-compat-matrix.py, verified at full resolution): all 55 first-frame
+ * pairs match, all 110 transitions pass, and a real 11-clip chain seams at
+ * 1.65-2.36.
+ *
+ * THE RATIO RESTATED 2026-09-30: this read "0.81x-1.17x the 2.025 seam base_loop
+ * already ships". 2.025 is speak_loop's loop seam, not base_loop's. base_loop's
+ * own seam is 1.687, so the chain is 0.98x-1.40x it. The claim still holds on the
+ * bar the repo actually states — below base_loop's MAX natural inter-frame motion,
+ * 2.461, against the chain's worst 2.36 — but the margin is 4%, not a comfortable
+ * gap. See starra-clip-map.ts, CONTINUOUS_BODY_CLIP, for the measurements.
  *
  * Two things must hold forever, and they are what these tests are:
  *   1. `still` mode behaves EXACTLY as it shipped — one clip, every state. His

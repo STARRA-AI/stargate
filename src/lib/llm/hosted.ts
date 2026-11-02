@@ -65,6 +65,13 @@ const GROK_CONV_ID_DEFAULT = "starra-stargate";
 
 /** Statuses worth trying again on the SAME provider. */
 const RETRY_STATUSES = new Set([408, 425, 429, 500, 502, 503, 504]);
+
+/**
+ * provider:model:knob-set combinations already reported as degraded, so the
+ * 400-retry below logs once per process instead of once per turn. Process-local
+ * on purpose: a redeploy or a slug change should say it again.
+ */
+const KNOB_DEGRADATION_LOGGED = new Set<string>();
 /** Backoff between attempts; length is also the retry count. */
 const RETRY_DELAYS_MS = [400, 1200];
 
@@ -242,6 +249,29 @@ export async function streamHosted(opts: {
    *  set it — Groq bills prompt + max_tokens against the limit, and omitting
    *  it reserves the model default. Omitted for grok: unchanged. */
   maxOutputTokens?: number;
+  /**
+   * xAI `reasoning_effort` — SENT ONLY ON THE GROK LANE, and only when the
+   * caller asks for it. https://docs.x.ai/docs/models lists grok-4.5 with
+   * `"features":{...,"reasoning":true,"reasoningEffortOptions":{...}}`, i.e.
+   * the slug this deck runs accepts it (the same doc line the penalty rules
+   * above are derived from).
+   *
+   * WHY IT EXISTS: on a LIVE CALL the wait before she starts speaking is dead
+   * air, and thinking time is most of it. The typed lane never sets this: there,
+   * thinking is worth the wait.
+   *
+   * THE NUMBER, WITH ITS PROVENANCE: 2506ms -> 1104ms TTFT on an identical
+   * prompt. That is a single A/B taken by the orchestrating session on
+   * 2026-09-30 against api.x.ai; no artifact of it is committed, so treat it as
+   * ONE observation and not a benchmark. It has not been re-measured here.
+   * Re-check it before quoting it.
+   *
+   * IF THE PARAM IS REJECTED, the 400 path below retries WITHOUT it, so a tuning
+   * knob can never be the reason she goes silent — and it now LOGS, because that
+   * retry doubles every request on this lane and would otherwise hide the fact
+   * that the latency win had become a latency loss.
+   */
+  reasoningEffort?: "low" | "high";
 }): Promise<{ provider: string; model: string }> {
   const cfg = CONFIG[opts.provider];
   const key = await hostedKey(opts.provider);
@@ -249,6 +279,11 @@ export async function streamHosted(opts: {
   const model = await resolveHostedModel(opts.provider);
 
   const penalties = penaltyBody(opts.provider, model);
+  // Grok-only: Groq's OpenAI-compatible surface has no such field.
+  const reasoning =
+    opts.provider === "grok" && opts.reasoningEffort
+      ? { reasoning_effort: opts.reasoningEffort }
+      : {};
 
   const send = (withPenalties: boolean) =>
     fetch(`${cfg.base}/chat/completions`, {
@@ -273,6 +308,7 @@ export async function streamHosted(opts: {
         stream_options: { include_usage: true },
         ...(opts.maxOutputTokens ? { max_tokens: opts.maxOutputTokens } : {}),
         ...(withPenalties ? penalties : {}),
+        ...(withPenalties ? reasoning : {}),
         messages: [
           { role: "system", content: opts.system },
           ...opts.messages,
@@ -301,7 +337,32 @@ export async function streamHosted(opts: {
       // moved to a reasoning model, param retired), retry once WITHOUT them so
       // the reply still lands. Never let a tuning param be the reason she goes
       // silent.
-      if (!res.ok && res.status === 400 && Object.keys(penalties).length > 0) {
+      //
+      // ★ IT ANNOUNCES ITSELF NOW (2026-09-30). This branch was silent, and
+      // silence here inverts the thing it protects: `reasoning_effort: "low"`
+      // exists to CUT the wait before she speaks on a call, and if xAI rejects
+      // it, every call turn becomes TWO round trips — slower than never having
+      // asked, with the retry hiding that it happened. Logged once per process
+      // per provider+knob-set, so a real degradation is visible in the server
+      // log without a rejected param spamming a line per turn.
+      if (
+        !res.ok &&
+        res.status === 400 &&
+        (Object.keys(penalties).length > 0 || Object.keys(reasoning).length > 0)
+      ) {
+        const dropped = [
+          ...Object.keys(penalties),
+          ...Object.keys(reasoning),
+        ].join(", ");
+        const seenKey = `${opts.provider}:${model}:${dropped}`;
+        if (!KNOB_DEGRADATION_LOGGED.has(seenKey)) {
+          KNOB_DEGRADATION_LOGGED.add(seenKey);
+          console.warn(
+            `[hosted] ${opts.provider}/${model} rejected ${dropped} with 400 — retrying WITHOUT them. ` +
+              `Every request on this lane is now DOUBLED; if reasoning_effort is in that list the ` +
+              `call-latency win is not only gone, it is negative. Remove the rejected param.`,
+          );
+        }
         res = await send(false);
       }
     } catch (err) {

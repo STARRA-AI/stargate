@@ -34,6 +34,7 @@ import {
   armTextVisemes,
   beginTextVisemes,
   clearTextVisemes,
+  setTextVisemeClockSource,
   setTextVisemeDuration,
 } from "@/lib/voice/text-visemes";
 // THE BARGE-IN SEAM, and it is one-way ON PURPOSE: speak.ts imports the local
@@ -834,6 +835,33 @@ async function speakAra(
         // clock when the text arrived would run her mouth ahead of eve by the
         // whole synthesis round trip.
         beginTextVisemes();
+        // ── THE TTS LEG'S MOUTH RUNS ON THE ELEMENT'S OWN CLOCK (2026-09-30) ──
+        // Until now this leg had no clock source, so text-visemes fell back to
+        // (performance.now() - startedAt). That tracks WALL time, which equals
+        // playback position only while the element never stops. It does stop: a
+        // decode stall or a buffer underrun holds `currentTime` still while the
+        // wall clock keeps running, and from that moment her mouth is ahead of
+        // eve for the rest of the utterance and then freezes on the last shape.
+        // A `pause` (he interrupts her) desyncs it the same way.
+        //
+        // audio.currentTime IS the playback position, so it cannot do that. A
+        // CLOSURE, not a pushed number: the renderer re-reads it on every mouth
+        // tick, where a `timeupdate` push would hold one value for ~250ms and
+        // then jump — steppier than the wall clock it replaced.
+        //
+        // NOT DELAY-COMPENSATED, and there is no way to be: HTMLMediaElement
+        // exposes no output-latency figure (AudioContext.outputLatency has no
+        // element equivalent). Same uncompensated position the wall-clock
+        // fallback had, minus the drift.
+        //
+        // The clock lives on the ARMED TRACK and is dropped with it, so a
+        // superseded element's closure can never drive a newer utterance's
+        // mouth — the newer arm builds a fresh track with clock: null.
+        setTextVisemeClockSource(() => {
+          if (araAudio !== audio) return Number.NaN; // superseded: fall back
+          const t = audio.currentTime;
+          return Number.isFinite(t) && t > 0 ? t * 1000 : 0;
+        });
         syncVisemeDuration();
         armForProgress();
       });
@@ -1354,6 +1382,14 @@ function playChunkAudio(
       publishTtsFor(generation, { playing: true });
       // Clock starts on real sound, per chunk — see speakAra for why.
       beginTextVisemes();
+      // Same audio clock as speakAra (see the long note there): the element's
+      // own playback position, read fresh per mouth tick, so a stall or a pause
+      // cannot leave her mouth running ahead of this chunk's voice.
+      setTextVisemeClockSource(() => {
+        if (araAudio !== audio) return Number.NaN; // superseded: fall back
+        const t = audio.currentTime;
+        return Number.isFinite(t) && t > 0 ? t * 1000 : 0;
+      });
       syncVisemeDuration();
       armForProgress();
     });

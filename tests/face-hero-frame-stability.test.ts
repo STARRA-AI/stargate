@@ -460,8 +460,11 @@ describe("structural: the hero-frame backstop is inside the portrait stacking co
     assert.ok(
       /src=\{BODY_HERO_STILL\}/.test(block),
       "the decorative blurred fill must be the frame-0 still — deck.css blurs " +
-        "it 28px at 42% brightness, and her head travels 10x17px across the " +
-        "whole 11.08s loop, so motion there is invisible by measurement",
+        "it 28px at 42% brightness, and the shipped base_loop's mouth anchor " +
+        "travels only 8px in x / 5px in y across the whole 11.08s loop " +
+        "(BASE_DRIFT_X 0..+8, BASE_DRIFT_Y -2..+3), so motion there is " +
+        "invisible by measurement. (This message cited 'head travels 10x17px', " +
+        "measured on the take base_loop.mp4 replaced 2026-09-22.)",
     );
     assert.ok(
       !/autoPlay|\bloop\b/.test(block),

@@ -9,6 +9,7 @@ import {
   rms,
 } from "@/lib/voice/pcm-audio";
 import { addVoiceSeconds } from "@/lib/voice/voiceCost";
+import { ensureAudible } from "@/lib/voice/playback-unblock";
 import { STARRA_VOICE_PERSONA } from "@/lib/persona";
 import {
   CALL_MECHANICS_CONSTRAINT,
@@ -32,6 +33,20 @@ import { renderLipSync, LIPSYNC_ENABLED } from "@/lib/voice/lipsync";
 // Pure + client-safe (code-speech.ts imports nothing): what her VOICE may say
 // of a brain reply — prose only, fences stay in the call chat as text.
 import { speakableText } from "@/lib/voice/code-speech";
+// TEXT VISEMES — drive her mouth from the WORDS, not just amplitude.
+import {
+  armTextVisemes,
+  beginTextVisemesOnce,
+  clearTextVisemes,
+  extendTextVisemeDuration,
+  isTextVisemeStarted,
+  setTextVisemeClockSource,
+  textVisemeWeight,
+  TEXT_VISEME_MS_PER_WEIGHT,
+} from "@/lib/voice/text-visemes";
+// The device's own report of how far the sound it is playing lags the
+// AudioContext clock. Pure arithmetic over ctx.baseLatency/outputLatency.
+import { audioOutputDelayMs } from "@/lib/voice/viseme-sync";
 // ENGINE BUS — client-safe and secret-free by construction. "@/lib/engine/bus"
 // only, never "@/lib/engine": that barrel reaches the credential resolvers.
 import { getEngineState, publishVoice, type VoiceSource } from "@/lib/engine/bus";
@@ -375,6 +390,20 @@ function getAudioContextCtor(): typeof AudioContext | undefined {
 const RESUME_TIMEOUT_MS = 250;
 
 /**
+ * The gestures the autoplay policy accepts as the unlock for a suspended
+ * AudioContext. Capture phase, so a click the deck's own handlers stop still
+ * reaches us — the point is only that a real gesture happened.
+ */
+const PLAYBACK_UNBLOCK_GESTURES = ["pointerdown", "keydown", "touchstart"] as const;
+
+/**
+ * How long a resume() gets to actually take before a still-suspended playback
+ * context is reported as blocked. Long enough that a healthy-but-slow resume
+ * never raises an ALERT, short enough that he is told inside the first turn.
+ */
+const PLAYBACK_BLOCKED_GRACE_MS = 700;
+
+/**
  * `resume()` without assuming it returns a promise — the older WebKit form is
  * callback-based and returns undefined, where `.resume().catch()` throws a
  * TypeError instead of resuming anything. This hook deliberately falls back to
@@ -568,10 +597,42 @@ export const CALL_TIMING_DEBUG =
 
 export const KIMI_ENDPOINT_MIN_SPEECH_FRAMES = 5; // <~215ms of sound is a breath, not a turn
 export const KIMI_TRANSCRIPT_WAIT_MS = 2500; // commit → transcript grace before it counts as missing
+/**
+ * How long the socket may stay open without the server acking our session
+ * config before the call is declared dead. MEASURED: a healthy ack lands in
+ * 528-796ms, so this is ~10x headroom and only a genuinely dead handshake
+ * reaches it. Without it there is no path out of "connecting" at all.
+ */
+export const HANDSHAKE_ACK_TIMEOUT_MS = 8000;
 // Consecutive missed transcripts before the call SAYS SO (visible struggling
 // state + config re-assert). This used to be the trigger for a mid-call swap to
 // the grok brain; that swap is deleted and must not return — see callBrainRef.
 export const KIMI_NO_TRANSCRIPT_ALERT_AFTER = 3;
+/**
+ * Minimum gap between two NON-FATAL realtime-error feed lines.
+ *
+ * A session that is unhappy is usually unhappy repeatedly — xAI answers a
+ * response.cancel with an error every time he talks over her — and one ALERT per
+ * event would bury the ops feed in noise he cannot act on. Fatal errors are NOT
+ * deduped: there is at most one per socket, and it is the line that explains why
+ * the call just ended.
+ */
+export const REALTIME_ERROR_ALERT_GAP_MS = 15_000;
+/**
+ * Non-fatal realtime errors whose SHAPE is normal operation, not a broken
+ * session. xAI returns these when a response.cancel arrives for a response that
+ * has already finished — i.e. every barge-in that lands a beat late. They are
+ * worth a console line and nothing else: escalating them reset the speech
+ * endpointer and re-sent the whole session config mid-call, on the one path that
+ * fires while he is interrupting her.
+ */
+const BENIGN_REALTIME_ERROR = /cancel|no active response|already (completed|done)|not found/;
+/**
+ * Non-fatal realtime errors that genuinely implicate the SESSION, and so are
+ * worth the endpointer reset and the config re-assert. Anything else is logged
+ * and fed, but does not touch the session.
+ */
+const SESSION_REALTIME_ERROR = /session|config|turn_detection|audio/;
 export const CALL_BRAIN_CONTEXT_TURNS = 12; // call turns carried into each brain request
 
 export interface KimiEndpointerState {
@@ -851,12 +912,100 @@ export function useVoiceCall(): UseVoiceCallResult {
   const micSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const workletNodeRef = useRef<AudioWorkletNode | null>(null);
   const playbackContextRef = useRef<AudioContext | null>(null);
+  // ── A SUSPENDED PLAYBACK CONTEXT IS A SILENT CALL (2026-10-04) ────────────
+  // Classic: "she is not speaking. we cannot hear her and her lips are not
+  // synced." Both halves are ONE cause. connect() bounds the playback
+  // resume() at RESUME_TIMEOUT_MS (:3236) and then proceeds without ever
+  // checking that the context reached "running" — and by that point the click
+  // that started the call has been spent on /api/realtime + getUserMedia +
+  // addModule, which this file already documents at :3179-3182. If resume()
+  // is still queued:
+  //   - every buffer schedulePlayback enqueues sits unplayed  -> INAUDIBLE
+  //   - ctx.currentTime is FROZEN, so the mouth clock at :2300 computes
+  //     played = turnAudioMs - (nextStart - currentTime) <= 0 for the whole
+  //     turn and her lips hold the rest shape        -> NOT SYNCED
+  // Nothing detected it: `destination` appears in ZERO test files, so the
+  // green suite is fully compatible with total silence. These two refs make
+  // the state recoverable on the next real gesture and LOUD exactly once.
+  const playbackBlockedReportedRef = useRef(false);
+  const playbackUnblockCleanupRef = useRef<(() => void) | null>(null);
 
   const activeSourcesRef = useRef<Set<AudioBufferSourceNode>>(new Set());
   const nextStartRef = useRef(0);
 
+  // ── HER MOUTH CLOCK (see tests/call-viseme-clock.test.ts) ─────────────────
+  // The realtime leg streams audio, so it never knows a turn's total length up
+  // front. These three refs turn that guess into a measurement:
+  //   msPerWeightRef  — ms of real speech per viseme weight unit, CALIBRATED
+  //                     from her own completed turns. Seeds at
+  //                     TEXT_VISEME_MS_PER_WEIGHT (52 today) and is measured
+  //                     from turn one onward.
+  //   turnAudioMsRef  — real audio received for THIS turn (a hard lower bound
+  //                     on its true length, and monotonic).
+  //   turnWeightRef   — the weight of the text she was asked to speak.
+  // turnMouthStartedRef answers ONE question — "has this TURN produced audio
+  // yet?" — and its only consumer is speakForced's `keepClock`. It is NOT the
+  // gate on installing the clock: the armed TRACK is what the clock lives on,
+  // and the track is dropped when her voice stops AND no further sentence is on
+  // the wire (pendingResponsesRef === 0 — see source.onended). Gating the
+  // install on this flag left sentences 2..n with no shape track at all.
+  // isTextVisemeStarted() — the module's own answer — is the gate. The flag is
+  // set false in runKimiTurn (:1726 at the time of writing; the function opens
+  // at :1608), where a TURN begins, and NEVER in speakForced, which runs per
+  // force_message. tests/call-viseme-clock.test.ts pins that placement by
+  // source text, so the assertion survives the line number going stale.
+  const msPerWeightRef = useRef(TEXT_VISEME_MS_PER_WEIGHT);
+  const turnAudioMsRef = useRef(0);
+  const turnWeightRef = useRef(0);
+  const turnMouthStartedRef = useRef(false);
+  // ★ THE MOUTH IS CLOCKED OFF THE AUDIO QUEUE, NOT OFF A GUESS AND NOT OFF
+  // ctx.currentTime (2026-09-30). AudioContext time at which this TURN's FIRST
+  // sample played — back-dated on a mid-turn re-arm so it still names the turn's
+  // start, not the sentence's. NaN until her first buffer is scheduled, which is
+  // what the clock source uses it for: a turn with no audio yet has no position.
+  //
+  // IT IS NOT THE POSITION. (ctx.currentTime - this) was, and that was wrong:
+  // ctx.currentTime is a wall clock denominated in audio time, so every silence
+  // the scheduler inserts — a starved queue, or the gap between two streamed
+  // sentences' responses — advances it without advancing her voice. Her mouth
+  // would run permanently ahead and then freeze on the last shape for the tail
+  // of the turn, and with streaming ON those gaps are the common case. The
+  // position is derived from the QUEUE instead (see schedulePlayback).
+  const turnAudioStartRef = useRef(Number.NaN);
+  // Everything she has been asked to SAY so far this turn. With sentence
+  // streaming a turn is several force_messages, and her mouth must be armed
+  // against the whole utterance — re-arming per sentence is what made it jump
+  // to the next sentence mid-word.
+  const turnSpokenTextRef = useRef("");
+  // force_messages sent this turn whose audio has not finished arriving. With
+  // sentence streaming there is one `response.output_audio.done` PER SENTENCE,
+  // and the rate calibration below divides the turn's cumulative audio by its
+  // cumulative weight — a ratio that is only true once every sentence's audio
+  // is in. Calibrating at sentence one would have measured half the audio
+  // against all of the text and poisoned her speaking rate downward.
+  const pendingResponsesRef = useRef(0);
+  // `response.output_audio.done` and `response.audio.done` are ALIASES for the
+  // same event and this client handles both spellings. A session that sent both
+  // would decrement the counter twice per response, which would calibrate her
+  // rate against half her audio — the exact poisoning the counter exists to
+  // stop. Whichever spelling arrives first is the one that counts.
+  const doneEventNameRef = useRef<string | null>(null);
+  // Last non-fatal realtime-error ALERT, for REALTIME_ERROR_ALERT_GAP_MS.
+  const lastRealtimeErrorAlertRef = useRef(0);
+
   // Stall watchdog for the "speaking" state — see armDrainWatchdog.
   const speakingDrainTimerRef = useRef<number | null>(null);
+  // ── A SILENT CALL MUST NOT BE SILENT ABOUT ITSELF (2026-09-30) ───────────
+  // The socket opens (101) and the session config is sent; if the server never
+  // acks it there was NO path out of "connecting" and no cue anywhere but a
+  // console. This timer is that path. Cleared by session.updated and by
+  // cleanupInternal.
+  const handshakeTimerRef = useRef<number | null>(null);
+  // Has the server acked our session config at least once on THIS socket? A
+  // config rejection before the ack is not something waiting can fix.
+  const sessionAckedRef = useRef(false);
+  // The model the SERVER says it is running (session.created). Reported once.
+  const reportedVoiceModelRef = useRef<string | null>(null);
 
   // Live loudness (0..1) of her currently-playing audio, for the audio-reactive
   // face. Quick attack, gradual decay so her on-screen animation tracks what she
@@ -1062,6 +1211,21 @@ export function useVoiceCall(): UseVoiceCallResult {
       if (stateRef.current !== "speaking") return;
       if (activeSourcesRef.current.size > 0) return; // still audible — not stalled
       assistantResponseDoneRef.current = true;
+      // LAST RESORT, AND DELIBERATELY UNCONDITIONAL. If deltas simply stop and
+      // no done event ever arrives, this is the only path that still runs —
+      // without the clear here her mouth would freeze on the final shape.
+      //
+      // It is NOT gated on pendingResponsesRef like the two paths above: this
+      // only fires after SPEAKING_DRAIN_TIMEOUT_MS (3s) of total silence with an
+      // empty queue, which is far longer than any inter-sentence gap, and it
+      // drops her to "listening" in the same breath. If it fires, the turn is
+      // being declared over — a leaked counter must not be able to leave her
+      // mouth holding a shape into the listening state.
+      try {
+        clearTextVisemes();
+      } catch {
+        /* text visemes are optional — never break the call */
+      }
       bargeStreakRef.current = 0;
       assistantLevelRef.current = 0;
       setCallState("listening");
@@ -1428,6 +1592,41 @@ export function useVoiceCall(): UseVoiceCallResult {
     // T4 starts HERE — the words are on the wire; everything after this is
     // xAI's TTS. Stamped after the send so a failed send never opens a leg.
     markCallTiming("forcedAt");
+    // ARM TEXT VISEMES — drive her mouth from the WORDS she's about to say,
+    // not just amplitude. The clock starts when first audio arrives
+    // (see response.output_audio.delta handler below). Same path speak.ts uses.
+    // Arm against her MEASURED speaking rate, not the 85ms/weight guess. The
+    // rate is recalibrated at the end of every turn (response.output_audio.done),
+    // so turn two onward is scheduled against her actual voice.
+    // ★ PER UTTERANCE, NOT PER FORCE_MESSAGE (2026-09-30). With sentence
+    // streaming on, a turn is several force_messages. Re-arming on each one
+    // restarted the timeline from that sentence's first letter while her voice
+    // was mid-word, so her mouth visibly jumped. The accumulated text is armed
+    // instead, with `keepClock` carrying the running anchor and audio clock
+    // over, and the per-turn counters are reset where a TURN begins
+    // (runKimiTurn) — never here.
+    const accumulated = turnSpokenTextRef.current
+      ? `${turnSpokenTextRef.current} ${spoken}`
+      : spoken;
+    turnSpokenTextRef.current = accumulated;
+    turnWeightRef.current = textVisemeWeight(accumulated);
+    pendingResponsesRef.current += 1;
+    armTextVisemes(
+      accumulated,
+      turnWeightRef.current > 0
+        ? turnWeightRef.current * msPerWeightRef.current
+        : undefined,
+      { keepClock: turnMouthStartedRef.current },
+    );
+    // The re-armed estimate must never sit below the audio she has already
+    // played, or the tail of the schedule would be behind her voice.
+    if (turnAudioMsRef.current > 0) {
+      try {
+        extendTextVisemeDuration(turnAudioMsRef.current);
+      } catch {
+        /* text visemes are optional — never break the call */
+      }
+    }
     // THIS response is ours. Anything the session starts that this counter did
     // not pay for is the session talking on its own — response.created cancels
     // it (see the handler). Counted rather than a boolean because a barge-in
@@ -1558,6 +1757,16 @@ export function useVoiceCall(): UseVoiceCallResult {
       let streamRest = "";
       let streamedFirst = false;
       sentenceQueueRef.current = [];
+      // ── ONE MOUTH CLOCK PER TURN ─────────────────────────────────────────
+      // These were reset inside speakForced, which is per FORCE_MESSAGE. With
+      // sentence streaming that is several times a turn, and resetting them
+      // mid-turn re-anchored her mouth to the newest sentence while her voice
+      // was still mid-word. A turn begins HERE, exactly once, whether she ends
+      // up speaking it in one force_message or five.
+      turnAudioMsRef.current = 0;
+      turnMouthStartedRef.current = false;
+      turnSpokenTextRef.current = "";
+      pendingResponsesRef.current = 0;
       /**
        * Speak ONE completed sentence now. Returns the text as spoken (or "" if
        * the shaping consumed it), which the caller accumulates so the single
@@ -1920,10 +2129,109 @@ export function useVoiceCall(): UseVoiceCallResult {
     [setLiveAssistantBoth],
   );
 
+  /**
+   * PROVE HER PLAYBACK CONTEXT IS AUDIBLE — AND RECOVER IT WHEN IT IS NOT.
+   *
+   * connect() bounds the playback resume() at 250ms and then proceeds whatever
+   * the outcome, which is right (a queued resume must never wedge the call in
+   * "connecting") but incomplete: NOTHING downstream ever checked that the
+   * context actually reached "running". A context left suspended is the worst
+   * failure this file knows — she is completely inaudible AND her mouth clock
+   * is frozen, with no error, no feed line and no UI state. Indistinguishable
+   * from a working call she had nothing to say on. That is precisely what
+   * Classic reported on 2026-10-04.
+   *
+   * This is the same doctrine the dead-brain path already follows at :1791 —
+   * silence is never allowed to be the only symptom. Three things happen here:
+   *   1. one cheap idempotent resume() attempt (a no-op when already running);
+   *   2. ONE loud ops-feed line, so the cause is named instead of guessed;
+   *   3. a capture-phase gesture listener that resumes on his next click or
+   *      keypress — the autoplay policy's own unlock condition — so the call
+   *      HEALS ITSELF instead of staying mute for its whole duration.
+   */
+  /**
+   * PROVE HER PLAYBACK CONTEXT IS AUDIBLE — AND RECOVER IT WHEN IT IS NOT.
+   *
+   * The decision logic lives in playback-unblock.ts over injected seams so it
+   * can actually be EXERCISED by a test (suspend a context, fire a gesture,
+   * assert she became audible). Nothing here could be tested before: the
+   * string "destination" appears in zero test files, so a green suite was
+   * compatible with total silence. This function is only the wiring.
+   *
+   * Safe to call on every audio frame — it returns immediately when the
+   * context is already running, which is the normal case.
+   */
+  const ensurePlaybackRunning = useCallback((ctx: AudioContext): void => {
+    if (ctx.state === "running") {
+      // Confirmed audible: drop any recovery armed by an earlier frame.
+      playbackUnblockCleanupRef.current?.();
+      playbackUnblockCleanupRef.current = null;
+      return;
+    }
+    if (playbackUnblockCleanupRef.current) return; // already armed
+
+    const handle = ensureAudible(ctx, {
+      getContext: () => playbackContextRef.current,
+      resume: (c) => {
+        void callResume(c as AudioContext);
+      },
+      armGesture: (handler) => {
+        if (typeof window === "undefined") return () => {};
+        for (const ev of PLAYBACK_UNBLOCK_GESTURES) {
+          try {
+            window.addEventListener(ev, handler, true);
+          } catch {
+            /* ignore */
+          }
+        }
+        return () => {
+          for (const ev of PLAYBACK_UNBLOCK_GESTURES) {
+            try {
+              window.removeEventListener(ev, handler, true);
+            } catch {
+              /* ignore */
+            }
+          }
+        };
+      },
+      report: (kind) => {
+        if (kind === "recovered") {
+          postFeedLine("OPS", "Call: her voice is through — playback resumed");
+          return;
+        }
+        playbackBlockedReportedRef.current = true;
+        postFeedLine(
+          "ALERT",
+          "Call: her voice is held by the browser's autoplay policy (playback audio context suspended) — click anywhere on the deck and she comes through",
+        );
+        try {
+          console.warn(
+            "[starra-call] playback AudioContext is suspended: her audio is being queued but is INAUDIBLE and the mouth clock is frozen. Arming gesture unblock.",
+          );
+        } catch {
+          /* ignore */
+        }
+      },
+      defer: (fn, ms) => {
+        const t = setTimeout(fn, ms);
+        return () => clearTimeout(t);
+      },
+      graceMs: PLAYBACK_BLOCKED_GRACE_MS,
+    });
+
+    playbackUnblockCleanupRef.current = handle.dispose;
+  }, []);
+
   const schedulePlayback = useCallback(
     (base64: string) => {
       const ctx = playbackContextRef.current;
       if (!ctx) return;
+      // HER AUDIO IS ARRIVING — so a context that is not running right now is
+      // the difference between hearing her and silence. Checked on every frame
+      // because the autoplay policy can keep resume() queued long past
+      // connect(), and because this is the one place that proves audio exists.
+      // Cheap: a string compare, then a no-op when already running.
+      if (ctx.state !== "running") ensurePlaybackRunning(ctx);
 
       // HER BRAIN IS KIMI — after a kimi barge-in there is no server VAD to
       // truncate the interrupted response, so its remaining deltas keep
@@ -2006,6 +2314,47 @@ export function useVoiceCall(): UseVoiceCallResult {
             // ignore
           }
           if (activeSourcesRef.current.size === 0 && assistantResponseDoneRef.current) {
+            // HER LAST BUFFER HAS FINISHED — this, not response.done, is the
+            // moment her voice actually stops.
+            //
+            // ★ BUT A DRAINED QUEUE IS NOT THE END OF A STREAMED TURN
+            // (2026-09-30). This dropped the mouth track unconditionally, and
+            // that is what left sentences 2..n of every streamed reply with no
+            // shape information — the gate in schedulePlayback could not save
+            // them, because by the time sentence 2's audio arrived the track it
+            // would have re-armed was already gone:
+            //
+            //   s1 audio playing, track armed and running
+            //   brain yields s2 -> speakForced arms the ACCUMULATED s1+s2 track
+            //   s1's last buffer drains -> THIS ran -> the s1+s2 track destroyed
+            //   s2's audio arrives -> nothing armed -> beginTextVisemesOnce is a
+            //     no-op, setTextVisemeClockSource is a no-op, mouth is dead
+            //
+            // The brain streams text faster than she speaks it, so the arm
+            // almost always lands BEFORE the drain — this was the common case,
+            // not the corner.
+            //
+            // pendingResponsesRef is the turn-level counter (incremented per
+            // force_message in speakForced, decremented on each response's audio
+            // done, zeroed where a TURN begins in runKimiTurn). Zero means no
+            // further sentence is on the wire, i.e. the TURN is over and the
+            // track should go. Non-zero means this is a GAP, and her mouth holds
+            // its place in the accumulated schedule until the next sentence's
+            // audio continues it — which is also why the clock had to be derived
+            // from the queue rather than from ctx.currentTime: a wall clock would
+            // run her mouth through the gap.
+            //
+            // IF THE COUNTER EVER LEAKS above zero, this degrades to today's
+            // behaviour rather than wedging: barge-in clears explicitly, the 3s
+            // drain watchdog clears as a last resort, cleanup clears, and
+            // runKimiTurn zeroes the counter at the start of the next turn.
+            if (pendingResponsesRef.current === 0) {
+              try {
+                clearTextVisemes();
+              } catch {
+                /* text visemes are optional — never break the call */
+              }
+            }
             if (stateRef.current === "speaking") {
               // Leaving "speaking" — clear any partial barge-in streak so it
               // can't carry into the next response and false-fire.
@@ -2023,11 +2372,115 @@ export function useVoiceCall(): UseVoiceCallResult {
         activeSourcesRef.current.add(source);
         source.start(startAt);
         nextStartRef.current = startAt + buffer.duration;
+
+        // HER MOUTH STARTS MOVING WHEN SHE IS AUDIBLE, not when the packet
+        // landed. startAt is an AudioContext timestamp and may sit ahead of
+        // ctx.currentTime whenever the queue has a backlog; that lead is
+        // converted into the performance.now() timeline the renderer samples on
+        // (it is only the FALLBACK anchor — the clock source below outranks it).
+        //
+        // ★ THE GATE IS THE TRACK, NOT A PER-TURN FLAG (2026-09-30). This read
+        // `if (!turnMouthStartedRef.current)`, which is per TURN, while the thing
+        // it arms has a shorter life than a turn. Sentence 1 set the flag; if
+        // anything dropped the track after that, sentence 2 re-armed a track that
+        // was never begun and never given a clock, and her mouth had NO shape
+        // information from there to the end of the reply.
+        //
+        // Two changes were needed and BOTH are load-bearing — the gate alone did
+        // not fix it:
+        //   - this gate, so a re-armed track always gets begun and clocked; and
+        //   - the clear paths being scoped to the TURN instead of to a drained
+        //     queue (source.onended below, and response.done), because the arm
+        //     for sentence 2 usually lands BEFORE sentence 1's audio drains, so
+        //     the old clear destroyed the very track this gate would re-arm and
+        //     there was no later arm to recover it.
+        //
+        // What is left for this gate is the other ordering — the arm landing
+        // AFTER the drain, when the brain is slower than her voice. There the
+        // track is legitimately gone, a fresh one is armed, and asking the module
+        // whether a track is running re-installs the clock. beginTextVisemesOnce
+        // is idempotent per arm, so this costs nothing when a track is already
+        // running.
+        if (!isTextVisemeStarted()) {
+          turnMouthStartedRef.current = true;
+          // BACK-DATED, not `startAt`. On a mid-turn re-arm, startAt is this
+          // SENTENCE's first sample; subtracting the audio the turn has already
+          // played keeps this pointing at the TURN's first sample, which is what
+          // the name says and what a fallback anchor has to mean.
+          turnAudioStartRef.current = startAt - turnAudioMsRef.current / 1000;
+          const leadMs = Math.max(0, (startAt - ctx.currentTime) * 1000);
+          try {
+            beginTextVisemesOnce(performance.now() + leadMs);
+            // THE POSITION IS THE QUEUE, NOT THE CLOCK. "Audio actually played
+            // so far" = everything enqueued this turn, minus everything still
+            // waiting to play, minus the device's own output lag (the same lag
+            // the openness ring compensates). nextStartRef is the AudioContext
+            // time the next buffer would start, i.e. the end of the queue, so
+            // (nextStartRef - ctx.currentTime) IS the unplayed remainder.
+            //
+            // WHY NOT (ctx.currentTime - t0): that advances through silence. A
+            // starved queue or the gap between two streamed sentences' responses
+            // would move her mouth while her voice stood still, permanently, for
+            // the rest of the turn. This form cannot: both terms only move when
+            // audio does. The remainder is floored at 0 so a queue that has run
+            // dry reads "all of it played" instead of drifting past the end.
+            //
+            // A closure, not a number, so it is re-read on every mouth tick
+            // instead of going stale between packets. Dropped with the armed
+            // track, so it can never drive the TTS leg's mouth.
+            // HOLD, NEVER LIE, NEVER SNAP (2026-10-04).
+            // The arithmetic below is only meaningful while ctx.currentTime is
+            // advancing and nextStartRef still describes THIS turn's queue. Two
+            // reachable states broke it silently, and both are read as "lips not
+            // synced":
+            //   - a suspended/frozen context: currentTime stops while buffers
+            //     keep enqueuing, so queuedAhead grows, `played` clamps to 0 for
+            //     the whole reply and her mouth sits on the rest shape;
+            //   - stopAllPlayback zeroes nextStartRef while an armed track is
+            //     still alive, making queuedAhead large-NEGATIVE; it clamps to 0
+            //     and `played` jumps to the full schedule — her mouth SNAPS to
+            //     the end of the turn.
+            // Degrading to the wall clock (NaN) was considered and rejected: it
+            // would animate a full reply over audio he cannot hear, and a mouth
+            // that lip-syncs silence is worse than one that waits. So a broken
+            // clock HOLDS the last honest position instead.
+            let lastPlayed = 0;
+            setTextVisemeClockSource(() => {
+              if (!Number.isFinite(turnAudioStartRef.current)) return lastPlayed;
+              // A closure left over from a previous call must never drive this
+              // one's mouth — NaN is the module's documented "superseded, fall
+              // back" value (see speak.ts), and a fresh track will re-arm.
+              if (playbackContextRef.current !== ctx) return Number.NaN;
+              // Queue torn down (stopAllPlayback) — hold rather than snap.
+              if (!(nextStartRef.current > 0)) return lastPlayed;
+              // Clock frozen: she is inaudible, so holding is the honest read.
+              if (ctx.state !== "running") return lastPlayed;
+              const queuedAhead = (nextStartRef.current - ctx.currentTime) * 1000;
+              const played =
+                turnAudioMsRef.current -
+                (queuedAhead > 0 ? queuedAhead : 0) -
+                audioOutputDelayMs(ctx);
+              lastPlayed = played > 0 ? played : 0;
+              return lastPlayed;
+            });
+          } catch {
+            /* text visemes are optional — never break audio playback */
+          }
+        }
+        // Audio received so far is a hard, monotonic lower bound on the turn's
+        // true length. Growing the schedule toward it stops her mouth running
+        // off the end and freezing on the last shape.
+        turnAudioMsRef.current += buffer.duration * 1000;
+        try {
+          extendTextVisemeDuration(turnAudioMsRef.current);
+        } catch {
+          /* never break audio playback for a face animation */
+        }
       } catch {
         // A single bad chunk shouldn't take down the call.
       }
     },
-    [armDrainWatchdog, clearDrainWatchdog, commitUser, setCallState],
+    [armDrainWatchdog, clearDrainWatchdog, commitUser, ensurePlaybackRunning, setCallState],
   );
 
   // ---- barge-in -------------------------------------------------------
@@ -2043,6 +2496,16 @@ export function useVoiceCall(): UseVoiceCallResult {
       // an interruption and her ploughing on through three more sentences he
       // already answered.
       sentenceQueueRef.current = [];
+      // CLEAR TEXT VISEMES on barge-in — the interrupted response is over, so
+      // her mouth should return to audio-only until the next turn is armed.
+      // The accumulated utterance goes with it: what she never finished saying
+      // must not be prepended to the next thing she says.
+      turnSpokenTextRef.current = "";
+      try {
+        clearTextVisemes();
+      } catch {
+        /* text visemes are optional — never break the call */
+      }
       // Kimi mode: silence the interrupted response's still-arriving deltas
       // locally (see schedulePlayback) — response.cancel below is best-effort
       // and there is no server VAD to truncate for us.
@@ -2152,6 +2615,18 @@ export function useVoiceCall(): UseVoiceCallResult {
     }
     // Never leave the speaking-stall watchdog behind on teardown/unmount.
     clearDrainWatchdog();
+    // Nor the handshake watchdog — and the next socket starts un-acked.
+    if (handshakeTimerRef.current != null) {
+      window.clearTimeout(handshakeTimerRef.current);
+      handshakeTimerRef.current = null;
+    }
+    sessionAckedRef.current = false;
+    // CLEAR TEXT VISEMES on cleanup — call is over, no text to sync to.
+    try {
+      clearTextVisemes();
+    } catch {
+      /* text visemes are optional — never break cleanup */
+    }
     // Session total for tool use — same once-per-session shape as the elapsed
     // billing below (emit, then reset, so a later teardown can't double-post).
     // Silent when nothing ran, so an ordinary no-tool call adds no noise.
@@ -2208,6 +2683,17 @@ export function useVoiceCall(): UseVoiceCallResult {
       // ignore
     }
     micContextRef.current = null;
+
+    // Drop the autoplay-unblock listeners with the call that armed them — a
+    // window listener outliving its AudioContext would resume a dead handle on
+    // every click for the rest of the session.
+    try {
+      playbackUnblockCleanupRef.current?.();
+    } catch {
+      // ignore
+    }
+    playbackUnblockCleanupRef.current = null;
+    playbackBlockedReportedRef.current = false;
 
     try {
       analyserRef.current?.disconnect();
@@ -2289,11 +2775,37 @@ export function useVoiceCall(): UseVoiceCallResult {
 
       switch (type) {
         case "ping":
-        case "session.created":
         case "conversation.created":
           return;
 
+        case "session.created": {
+          // ★ THE ONLY PLACE THE SERVER STATES WHICH MODEL IS LIVE, and it used
+          // to be discarded with the pings — so an upstream model swap (and the
+          // per-minute price that rides it) could never be seen from here.
+          //
+          // MEASURED 2026-09-30: with the socket pinned to
+          // grok-voice-think-fast-1.0, this event still reports
+          // grok-voice-think-fast-2.0. The `?model=` query pin is NOT honoured
+          // on the wire (see src/app/api/realtime/route.ts). Reporting what the
+          // SERVER says is therefore the only honest source.
+          const created = asRecord(evt.session);
+          const liveModel = created ? asString(created.model) : null;
+          if (liveModel && liveModel !== reportedVoiceModelRef.current) {
+            reportedVoiceModelRef.current = liveModel;
+            postFeedLine("ORACLE", `Voice model on the wire: ${liveModel} (server-reported)`);
+          }
+          return;
+        }
+
         case "session.updated": {
+          // THE HANDSHAKE COMPLETED. Disarm the watchdog (and record the ack, so
+          // a later config rejection is judged as recoverable rather than as a
+          // dead handshake).
+          sessionAckedRef.current = true;
+          if (handshakeTimerRef.current != null) {
+            window.clearTimeout(handshakeTimerRef.current);
+            handshakeTimerRef.current = null;
+          }
           // ── PROVE THE EARS-ONLY CONFIG ACTUALLY TOOK ──────────────────────
           // The ack echoes the session the server believes it is running. On a
           // kimi call `turn_detection` must be OFF; if the server kept VAD, it
@@ -2440,7 +2952,20 @@ export function useVoiceCall(): UseVoiceCallResult {
         case "response.audio.delta": {
           const delta = asString(evt.delta);
           if (!delta) return;
+          // THE MOUTH CLOCK IS NOT STARTED HERE. A delta arriving is not the
+          // same moment as sound leaving the speakers — schedulePlayback knows
+          // when that is (startAt) and starts it there. Starting it here also
+          // re-stamped the clock on EVERY delta, which pinned her mouth to the
+          // opening rest shape for the whole turn. See
+          // tests/call-viseme-clock.test.ts.
           if (LIPSYNC_ENABLED) {
+            // This lane never plays live audio — it buffers the turn and
+            // renders a clip — so there is no audible start to wait for.
+            try {
+              beginTextVisemesOnce();
+            } catch {
+              /* text visemes are optional — never break audio playback */
+            }
             // Buffer her audio instead of playing it live — we'll render a
             // word-matched talking clip from the whole turn on response.done.
             const bin = atob(delta);
@@ -2508,6 +3033,32 @@ export function useVoiceCall(): UseVoiceCallResult {
         case "response.output_audio.done":
         case "response.audio.done":
           assistantResponseDoneRef.current = true;
+          // CALIBRATE. Every byte of this turn's audio has arrived, so
+          // turnAudioMsRef is now its exact length and we know the weight of
+          // the text that produced it. That ratio is her real speaking rate.
+          // Bounded so one malformed turn cannot poison the rate, and blended
+          // rather than replaced so it settles instead of chasing.
+          if (doneEventNameRef.current === null) doneEventNameRef.current = type;
+          if (type === doneEventNameRef.current && pendingResponsesRef.current > 0) {
+            pendingResponsesRef.current -= 1;
+          }
+          if (
+            pendingResponsesRef.current === 0 &&
+            turnWeightRef.current > 0 &&
+            turnAudioMsRef.current > 0
+          ) {
+            const measured = turnAudioMsRef.current / turnWeightRef.current;
+            if (measured > 20 && measured < 400) {
+              msPerWeightRef.current = msPerWeightRef.current * 0.5 + measured * 0.5;
+            }
+          }
+          try {
+            // Safe on every done, calibrated or not: it only ever RAISES the
+            // schedule toward audio that has genuinely arrived.
+            extendTextVisemeDuration(turnAudioMsRef.current);
+          } catch {
+            /* never break the call for a face animation */
+          }
           if (activeSourcesRef.current.size === 0 && stateRef.current === "speaking") {
             bargeStreakRef.current = 0;
             setCallState("listening");
@@ -2518,6 +3069,27 @@ export function useVoiceCall(): UseVoiceCallResult {
           assistantResponseDoneRef.current = true;
           // The suppressed (barged) response is fully over — stop dropping.
           suppressResponseAudioRef.current = false;
+          // CLEAR TEXT VISEMES — but ONLY once she has actually stopped
+          // talking AND the TURN is over. Two separate conditions:
+          //
+          //  - size === 0: response.done means the WIRE is finished, not her
+          //    voice. Audio arrives far faster than it plays, so seconds of her
+          //    reply are still queued on the AudioContext at this instant.
+          //    Clearing here dropped the back half of every reply to bare
+          //    amplitude with no consonant closures.
+          //  - pendingResponsesRef === 0: with sentence streaming a TURN is
+          //    several responses, so "this response is done" is not "she has
+          //    finished her thought". Clearing on the first sentence's
+          //    response.done destroyed the accumulated track the next sentence
+          //    was going to ride. Same reasoning as source.onended above, where
+          //    it is written out in full.
+          if (activeSourcesRef.current.size === 0 && pendingResponsesRef.current === 0) {
+            try {
+              clearTextVisemes();
+            } catch {
+              /* text visemes are optional — never break the call */
+            }
+          }
           // Authoritative fallback — only actually used by commitAssistant
           // if no delta/`.done` transcript event already committed this
           // response's line.
@@ -2568,11 +3140,32 @@ export function useVoiceCall(): UseVoiceCallResult {
             const message =
               asString(errRecord?.message) ?? asString(evt.message) ?? "Realtime error.";
             const code = (asString(errRecord?.code) ?? asString(errRecord?.type) ?? "").toLowerCase();
-            const fatal = /auth|credential|expired|invalid[_ ]?session|unauthorized|forbidden|\btoken\b/.test(
-              `${code} ${message}`.toLowerCase(),
-            );
+            const blob = `${code} ${message}`.toLowerCase();
+            // A REJECTED SESSION CONFIG IS NOT RECOVERABLE BY WAITING. Before
+            // the server has acked anything, our session.update is the only
+            // client event on this socket, so an invalid_event /
+            // invalid_request_error here IS the config being refused — and
+            // sitting in "connecting" forever, or talking to a session that
+            // never took the ears-only config, is the silent-call failure.
+            const configRejected =
+              !sessionAckedRef.current && /invalid_event|invalid_request_error/.test(blob);
+            const fatal =
+              configRejected ||
+              /auth|credential|expired|invalid[_ ]?session|unauthorized|forbidden|\btoken\b/.test(
+                blob,
+              );
+            // ── LOUD, NOT console-ONLY ───────────────────────────────────────
+            // This was a bare console.warn: xAI could refuse a client event and
+            // the ONLY trace was a console he never opens. He got a spinner
+            // that never resolved, or a connected call where she is mute
+            // forever. Same visible path the brain failures already use.
             if (fatal) {
               console.warn("[voice] FATAL realtime error → reconnecting:", message);
+              postFeedLine(
+                "ALERT",
+                `Call: the voice link refused ${configRejected ? "the session config" : "the session"} — ${message.slice(0, 120)}`,
+              );
+              kimiEarsStruggling("the voice link refused the session");
               try {
                 wsRef.current?.close();
               } catch {
@@ -2580,6 +3173,29 @@ export function useVoiceCall(): UseVoiceCallResult {
               }
             } else {
               console.warn("[voice] realtime error (session kept alive):", message);
+              // ★ FED, BUT NOT ESCALATED BY DEFAULT (2026-09-30). Every
+              // non-fatal error used to call kimiEarsStruggling, which is a
+              // VISIBLE "her ears are struggling" state plus a full
+              // session.update re-assert. xAI hits this branch during normal
+              // barge-in (a response.cancel for a response that already
+              // finished), so interrupting her reset her endpointer and
+              // re-uploaded the session config — mid-conversation, repeatedly.
+              // The feed line stays: a silent error is what made the last
+              // silent-call failure invisible.
+              const benign = BENIGN_REALTIME_ERROR.test(blob);
+              const nowTs = Date.now();
+              if (nowTs - lastRealtimeErrorAlertRef.current >= REALTIME_ERROR_ALERT_GAP_MS) {
+                lastRealtimeErrorAlertRef.current = nowTs;
+                postFeedLine(
+                  "ALERT",
+                  `Call: the voice link reported an error — ${message.slice(0, 120)}`,
+                );
+              }
+              // Only a SESSION-shaped complaint earns the re-assert, and never
+              // one of the known-benign shapes — those are the barge-in path.
+              if (!benign && SESSION_REALTIME_ERROR.test(blob)) {
+                kimiEarsStruggling("the voice link reported a session error");
+              }
             }
           } else if (type.endsWith(".error")) {
             // Sub-event error (e.g. a single failed response) — recoverable.
@@ -2786,6 +3402,13 @@ export function useVoiceCall(): UseVoiceCallResult {
       // and bound the wait (see settleWithin) so a queued resume() can never
       // wedge the call in "connecting".
       await settleWithin(callResume(playbackContext), RESUME_TIMEOUT_MS);
+      // ...AND THEN PROVE IT. The bounded wait above is deliberately allowed to
+      // expire; what was missing is any check of the outcome. A context still
+      // suspended here makes the whole call inaudible with her mouth frozen on
+      // the rest shape, so name it on the feed and arm the gesture recovery
+      // now rather than discovering it turn after turn. No-op when running.
+      playbackBlockedReportedRef.current = false; // fresh call, fresh report
+      ensurePlaybackRunning(playbackContext);
       nextStartRef.current = 0;
 
       // Passive tap on her output for the mouth-sync face. Wired
@@ -2796,7 +3419,13 @@ export function useVoiceCall(): UseVoiceCallResult {
       try {
         const tap = playbackContext.createAnalyser();
         tap.fftSize = 1024;
-        tap.smoothingTimeConstant = 0.6;
+        // ZERO, matching speak.ts:527 and local-voice.ts:519. 0.6 added ~33ms
+        // of group delay (16.7/-ln(0.6)) that nothing downstream compensated,
+        // and smeared exactly the transients the text-viseme module exists to
+        // sharpen. StarraClipFace already runs its own smoothers on this
+        // signal (ATTACK_MS 35 / RELEASE_MS 110 / ROUNDNESS_TAU_MS 120), so
+        // analyser-level smoothing was duplicated damping, not protection.
+        tap.smoothingTimeConstant = 0;
         tap.connect(playbackContext.destination);
         analyserRef.current = tap;
         setAnalyser(tap);
@@ -2852,6 +3481,25 @@ export function useVoiceCall(): UseVoiceCallResult {
 
       const ws = new WebSocket(data.url, [XAI_REALTIME_WS_SUBPROTOCOL_PREFIX + data.value]);
       wsRef.current = ws;
+
+      // ── HANDSHAKE WATCHDOG ────────────────────────────────────────────────
+      // A 101 upgrade proves NOTHING about the session: measured 2026-09-30, a
+      // deliberately bogus model name still gets 101 Switching Protocols. If
+      // the server never acks the config there was previously no timeout, no UI
+      // and no feed line — just a spinner. The ack is measured at 528-796ms, so
+      // 8s is far past healthy and only fires on a genuinely dead handshake.
+      // Disarmed in the session.updated case and in cleanupInternal.
+      sessionAckedRef.current = false;
+      if (handshakeTimerRef.current != null) {
+        window.clearTimeout(handshakeTimerRef.current);
+      }
+      handshakeTimerRef.current = window.setTimeout(() => {
+        handshakeTimerRef.current = null;
+        if (connectEpochRef.current !== myEpoch || wsRef.current !== ws) return;
+        if (sessionAckedRef.current) return;
+        if (stateRef.current !== "connecting") return;
+        handleFatalError("The voice link connected but never configured — retry.");
+      }, HANDSHAKE_ACK_TIMEOUT_MS);
 
       ws.onopen = async () => {
         // Connection is live now — start the billing clock (xAI meters Grok
@@ -2984,7 +3632,7 @@ export function useVoiceCall(): UseVoiceCallResult {
     } catch (e) {
       handleFatalError(e instanceof Error ? e.message : "Failed to start voice call.");
     }
-  }, [cleanupInternal, handleFatalError, handleMicFrame, handleServerEvent, setCallState, setLiveAssistantBoth, setLiveUserBoth, stopAllPlayback]);
+  }, [cleanupInternal, ensurePlaybackRunning, handleFatalError, handleMicFrame, handleServerEvent, setCallState, setLiveAssistantBoth, setLiveUserBoth, stopAllPlayback]);
 
   // Keep connectRef pointed at the latest connect() so ws.onclose can restart
   // the call (reconnect) without capturing a stale closure.

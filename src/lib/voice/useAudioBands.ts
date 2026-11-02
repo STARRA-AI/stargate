@@ -38,11 +38,28 @@ export const BAND_COUNT = 3;
  */
 const DECAY = 0.9;
 
+/**
+ * REUSED FFT SCRATCH. `readBands` runs once per animation frame, forever, for
+ * every consumer of this bus at once — it used to allocate a fresh
+ * `new Uint8Array(analyser.frequencyBinCount)` on each of those calls, which at
+ * a 1024-point FFT is 512 bytes of garbage 60x a second per consumer, to read
+ * THREE bins.
+ *
+ * Grown on demand, never shrunk, never reallocated in the steady state. Safe to
+ * share across analysers: it is filled by `getByteFrequencyData` and read out
+ * within the same synchronous call, so nothing can observe another consumer's
+ * bytes. The one thing that MUST NOT be assumed is that `binScratch.length`
+ * equals the current analyser's bin count — it is a high-water mark. The loop
+ * below bounds itself on `analyser.frequencyBinCount` for exactly that reason.
+ */
+let binScratch = new Uint8Array(0);
+
 /** Below this, call it silence. Stops a permanent sub-visible twitch. */
 const REST = 1e-4;
 
 /**
- * Fill `out` with the current bands, 0..1. Pure apart from reading the node.
+ * Fill `out` with the current bands, 0..1. Reads the node, writes `out`, and
+ * reuses the module-level `binScratch` above; allocates nothing per frame.
  *
  * Exported separately from the hook so the behavior that actually matters —
  * decay, attack, NaN-safety — is testable without a browser AudioContext.
@@ -57,15 +74,22 @@ export function readBands(analyser: AnalyserNode | null, out: Float32Array): voi
     return;
   }
 
-  const bins = new Uint8Array(analyser.frequencyBinCount);
-  analyser.getByteFrequencyData(bins);
+  const binCount = analyser.frequencyBinCount;
+  if (binScratch.length < binCount) binScratch = new Uint8Array(binCount);
+  analyser.getByteFrequencyData(binScratch);
 
   for (let b = 0; b < out.length; b++) {
     // An analyser with fewer bins than we want is not an error — it is a
     // smaller FFT. Missing bins read as silence, never as NaN: a single NaN
     // reaching the canvas makes it draw nothing at all, which looks exactly
     // like the feature being broken.
-    const raw = b < bins.length ? bins[b] : 0;
+    //
+    // BOUNDED ON `binCount`, NOT ON `binScratch.length`. The scratch is shared
+    // and only ever grows, so its length is a high-water mark from whatever
+    // analyser had the most bins — indexing past `binCount` would return that
+    // analyser's STALE bytes instead of silence. This bound keeps the returned
+    // values bit-for-bit what the old per-frame allocation produced.
+    const raw = b < binCount ? binScratch[b] : 0;
     const next = raw / 255;
     out[b] = Number.isFinite(next) ? next : 0;
   }
@@ -75,7 +99,7 @@ export function readBands(analyser: AnalyserNode | null, out: Float32Array): voi
  * Subscribe to the engine bus and expose her live speaking level.
  *
  * Seeds from `getTtsAudio()` before subscribing so a reply ALREADY in flight is
- * caught — the same ordering `VoiceCallOverlay.tsx:317` relies on. Without it,
+ * caught — the same ordering `VoiceCallOverlay.tsx:355` relies on. Without it,
  * mounting mid-sentence would show a dead sphere until she next started
  * speaking.
  */
@@ -120,8 +144,11 @@ export function useAudioBands(): {
   }, []);
 
   // `read` closes over the refs rather than over state, so the rAF loop that
-  // calls it 60x/second never re-subscribes and never re-renders. The buffer is
-  // reused, so a frame costs no allocation.
+  // calls it 60x/second never re-subscribes and never re-renders. A frame now
+  // genuinely costs no allocation: the output buffer is `bandsRef`, and the FFT
+  // input buffer is the shared `binScratch` above. (This comment used to claim
+  // zero allocation while `readBands` was allocating a fresh Uint8Array on
+  // every single call — fixed 2026-09-30.)
   const read = useRef(() => {
     readBands(analyserRef.current, bandsRef.current);
   }).current;

@@ -1138,6 +1138,11 @@ export async function POST(req: Request) {
                 messages,
                 onText: (t) => push(t),
                 signal: req.signal,
+                // LIVE CALL ONLY: her thinking time is dead air on a phone
+                // call, so the voice lane asks for less of it (measured
+                // 2506ms -> 1104ms TTFT). The TYPED lane is untouched — no
+                // param is sent there at all. See streamHosted.
+                ...(callVoice ? { reasoningEffort: "low" as const } : {}),
               });
               const zdr = zdrState();
               pushFeed(

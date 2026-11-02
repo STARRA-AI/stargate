@@ -49,6 +49,22 @@ export type PolyTrade = {
   side: "BUY" | "SELL";
   outcome: string;
   title: string;
+  /**
+   * ★ The market-type signal, and the reason this field exists.
+   *
+   * `outcome` is only ever a competitor name: a POINT-SPREAD bet on
+   * "Spread: Bills (-6.5)" arrives as `outcome: "Patriots"`. Matching on that
+   * name alone finds the Kalshi MONEYLINE and buys "Patriots win outright" —
+   * a different, less likely event, at a cheaper price that reads as free edge.
+   * The slug is the only field that states the kind outright:
+   * `nfl-ne-buf-2026-10-04-spread-home-6pt5` (observed live 2026-10-04 on the
+   * #1 profit wallet). Feed it to classifyPolyMarket/matchOutcomeGuarded in
+   * copy-match.ts BEFORE any name matching.
+   *
+   * Optional because the field is absent on some rows; a missing slug must
+   * classify as "other" and be skipped, never guessed into a moneyline.
+   */
+  slug?: string;
   price: number;
   size: number;
   timestamp: number;
@@ -60,6 +76,8 @@ type RawActivity = {
   side?: string;
   outcome?: string;
   title?: string;
+  /** Present on the live feed; see PolyTrade.slug for why it is load-bearing. */
+  slug?: string;
   price?: number;
   size?: number;
   timestamp?: number;
@@ -82,6 +100,7 @@ export async function fetchTrades(wallet: string, limit = 100): Promise<PolyTrad
       side: (r.side === "SELL" ? "SELL" : "BUY") as "BUY" | "SELL",
       outcome: r.outcome ?? "",
       title: r.title ?? "",
+      slug: typeof r.slug === "string" && r.slug !== "" ? r.slug : undefined,
       price: Number(r.price) || 0,
       size: Number(r.size) || 0,
       timestamp: Number(r.timestamp) || 0,
@@ -92,17 +111,27 @@ export async function fetchTrades(wallet: string, limit = 100): Promise<PolyTrad
 /**
  * Collapse a burst of fills into the ORDER that caused them.
  *
- * Top wallets' fills arrive as many small clips at one price inside the same
- * second — three $5 prints are one $15 intent, not three signals. Same idea as
- * newClientOrderId's per-second bucket in dragon-orders.ts.
+ * Top wallets' fills arrive as many small clips at one price — three $5 prints
+ * are one $15 intent, not three signals.
+ *
+ * ★ The bucket is ONE MINUTE, not one second: `timestamp` is in unix SECONDS and
+ *   the key divides it by 60. (This comment previously said "second", which did
+ *   not match the code.) A minute is the wider, safer choice here — it collapses
+ *   a slow iceberg fill that a per-second bucket would emit as a dozen signals.
+ *   dragon-orders.ts newClientOrderId buckets per SECOND; the two are
+ *   deliberately different and must not be "aligned" without a reason.
  */
 export function aggregateFills(trades: PolyTrade[]): PolyTrade[] {
   const byKey = new Map<string, PolyTrade>();
   for (const t of trades) {
     const key = `${t.conditionId}|${t.outcome}|${t.side}|${t.price.toFixed(3)}|${Math.floor(t.timestamp / 60)}`;
     const prev = byKey.get(key);
-    if (prev) prev.size += t.size;
-    else byKey.set(key, { ...t });
+    if (prev) {
+      prev.size += t.size;
+      // Keep the first non-empty slug: every clip in a bucket shares one market,
+      // and dropping it would strip the gate's input (see PolyTrade.slug).
+      if (!prev.slug && t.slug) prev.slug = t.slug;
+    } else byKey.set(key, { ...t });
   }
   return [...byKey.values()].sort((a, b) => b.timestamp - a.timestamp);
 }

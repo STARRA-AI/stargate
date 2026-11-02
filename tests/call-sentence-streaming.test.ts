@@ -22,8 +22,14 @@ const src = readFileSync(join(REPO, "src/lib/voice/useVoiceCall.ts"), "utf8");
 
 describe("sentence streaming — the one-voice guard must survive it", () => {
   it("the pending counter is incremented per force_message, not per turn", () => {
-    const fn = src.slice(src.indexOf("const speakForced"));
-    assert.match(fn.slice(0, 2000), /kimiForcedPendingRef\.current \+= 1/);
+    // Bounded by the function's own closing dep-array rather than a magic
+    // character count, so the guard proves what it means — the increment lives
+    // INSIDE speakForced — and does not false-fire whenever the function grows.
+    const fn = src.slice(
+      src.indexOf("const speakForced"),
+      src.indexOf("}, [kimiEarsStruggling, recordAssistantRow]);"),
+    );
+    assert.match(fn, /kimiForcedPendingRef\.current \+= 1/);
   });
 
   it("the counter can never go negative", () => {
