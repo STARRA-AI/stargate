@@ -40,20 +40,20 @@
   "dependencies": {
     "@anthropic-ai/sdk": "^0.111.0",
     "@mediapipe/tasks-vision": "^0.10.35",
-    "@mintplex-labs/piper-tts-web": "^1.0.4",
+    "@mintplex-labs/piper-tts-web": "^1.0.5",
     "@pixiv/three-vrm": "^3.5.5",
     "@simplewebauthn/browser": "^13.3.0",
     "@simplewebauthn/server": "^13.3.2",
     "animejs": "^4.5.0",
-    "docx": "9.7.1",
-    "jszip": "^3.10.1",
-    "next": "15.5.20",
-    "onnxruntime-web": "^1.27.0",
+    "docx": "9.15.3",
+    "jszip": "^3.10.2",
+    "next": "15.5.29",
+    "onnxruntime-web": "^1.31.1",
     "pdf-parse": "^2.4.5",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "three": "^0.180.0",
-    "zod": "^4.4.3"
+    "zod": "^4.6.7"
   },
   "devDependencies": {
     "@eslint/eslintrc": "^3",
@@ -65,7 +65,7 @@
     "@types/react-dom": "^19",
     "@types/three": "^0.180.0",
     "eslint": "^9",
-    "eslint-config-next": "15.5.20",
+    "eslint-config-next": "15.5.29",
     "repomix": "^1.16.1",
     "tailwindcss": "^4",
     "typescript": "^5"
