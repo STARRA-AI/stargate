@@ -50,8 +50,8 @@
     "next": "15.5.29",
     "onnxruntime-web": "^1.31.1",
     "pdf-parse": "^2.4.5",
-    "react": "19.1.0",
-    "react-dom": "19.1.0",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "three": "^0.180.0",
     "zod": "^4.6.7"
   },
