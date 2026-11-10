@@ -54,6 +54,9 @@ repomix-output.*
 # vercel
 .vercel
 
+# wrangler local cache (account id + deploy state — never committed)
+/.wrangler/
+
 # typescript
 *.tsbuildinfo
 next-env.d.ts
