@@ -11,7 +11,18 @@
       "mcp__robinhood-trading__cancel_advanced_order",
       "mcp__robinhood-trading__exercise_option",
       "mcp__robinhood-trading__cancel_option_exercise",
-      "mcp__robinhood-trading__decline_trade_approval"
+      "mcp__robinhood-trading__decline_trade_approval",
+      "mcp__Robinhood__place_equity_order",
+      "mcp__Robinhood__place_option_order",
+      "mcp__Robinhood__place_crypto_order",
+      "mcp__Robinhood__place_advanced_order",
+      "mcp__Robinhood__cancel_equity_order",
+      "mcp__Robinhood__cancel_option_order",
+      "mcp__Robinhood__cancel_crypto_order",
+      "mcp__Robinhood__cancel_advanced_order",
+      "mcp__Robinhood__exercise_option",
+      "mcp__Robinhood__cancel_option_exercise",
+      "mcp__Robinhood__decline_trade_approval"
     ]
   }
 }
