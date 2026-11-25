@@ -65,6 +65,10 @@ prompt = Book 3.
 ## Skills
 - `starra-design` — visual/motion doctrine; use when changing the HUD's look, layout, or motion.
 - `multica-ops` — operating the Multica agent-board integration.
+- `trader-*` (11 skills: scanner, news, entry, exit, timemachine, risk, budget,
+  broker, alerts, analyst, pelosi) — Jake Schincariol's day-trader-skill pack,
+  vendored verbatim. Broker lane = Robinhood Trading MCP (`robinhood-trading` in
+  `.mcp.json`). Rules and the Robinhood gap: docs/DAY_TRADER_SKILL.md.
 
 ## HAND-OFF RULE — never make Classic hunt for it
 

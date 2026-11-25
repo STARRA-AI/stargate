@@ -123,3 +123,6 @@ __pycache__/
 
 # local scratch (viseme frames, experiments)
 /scratchpad/
+
+# day-trader-skill working state (orders, fills, portfolio) - never commit
+trader/
